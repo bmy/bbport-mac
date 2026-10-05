@@ -112,8 +112,8 @@ void Runtime::TickFrame() {
 }
 
 void Runtime::CopyBuffer(const VideoCore::Buffer* src, const VideoCore::Buffer* dst,
-                         std::span<const vk::BufferCopy> copies) {
-    scheduler.EndRendering();
+                         std::span<const vk::BufferCopy> copies, std::source_location where) {
+    scheduler.EndRendering("copy", where);
 
     // bbport: many regions (HLE copy shaders) are tracked as one bounding range per buffer:
     // conservative for barriers, and two tree lookups instead of two per region.
@@ -139,7 +139,7 @@ void Runtime::CopyBuffer(const VideoCore::Buffer* src, const VideoCore::Buffer* 
         }
     }
     if (needs_flush) {
-        FlushBarriers();
+        FlushBarriers(where);
     }
 
     scheduler.Record([src_handle = src->Handle(), dst_handle = dst->Handle(),
@@ -827,7 +827,7 @@ void Runtime::AccessBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size
     memory_barrier.srcAccessMask |= src_access & WRITE_MASK;
 }
 
-void Runtime::FlushBarriers() {
+void Runtime::FlushBarriers(std::source_location where) {
     BeforeImageAccess();
     vk::DependencyInfo dep_info{};
 
@@ -844,7 +844,7 @@ void Runtime::FlushBarriers() {
         return;
     }
 
-    scheduler.EndRendering();
+    scheduler.EndRendering(image_barriers.empty() ? "barrier:buf" : "barrier:img", where);
     scheduler.Record([memory = memory_barrier, has_memory = dep_info.memoryBarrierCount != 0,
                       images = scheduler.RecordData(std::span<const vk::ImageMemoryBarrier2>(
                           image_barriers.data(), image_barriers.size()))](vk::CommandBuffer cmdbuf) {

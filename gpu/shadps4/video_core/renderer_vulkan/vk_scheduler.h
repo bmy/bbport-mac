@@ -12,6 +12,7 @@
 #include <memory>
 #include <source_location>
 #include <span>
+#include <string>
 #include <utility>
 #include <vector>
 #include <mutex>
@@ -693,7 +694,13 @@ public:
     void BeginRendering(const RenderState& new_state);
 
     /// Ends current rendering scope. bbport: `where` attributes the pass end (BB_FRAME_STATS).
-    void EndRendering(std::source_location where = std::source_location::current());
+    void EndRendering(std::source_location where = std::source_location::current()) {
+        EndRendering(nullptr, where);
+    }
+
+    /// bbport: `why` (a string literal) refines the attribution, e.g. what a barrier was for.
+    void EndRendering(const char* why,
+                      std::source_location where = std::source_location::current());
 
     /// Sets a function to be called on every scheduler submission.
     void SetSubmitCallback(SubmitFunc&& on_submit) {
@@ -907,6 +914,7 @@ private:
     /// identical attachments (merge candidates).
     RenderState last_ended_state;
     bool last_ended_valid = false;
+    std::string last_ended_site;
     // bbport: threaded recording
     std::unique_ptr<RecordChunk> record_chunk;
     std::vector<std::unique_ptr<RecordChunk>> full_chunks;

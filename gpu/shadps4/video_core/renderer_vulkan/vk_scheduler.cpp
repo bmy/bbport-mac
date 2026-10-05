@@ -62,8 +62,24 @@ namespace {
 struct PassStats {
     std::mutex mutex;
     std::unordered_map<std::string, u64> end_sites;
+    /// End sites of the passes that were then reopened with identical attachments: the breaks
+    /// merging could remove.
+    std::unordered_map<std::string, u64> reopen_sites;
     u64 passes = 0, reopened = 0, frame_base = 0;
     std::chrono::steady_clock::time_point last_print = std::chrono::steady_clock::now();
+
+    static void PrintTop(const std::unordered_map<std::string, u64>& sites, double frames) {
+        std::vector<std::pair<u64, std::string>> top;
+        for (auto& [site, count] : sites) {
+            top.emplace_back(count, site);
+        }
+        std::sort(top.rbegin(), top.rend());
+        for (size_t i = 0; i < top.size() && i < 8; ++i) {
+            std::printf(" %s %.0f%s", top[i].second.c_str(), top[i].first / frames,
+                        i + 1 < top.size() && i < 7 ? "," : "");
+        }
+        std::printf("\n");
+    }
 
     void Print() {
         const auto now = std::chrono::steady_clock::now();
@@ -74,20 +90,14 @@ struct PassStats {
         const u64 frame = BbStats::gpu_frames.load(std::memory_order_relaxed);
         const double frames = frame > frame_base ? double(frame - frame_base) : 1.0;
         frame_base = frame;
-        std::vector<std::pair<u64, std::string>> top;
-        for (auto& [site, count] : end_sites) {
-            top.emplace_back(count, site);
-        }
-        std::sort(top.rbegin(), top.rend());
         std::printf("Render passes: %.0f/frame, %.0f/frame reopened with identical attachments; "
                     "ended by:",
                     passes / frames, reopened / frames);
-        for (size_t i = 0; i < top.size() && i < 8; ++i) {
-            std::printf(" %s %.0f%s", top[i].second.c_str(), top[i].first / frames,
-                        i + 1 < top.size() && i < 7 ? "," : "");
-        }
-        std::printf("\n");
+        PrintTop(end_sites, frames);
+        std::printf("Render passes reopened after:");
+        PrintTop(reopen_sites, frames);
         end_sites.clear();
+        reopen_sites.clear();
         passes = reopened = 0;
     }
 };
@@ -108,6 +118,7 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
         ++stats.passes;
         if (last_ended_valid && last_ended_state == new_state) {
             ++stats.reopened;
+            ++stats.reopen_sites[last_ended_site];
         }
         stats.Print();
     }
@@ -176,7 +187,7 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
     });
 }
 
-void Scheduler::EndRendering(std::source_location where) {
+void Scheduler::EndRendering(const char* why, std::source_location where) {
     if (!is_rendering) {
         return;
     }
@@ -187,9 +198,13 @@ void Scheduler::EndRendering(std::source_location where) {
         if (const auto slash = file.find_last_of('/'); slash != std::string_view::npos) {
             file.remove_prefix(slash + 1);
         }
+        last_ended_site = std::string(file) + ":" + std::to_string(where.line());
+        if (why) {
+            last_ended_site = last_ended_site + "(" + why + ")";
+        }
         auto& stats = GetPassStats();
         std::scoped_lock lock{stats.mutex};
-        ++stats.end_sites[std::string(file) + ":" + std::to_string(where.line())];
+        ++stats.end_sites[last_ended_site];
     }
     is_rendering = false;
     Record([](vk::CommandBuffer cmdbuf) { cmdbuf.endRendering(); });

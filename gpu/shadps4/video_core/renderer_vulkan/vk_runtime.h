@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <source_location>
+
 #include "common/types.h"
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/renderer_vulkan/vk_barrier_tracker.h"
@@ -42,8 +44,11 @@ public:
     void TickFrame();
     SceneTargets* scene_targets = nullptr;
 
+    /// bbport: `where` (the caller) is reported as the end of the pass it breaks
+    /// (BB_FRAME_STATS), as for FlushBarriers.
     void CopyBuffer(const VideoCore::Buffer* src, const VideoCore::Buffer* dst,
-                    std::span<const vk::BufferCopy> copies);
+                    std::span<const vk::BufferCopy> copies,
+                    std::source_location where = std::source_location::current());
 
     void FillBuffer(const VideoCore::Buffer* dst, u64 offset, u64 size, u32 value);
 
@@ -95,7 +100,7 @@ public:
     bool IsBufferAccessed(const VideoCore::Buffer* handle, u64 offset, u64 size,
                           bool check_read_access = false);
 
-    void FlushBarriers();
+    void FlushBarriers(std::source_location where = std::source_location::current());
 
     /// bbport: runs before this thread changes image state (layouts, pending image
     /// barriers): the rasterizer joins its texture binding helper there (BindHelper).

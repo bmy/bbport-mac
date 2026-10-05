@@ -6,6 +6,7 @@
 #include "bbport_copy.h"
 
 #include <deque>
+#include <source_location>
 #include <boost/container/small_vector.hpp>
 
 #include "common/interval_set.h"
@@ -110,6 +111,26 @@ public:
     /// Commits pending sparse buffer memory binds. Must be called before every scheduler submit.
     void SubmitPendingArenaBinds(Vulkan::SubmitInfo& info);
 
+    /// bbport (BB_PASS_MERGE): while set, a read-only binding whose upload would end the open
+    /// render pass binds the staging copy instead, and the upload into the arena waits for
+    /// the end of the pass (held upload). The rasterizer sets it for the bindings of graphics
+    /// draws that write no buffer memory.
+    void SetHoldUploads(bool hold) noexcept {
+        hold_uploads = hold;
+    }
+    [[nodiscard]] bool HoldsUploads() const noexcept {
+        return hold_uploads;
+    }
+
+    /// Uploads held so far (the rasterizer counts the draws that held one).
+    [[nodiscard]] u64 HeldUploadCount() const noexcept {
+        return held_count;
+    }
+
+    /// Records the held uploads now, ending the render pass (attributed to `where`,
+    /// BB_FRAME_STATS). Returns true if there were any.
+    bool FlushHeldUploads(std::source_location where = std::source_location::current());
+
 private:
     struct ArenaBinds {
         const Buffer* arena;
@@ -138,7 +159,18 @@ private:
     void SmallGuestCopy(const BbCopy::Item& item);
 
     const Buffer* UploadCopies(const Buffer* arena, std::span<vk::BufferCopy> copies,
-                               size_t total_size_bytes);
+                               size_t total_size_bytes, u64 alignment = 0);
+
+    /// bbport (BB_PASS_MERGE): synchronizes a binding against the held uploads. Returns false
+    /// when SynchronizeMemory has to run as usual, true with the binding in `result` otherwise.
+    bool SynchronizeHeld(const Buffer* arena, VAddr device_addr, u32 size, bool is_written,
+                         bool is_texel_buffer, std::pair<const Buffer*, u64>& result);
+    [[nodiscard]] bool HeldOverlaps(VAddr device_addr, u64 size) const noexcept {
+        return !held_uploads.empty() && device_addr < held_max && held_min < device_addr + size;
+    }
+    /// Scheduler callback at every render pass end: records the held uploads.
+    static void OnRenderingEnd(void* context);
+    void RecordHeldUploads();
 
     bool SynchronizeMemoryFromImage(const Buffer* arena, VAddr device_addr, u32 size);
 
@@ -181,6 +213,25 @@ private:
         }
     };
     IntervalList<Backing> resident_ranges;
+
+    /// bbport (BB_PASS_MERGE): uploads waiting for the end of the open render pass, oldest
+    /// first. Draws in the pass read `staging`; nothing else touches the arena range meanwhile:
+    /// bindings that write it, alias images or read it partially record them first.
+    struct HeldUpload {
+        const Buffer* arena;
+        const Buffer* staging;
+        u64 staging_offset;
+        VAddr address; ///< guest range the staging copy holds (whole tracker pages)
+        u64 size;
+    };
+    static constexpr size_t MAX_HELD_UPLOADS = 64;
+    static constexpr u64 HELD_ALIGNMENT = 256; ///< staging offset congruent to the address
+    std::vector<HeldUpload> held_uploads;
+    std::vector<HeldUpload> held_recording; ///< RecordHeldUploads' list (keeps the capacity)
+    VAddr held_min = ~VAddr{0};
+    VAddr held_max = 0;
+    u64 held_count = 0;
+    bool hold_uploads = false;
 
     u32 arena_memory_type_index{};
     u32 block_size{};

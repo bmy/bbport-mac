@@ -829,23 +829,21 @@ void Runtime::AccessBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size
 
 void Runtime::FlushBarriers(std::source_location where) {
     BeforeImageAccess();
-    vk::DependencyInfo dep_info{};
-
-    if (memory_barrier.srcStageMask) {
-        dep_info.pMemoryBarriers = &memory_barrier;
-        dep_info.memoryBarrierCount = 1U;
-    }
-    if (!image_barriers.empty()) {
-        dep_info.pImageMemoryBarriers = image_barriers.data();
-        dep_info.imageMemoryBarrierCount = static_cast<u32>(image_barriers.size());
-    }
-
-    if (!dep_info.memoryBarrierCount && !dep_info.imageMemoryBarrierCount) {
+    const auto pending = [this] {
+        return memory_barrier.srcStageMask != vk::PipelineStageFlagBits2::eNone ||
+               !image_barriers.empty();
+    };
+    if (!pending()) {
         return;
     }
-
+    // bbport: the pass ends first. Uploads held until its end (BB_PASS_MERGE) are recorded
+    // there and join this barrier; a flush of their own may already have taken the rest.
     scheduler.EndRendering(image_barriers.empty() ? "barrier:buf" : "barrier:img", where);
-    scheduler.Record([memory = memory_barrier, has_memory = dep_info.memoryBarrierCount != 0,
+    if (!pending()) {
+        return;
+    }
+    const bool has_memory = memory_barrier.srcStageMask != vk::PipelineStageFlagBits2::eNone;
+    scheduler.Record([memory = memory_barrier, has_memory,
                       images = scheduler.RecordData(std::span<const vk::ImageMemoryBarrier2>(
                           image_barriers.data(), image_barriers.size()))](vk::CommandBuffer cmdbuf) {
         const vk::DependencyInfo info = {

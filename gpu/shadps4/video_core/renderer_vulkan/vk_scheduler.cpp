@@ -220,6 +220,9 @@ void Scheduler::EndRendering(const char* why, std::source_location where) {
     }
     is_rendering = false;
     Record([](vk::CommandBuffer cmdbuf) { cmdbuf.endRendering(); });
+    if (on_rendering_end) {
+        on_rendering_end(on_rendering_end_context);
+    }
 }
 
 void Scheduler::TraceDirectRecording(void* caller) {

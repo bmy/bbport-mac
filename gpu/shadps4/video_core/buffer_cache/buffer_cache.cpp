@@ -90,6 +90,9 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
     bda_pagetable_buffer = std::make_unique<Buffer>(
         instance, 0, bda_pagetable_size, MemoryType::DeviceLocal, "BDA Page Table Buffer");
     runtime.FillBuffer(bda_pagetable_buffer.get(), 0u, bda_pagetable_size, 0u);
+    if (BbToggle::PassMergeWanted()) {
+        scheduler.SetRenderingEndCallback(&OnRenderingEnd, this);
+    }
 }
 
 BufferCache::~BufferCache() = default;
@@ -324,7 +327,11 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
     const auto* arena = GetArena(first_block, last_block);
     EnsureResident(arena, first_block, last_block);
     const u64 uploaded_before = BbStats::buffer_upload_bytes.load(std::memory_order_relaxed);
-    SynchronizeMemory(arena, device_addr, size, is_written, is_texel_buffer);
+    std::pair<const Buffer*, u64> result{arena, arena->Offset(device_addr)};
+    if ((!hold_uploads && held_uploads.empty()) ||
+        !SynchronizeHeld(arena, device_addr, size, is_written, is_texel_buffer, result)) {
+        SynchronizeMemory(arena, device_addr, size, is_written, is_texel_buffer);
+    }
     if (stats) {
         auto& region = Stats().regions[RegionKey(device_addr)];
         ++region.arena_count;
@@ -335,7 +342,7 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
     if (is_written) {
         gpu_modified_ranges.Add(device_addr, size);
     }
-    return {arena, arena->Offset(device_addr)};
+    return result;
 }
 
 std::pair<const Buffer*, u64> BufferCache::ObtainBufferForImage(VAddr device_addr, u32 size) {
@@ -413,6 +420,11 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
     }
 
     LOG_WARNING(Render, "Migrating arena");
+    // bbport (BB_PASS_MERGE): held uploads target the old arena (same memory, but barriers are
+    // tracked per buffer): recorded and made visible before the new one is used.
+    if (FlushHeldUploads()) {
+        runtime.FlushBarriers();
+    }
 
     const u64 first_addr = first_arena ? first_arena->cpu_addr : (first_page << ARENA_PAGE_BITS);
     const u64 first_size = first_arena ? first_arena->size_bytes : ARENA_PAGE_SIZE;
@@ -525,12 +537,13 @@ bool BufferCache::SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 
 }
 
 const Buffer* BufferCache::UploadCopies(const Buffer* arena, std::span<vk::BufferCopy> copies,
-                                        size_t total_size_bytes) {
+                                        size_t total_size_bytes, u64 alignment) {
     if (copies.empty()) {
         return nullptr;
     }
     BbStats::buffer_upload_bytes.fetch_add(total_size_bytes, std::memory_order_relaxed);
-    const auto staging = staging_pool.Request(total_size_bytes, MemoryType::HostUncached);
+    const auto staging =
+        staging_pool.Request(total_size_bytes, MemoryType::HostUncached, alignment);
     // bbport: the guest memory is copied into staging on the copy threads, started now in
     // groups of about 1 MiB; submission and guest-visible fences wait for them
     // (Scheduler::WaitHostCopies).
@@ -600,6 +613,114 @@ const Buffer* BufferCache::UploadCopies(const Buffer* arena, std::span<vk::Buffe
     }
     staging.Flush();
     return staging.buffer;
+}
+
+bool BufferCache::SynchronizeHeld(const Buffer* arena, VAddr device_addr, u32 size,
+                                  bool is_written, bool is_texel_buffer,
+                                  std::pair<const Buffer*, u64>& result) {
+    // Holding needs a pass to save; written bindings and texel buffers (which may alias an
+    // image tiled into the arena) use the arena, after the held uploads they overlap.
+    if (!hold_uploads || is_written || is_texel_buffer || !scheduler.IsRendering() ||
+        !BbToggle::PassMergeOn()) {
+        if (HeldOverlaps(device_addr, size)) {
+            FlushHeldUploads();
+        }
+        return false;
+    }
+    // CPU-written pages are uploaded now: the copy is held if it holds the whole binding.
+    boost::container::small_vector<vk::BufferCopy, 4> copies;
+    size_t total_size_bytes{};
+    const Buffer* staging{};
+    memory_tracker->ForEachUploadRange(
+        device_addr, size, false,
+        [&](u64 addr, u64 range_size) {
+            copies.emplace_back(total_size_bytes, addr, range_size);
+            total_size_bytes += range_size;
+        },
+        [&] {
+            const bool whole = copies.size() == 1 && copies[0].dstOffset <= device_addr &&
+                               copies[0].dstOffset + copies[0].size >= device_addr + size;
+            staging = UploadCopies(arena, copies, total_size_bytes, whole ? HELD_ALIGNMENT : 0);
+        });
+    if (staging) {
+        // UploadCopies turned the copies into buffer offsets.
+        const VAddr start = arena->cpu_addr + copies[0].dstOffset;
+        const u64 staging_offset = copies[0].srcOffset;
+        const bool whole = copies.size() == 1 && start <= device_addr &&
+                           start + copies[0].size >= device_addr + size;
+        // The staging offset keeps the address's alignment (index and vertex buffers, and the
+        // storage binding adjustment, as with the arena).
+        if (!whole || held_uploads.size() >= MAX_HELD_UPLOADS ||
+            ((staging_offset - start) & (HELD_ALIGNMENT - 1)) != 0) {
+            // As SynchronizeMemory: this ends the pass, recording older held uploads first.
+            runtime.CopyBuffer(staging, arena, copies);
+            return true;
+        }
+        // Older held uploads of the same pages are overwritten by this one: dropped.
+        std::erase_if(held_uploads, [&](const HeldUpload& held) {
+            return held.arena == arena && start <= held.address &&
+                   held.address + held.size <= start + copies[0].size;
+        });
+        held_uploads.push_back({arena, staging, staging_offset, start, copies[0].size});
+        held_min = std::min(held_min, start);
+        held_max = std::max(held_max, start + copies[0].size);
+        ++held_count;
+        BbStats::pass_deferred_uploads.fetch_add(1, std::memory_order_relaxed);
+        result = {staging, staging_offset + (device_addr - start)};
+        return true;
+    }
+    // Nothing to upload. The newest held upload overlapping the range serves it if it holds it
+    // whole; otherwise the arena has to be current first.
+    if (HeldOverlaps(device_addr, size)) {
+        for (auto it = held_uploads.rbegin(); it != held_uploads.rend(); ++it) {
+            if (device_addr >= it->address + it->size || it->address >= device_addr + size) {
+                continue;
+            }
+            if (it->address <= device_addr && device_addr + size <= it->address + it->size) {
+                result = {it->staging, it->staging_offset + (device_addr - it->address)};
+            } else {
+                FlushHeldUploads();
+            }
+            break;
+        }
+    }
+    return true;
+}
+
+bool BufferCache::FlushHeldUploads(std::source_location where) {
+    if (held_uploads.empty()) {
+        return false;
+    }
+    if (scheduler.IsRendering()) {
+        scheduler.EndRendering("held uploads", where); // OnRenderingEnd records them
+    } else {
+        RecordHeldUploads();
+    }
+    return true;
+}
+
+void BufferCache::OnRenderingEnd(void* context) {
+    static_cast<BufferCache*>(context)->RecordHeldUploads();
+}
+
+void BufferCache::RecordHeldUploads() {
+    if (held_uploads.empty()) {
+        return;
+    }
+    // Swapped out first: recording them must not see them again.
+    held_recording.swap(held_uploads);
+    held_min = ~VAddr{0};
+    held_max = 0;
+    // In order: a newer upload of the same pages lands last (CopyBuffer barriers between).
+    for (const auto& upload : held_recording) {
+        const vk::BufferCopy copy = {
+            .srcOffset = upload.staging_offset,
+            .dstOffset = upload.arena->Offset(upload.address),
+            .size = upload.size,
+        };
+        runtime.CopyBuffer(upload.staging, upload.arena, std::span{&copy, 1});
+    }
+    held_recording.clear();
 }
 
 bool BufferCache::SynchronizeMemoryFromImage(const Buffer* arena, VAddr device_addr, u32 size) {

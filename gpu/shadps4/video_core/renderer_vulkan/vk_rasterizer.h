@@ -213,6 +213,8 @@ private:
                     bool is_indexed, u32 index_offset);
     /// bbport (BB_PASS_MERGE): flushes pending writes when the draw starts a new render pass.
     void FlushBarriersAtPassStart(const RenderState& state);
+    /// bbport (BB_PASS_MERGE): counts the pass break the draw's held uploads avoided.
+    void CountHeldUploads(u64 held_before, const RenderState& state);
     static bool DrawPipeWanted();
     bool UseDrawPipe() const;
     bool OnStageA() const;

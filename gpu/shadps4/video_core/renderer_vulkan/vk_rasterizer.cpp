@@ -70,6 +70,7 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
     // bbport: this thread joins the texture binding helper before it changes image state.
     runtime.SetImageAccessHook(&JoinBindHelper, this);
     scheduler.SetSubmitCallback([this](Vulkan::SubmitInfo& info) {
+        buffer_cache.FlushHeldUploads(); // BB_PASS_MERGE: before the barrier that covers them
         runtime.FlushBarriers();
         buffer_cache.SubmitPendingArenaBinds(info);
     });
@@ -94,6 +95,48 @@ inline AmdGpu::CbDbExtent Rasterizer::DbExtent() const {
 }
 
 namespace {
+/// bbport (BB_PASS_MERGE): the buffer cache may hold uploads for the bindings of a draw that
+/// writes no buffer memory (written bindings could alias what the draw reads from staging,
+/// shaders using the page table read the arena directly).
+bool CanHoldUploads(const GraphicsPipeline* pipeline) {
+    if (!BbToggle::PassMergeOn()) {
+        return false;
+    }
+    for (const auto* stage : pipeline->GetStages()) {
+        if (!stage) {
+            continue;
+        }
+        if (stage->uses_dma) {
+            return false;
+        }
+        for (const auto& desc : stage->buffers) {
+            if (desc.is_written) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/// Holds uploads (BufferCache::SetHoldUploads) until Release() or the end of the scope.
+class HoldUploads {
+public:
+    HoldUploads(VideoCore::BufferCache& cache_, bool hold) : cache{cache_} {
+        cache.SetHoldUploads(hold);
+    }
+    ~HoldUploads() {
+        Release();
+    }
+    HoldUploads(const HoldUploads&) = delete;
+    HoldUploads& operator=(const HoldUploads&) = delete;
+    void Release() {
+        cache.SetHoldUploads(false);
+    }
+
+private:
+    VideoCore::BufferCache& cache;
+};
+
 /// magic_enum::enum_contains, from a table: it scans every enumerator (per texture per draw).
 bool IsKnownFormat(AmdGpu::DataFormat data_fmt, AmdGpu::NumberFormat num_fmt) {
     static const auto tables = [] {
@@ -978,6 +1021,8 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     // bbport: vertex and index buffers are resolved while the helper binds textures (their
     // commands are recorded after BeginRendering, as before).
     draw_inputs = {pipeline, draw_prepared, index_offset, is_indexed, true, false};
+    const u64 held_before = buffer_cache.HeldUploadCount();
+    HoldUploads hold_uploads{buffer_cache, CanHoldUploads(pipeline)};
     const bool bound = BindResources(pipeline);
     bind_prepared = nullptr; // indirect draws and dispatches bind without prepared sharps
     const bool inputs_resolved = draw_inputs.resolved;
@@ -1003,6 +1048,7 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     } else {
         FlushBarriersAtPassStart(state);
     }
+    hold_uploads.Release();
 
     // bbport: screen-space (clip disabled) draws into the upscaler's output-size images.
     push_data.xscale *= target_scale[0];
@@ -1101,6 +1147,7 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     }
     UpdateDynamicState(pipeline, is_indexed);
     MarkPass(pipeline, state);
+    CountHeldUploads(held_before, state);
     scheduler.BeginRendering(state);
 
     const auto& vs_info = pipeline->GetStage(Shader::SwStage::Vertex);
@@ -1145,10 +1192,21 @@ void Rasterizer::FlushBarriersAtPassStart(const RenderState& state) {
     // the first draw of the new pass to read them ends it for the barrier and reopens it with
     // the same attachments. Outside a pass the barrier is cheap (KosmicKrisp: an encoder-local
     // barrier at most).
-    if (BbToggle::PassMergeOn() && scheduler.WillBeginRendering(state) &&
-        runtime.HasPendingWrites()) {
+    if (!BbToggle::PassMergeOn() || !scheduler.WillBeginRendering(state)) {
+        return;
+    }
+    // Uploads held during the ending pass are recorded at its end, and join the barrier.
+    const bool held = buffer_cache.FlushHeldUploads();
+    if (held || runtime.HasPendingWrites()) {
         runtime.FlushBarriers();
         BbStats::pass_early_barriers.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void Rasterizer::CountHeldUploads(u64 held_before, const RenderState& state) {
+    // The draw continues the open pass: without the held uploads their copies had ended it.
+    if (buffer_cache.HeldUploadCount() != held_before && scheduler.IsRenderingWith(state)) {
+        BbStats::pass_breaks_avoided.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -1204,6 +1262,8 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
                          cb_descs[0].first, db_desc.first,
                          UiComposition::NativeViewport(viewport.xscale * 2, viewport.yscale * 2));
     }
+    const u64 held_before = buffer_cache.HeldUploadCount();
+    HoldUploads hold_uploads{buffer_cache, CanHoldUploads(pipeline)};
     if (!BindResources(pipeline)) {
         return;
     }
@@ -1230,6 +1290,7 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     } else {
         FlushBarriersAtPassStart(state);
     }
+    hold_uploads.Release();
 
     // bbport: screen-space (clip disabled) draws into the upscaler's output-size images.
     push_data.xscale *= target_scale[0];
@@ -1243,6 +1304,7 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     }
     UpdateDynamicState(pipeline, is_indexed);
     MarkPass(pipeline, state);
+    CountHeldUploads(held_before, state);
     scheduler.BeginRendering(state);
 
     ASSERT(stride == (is_indexed ? sizeof(VkDrawIndexedIndirectCommand)
@@ -1657,6 +1719,11 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
     }
 
     if (uses_dma) {
+        // bbport (BB_PASS_MERGE): shaders reading memory through the page table see the arena:
+        // uploads held for the pass end go first, behind a barrier.
+        if (buffer_cache.FlushHeldUploads()) {
+            needs_barrier = true;
+        }
         buffer_cache.SynchronizeDmaBuffers();
         fault_process_pending = true;
     }
@@ -1804,8 +1871,15 @@ void Rasterizer::ResolveVertexBuffers(const GraphicsPipeline* pipeline,
     // Map buffers for merged ranges
     for (auto& range : ranges_merged) {
         const u64 size = memory->ClampRangeSize(range.base_address, range.GetSize());
+        // bbport: a held upload's staging copy holds the clamped range only, the bindings
+        // below use the guest sizes (BB_PASS_MERGE).
+        const bool hold = buffer_cache.HoldsUploads();
+        if (size != range.GetSize()) {
+            buffer_cache.SetHoldUploads(false);
+        }
         std::tie(range.buffer, range.offset) =
             buffer_cache.ObtainBuffer(range.base_address, size, false);
+        buffer_cache.SetHoldUploads(hold);
         needs_barrier |= runtime.IsBufferAccessed(range.buffer, range.offset, size);
     }
 

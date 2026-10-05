@@ -702,6 +702,18 @@ public:
     void EndRendering(const char* why,
                       std::source_location where = std::source_location::current());
 
+    /// bbport: `callback(context)` runs after every render pass end, before anything else is
+    /// recorded (BB_PASS_MERGE: the buffer cache records the uploads held during the pass).
+    void SetRenderingEndCallback(void (*callback)(void*), void* context) {
+        on_rendering_end = callback;
+        on_rendering_end_context = context;
+    }
+
+    /// Whether a render pass is open.
+    [[nodiscard]] bool IsRendering() const noexcept {
+        return is_rendering;
+    }
+
     /// Sets a function to be called on every scheduler submission.
     void SetSubmitCallback(SubmitFunc&& on_submit) {
         this->on_submit = std::move(on_submit);
@@ -910,6 +922,8 @@ private:
     std::jthread priority_pending_ops_thread;
     RenderState render_state;
     bool is_rendering = false;
+    void (*on_rendering_end)(void*) = nullptr;
+    void* on_rendering_end_context = nullptr;
     /// bbport (BB_FRAME_STATS): the state of the pass ended last, to count passes reopened with
     /// identical attachments (merge candidates).
     RenderState last_ended_state;

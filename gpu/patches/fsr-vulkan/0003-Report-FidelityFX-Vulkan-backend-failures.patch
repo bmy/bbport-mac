@@ -1,0 +1,341 @@
+diff --git a/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp b/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp
+index b2439b6..44e86d2 100644
+--- a/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp
++++ b/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp
+@@ -35,6 +35,14 @@
+ 
+ #include <vulkan/vulkan.h>
+ 
++// bbport: every backend failure says where (the FSR 3 context otherwise fails silently).
++#include <cstdio>
++static FfxErrorCode ffxVkBackendApiError(int line)
++{
++    std::fprintf(stderr, "FidelityFX Vulkan backend: failure at ffx_vk.cpp:%d\n", line);
++    return FFX_ERROR_BACKEND_API_ERROR;
++}
++
+ // prototypes for functions in the interface
+ FfxVersionNumber       GetSDKVersionVK(FfxInterface* backendInterface);
+ FfxErrorCode           GetEffectGpuMemoryUsageVK(FfxInterface* backendInterface, FfxUInt32 effectContextId, FfxEffectMemoryUsage* outVramUsage);
+@@ -964,7 +972,7 @@ FfxErrorCode allocateDeviceMemory(BackendContext_VK* backendContext, VkMemoryReq
+         backendResource->memoryProperties);
+ 
+     if (allocInfo.memoryTypeIndex == UINT32_MAX) {
+-        return FFX_ERROR_BACKEND_API_ERROR;
++        return ffxVkBackendApiError(__LINE__);
+     }
+ 
+     VkResult result = backendContext->vkFunctionTable.vkAllocateMemory(backendContext->device, &allocInfo, nullptr, &backendResource->deviceMemory);
+@@ -975,7 +983,7 @@ FfxErrorCode allocateDeviceMemory(BackendContext_VK* backendContext, VkMemoryReq
+         case(VK_ERROR_OUT_OF_DEVICE_MEMORY):
+             return FFX_ERROR_OUT_OF_MEMORY;
+         default:
+-            return FFX_ERROR_BACKEND_API_ERROR;
++            return ffxVkBackendApiError(__LINE__);
+         }
+     }
+ 
+@@ -1621,7 +1629,7 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
+         descriptorPoolCreateInfo.maxSets = backendContext->maxEffectContexts * FFX_MAX_PASS_COUNT * MAX_PIPELINE_USAGE_PER_FRAME * FFX_MAX_QUEUED_FRAMES;
+ 
+         if (backendContext->vkFunctionTable.vkCreateDescriptorPool(backendContext->device, &descriptorPoolCreateInfo, nullptr, &backendContext->descriptorPool) != VK_SUCCESS) {
+-            return FFX_ERROR_BACKEND_API_ERROR;
++            return ffxVkBackendApiError(__LINE__);
+         }
+ 
+         // set bindless resource view to base
+@@ -1645,7 +1653,7 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
+ 
+             if (backendContext->vkFunctionTable.vkCreateBuffer(backendContext->device, &bufferInfo, NULL, &backendContext->uniformBuffer) != VK_SUCCESS)
+             {
+-                return FFX_ERROR_BACKEND_API_ERROR;
++                return ffxVkBackendApiError(__LINE__);
+             }
+ 
+             // allocate memory block for all uniform buffers
+@@ -1679,7 +1687,7 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
+ 
+                 if (allocInfo.memoryTypeIndex == UINT32_MAX)
+                 {
+-                    return FFX_ERROR_BACKEND_API_ERROR;
++                    return ffxVkBackendApiError(__LINE__);
+                 }
+             }
+ 
+@@ -1693,7 +1701,7 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
+                 case (VK_ERROR_OUT_OF_DEVICE_MEMORY):
+                     return FFX_ERROR_OUT_OF_MEMORY;
+                 default:
+-                    return FFX_ERROR_BACKEND_API_ERROR;
++                    return ffxVkBackendApiError(__LINE__);
+                 }
+             }
+ 
+@@ -1702,13 +1710,13 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
+                     backendContext->device, backendContext->uniformBufferMemory, 0, backendContext->uniformBufferSize, 0, &backendContext->uniformBufferMem) !=
+                 VK_SUCCESS)
+             {
+-                return FFX_ERROR_BACKEND_API_ERROR;
++                return ffxVkBackendApiError(__LINE__);
+             }
+ 
+             if (backendContext->vkFunctionTable.vkBindBufferMemory(
+                     backendContext->device, backendContext->uniformBuffer, backendContext->uniformBufferMemory, 0) != VK_SUCCESS)
+             {
+-                return FFX_ERROR_BACKEND_API_ERROR;
++                return ffxVkBackendApiError(__LINE__);
+             }
+         }
+ 
+@@ -1716,7 +1724,7 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
+         {
+             FfxDeviceCapabilities devCaps = {};
+             if (GetDeviceCapabilitiesVK(backendInterface, &devCaps) != FFX_OK)
+-                return FFX_ERROR_BACKEND_API_ERROR;
++                return ffxVkBackendApiError(__LINE__);
+ 
+             // Get info for memory used as Breadcrumbs buffer
+             VkBufferCreateInfo bufferInfo = {};
+@@ -1733,7 +1741,7 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
+             if (vkCreateBuffer(backendContext->device, &bufferInfo, nullptr, &testBuffer) != VK_SUCCESS)
+             {
+                 FFX_ASSERT_FAIL("Cannot create test Breadcrumbs buffer to find memory requirements!");
+-                return FFX_ERROR_BACKEND_API_ERROR;
++                return ffxVkBackendApiError(__LINE__);
+             }
+ 
+             uint32_t memoryTypeBits = 0;
+@@ -1743,7 +1751,7 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
+                 if (!backendContext->vkFunctionTable.vkGetBufferMemoryRequirements2)
+                 {
+                     backendContext->vkFunctionTable.vkDestroyBuffer(backendContext->device, testBuffer, nullptr);
+-                    return FFX_ERROR_BACKEND_API_ERROR;
++                    return ffxVkBackendApiError(__LINE__);
+                 }
+ 
+                 // Decide whether use dedicated memory or not
+@@ -1811,7 +1819,7 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
+             if (backendContext->breadcrumbsMemoryIndex == UINT32_MAX)
+             {
+                 FFX_ASSERT_FAIL("No memory that satisfies requirements requested by Breadcrumbs buffer type!");
+-                return FFX_ERROR_BACKEND_API_ERROR;
++                return ffxVkBackendApiError(__LINE__);
+             }
+ 
+             // Will switch to use vkCmdWriteBufferMarkerAMD() to write breadcrumbs into the buffer instead of vkCmdFillBuffer() for ensuring proper ordering of writes
+@@ -1904,7 +1912,7 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
+                 if (backendContext->vkFunctionTable.vkCreateDescriptorPool(
+                         backendContext->device, &descriptorPoolCreateInfo, nullptr, &effectContext.bindlessDescriptorPool) != VK_SUCCESS)
+                 {
+-                    return FFX_ERROR_BACKEND_API_ERROR;
++                    return ffxVkBackendApiError(__LINE__);
+                 }
+ 
+                 // create the descriptor layout for bindless texture srv buffers
+@@ -1931,7 +1939,7 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
+                             backendContext->device, &layoutInfo, nullptr, &effectContext.bindlessTextureSrvDescriptorSetLayout) != VK_SUCCESS)
+                     {
+                      
+-                        return FFX_ERROR_BACKEND_API_ERROR;
++                        return ffxVkBackendApiError(__LINE__);
+                     }
+ 
+                     // allocate descriptor set
+@@ -1968,7 +1976,7 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
+                     if (backendContext->vkFunctionTable.vkCreateDescriptorSetLayout(
+                             backendContext->device, &layoutInfo, nullptr, &effectContext.bindlessBufferSrvDescriptorSetLayout) != VK_SUCCESS)
+                     {
+-                        return FFX_ERROR_BACKEND_API_ERROR;
++                        return ffxVkBackendApiError(__LINE__);
+                     }
+ 
+                     // allocate descriptor set
+@@ -2005,7 +2013,7 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
+                     if (backendContext->vkFunctionTable.vkCreateDescriptorSetLayout(
+                             backendContext->device, &layoutInfo, nullptr, &effectContext.bindlessTextureUavDescriptorSetLayout) != VK_SUCCESS)
+                     {
+-                        return FFX_ERROR_BACKEND_API_ERROR;
++                        return ffxVkBackendApiError(__LINE__);
+                     }
+ 
+                     // allocate descriptor set
+@@ -2042,7 +2050,7 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
+                     if (backendContext->vkFunctionTable.vkCreateDescriptorSetLayout(
+                             backendContext->device, &layoutInfo, nullptr, &effectContext.bindlessBufferUavDescriptorSetLayout) != VK_SUCCESS)
+                     {
+-                        return FFX_ERROR_BACKEND_API_ERROR;
++                        return ffxVkBackendApiError(__LINE__);
+                     }
+ 
+                     // allocate descriptor set
+@@ -2385,7 +2393,7 @@ FfxErrorCode CreateResourceVK(
+             bufferInfo.usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+ 
+         if (backendContext->vkFunctionTable.vkCreateBuffer(backendContext->device, &bufferInfo, NULL, &backendResource->bufferResource) != VK_SUCCESS) {
+-            return FFX_ERROR_BACKEND_API_ERROR;
++            return ffxVkBackendApiError(__LINE__);
+         }
+ 
+ #ifdef _DEBUG
+@@ -2400,7 +2408,7 @@ FfxErrorCode CreateResourceVK(
+             return errorCode;
+ 
+         if (backendContext->vkFunctionTable.vkBindBufferMemory(backendContext->device, backendResource->bufferResource, backendResource->deviceMemory, 0) != VK_SUCCESS) {
+-            return FFX_ERROR_BACKEND_API_ERROR;
++            return ffxVkBackendApiError(__LINE__);
+         }
+ 
+         // if this is an upload buffer (currently only support upload buffers), copy the data and return
+@@ -2410,7 +2418,7 @@ FfxErrorCode CreateResourceVK(
+             void* data = NULL;
+ 
+             if (backendContext->vkFunctionTable.vkMapMemory(backendContext->device, backendResource->deviceMemory, 0, initData.size, 0, &data) != VK_SUCCESS) {
+-                return FFX_ERROR_BACKEND_API_ERROR;
++                return ffxVkBackendApiError(__LINE__);
+             }
+ 
+             if (initData.type == FFX_RESOURCE_INIT_DATA_TYPE_BUFFER)
+@@ -2465,7 +2473,7 @@ FfxErrorCode CreateResourceVK(
+         }
+ 
+         if (backendContext->vkFunctionTable.vkCreateImage(backendContext->device, &imageInfo, nullptr, &backendResource->imageResource) != VK_SUCCESS) {
+-            return FFX_ERROR_BACKEND_API_ERROR;
++            return ffxVkBackendApiError(__LINE__);
+         }
+ 
+ #ifdef _DEBUG
+@@ -2480,7 +2488,7 @@ FfxErrorCode CreateResourceVK(
+             return errorCode;
+ 
+         if (backendContext->vkFunctionTable.vkBindImageMemory(backendContext->device, backendResource->imageResource, backendResource->deviceMemory, 0) != VK_SUCCESS) {
+-            return FFX_ERROR_BACKEND_API_ERROR;
++            return ffxVkBackendApiError(__LINE__);
+         }
+ 
+         break;
+@@ -2545,7 +2553,7 @@ FfxErrorCode CreateResourceVK(
+ 
+         // create an image view containing all mip levels for use as an srv
+         if (backendContext->vkFunctionTable.vkCreateImageView(backendContext->device, &imageViewCreateInfo, NULL, &backendContext->pResourceViews[backendResource->srvViewIndex].imageView) != VK_SUCCESS) {
+-            return FFX_ERROR_BACKEND_API_ERROR;
++            return ffxVkBackendApiError(__LINE__);
+         }
+ #ifdef _DEBUG
+         setVKObjectName(backendContext->vkFunctionTable, backendContext->device, VK_OBJECT_TYPE_IMAGE_VIEW, (uint64_t)backendContext->pResourceViews[backendResource->srvViewIndex].imageView, backendResource->resourceName);
+@@ -2568,7 +2576,7 @@ FfxErrorCode CreateResourceVK(
+                 imageViewCreateInfo.subresourceRange.baseMipLevel = mip;
+ 
+                 if (backendContext->vkFunctionTable.vkCreateImageView(backendContext->device, &imageViewCreateInfo, NULL, &backendContext->pResourceViews[backendResource->uavViewIndex + mip].imageView) != VK_SUCCESS) {
+-                    return FFX_ERROR_BACKEND_API_ERROR;
++                    return ffxVkBackendApiError(__LINE__);
+                 }
+ #ifdef _DEBUG
+                 setVKObjectName(backendContext->vkFunctionTable, backendContext->device, VK_OBJECT_TYPE_IMAGE_VIEW, (uint64_t)backendContext->pResourceViews[backendResource->uavViewIndex + mip].imageView, backendResource->resourceName);
+@@ -2699,7 +2707,7 @@ FfxErrorCode MapResourceVK(FfxInterface* backendInterface, FfxResourceInternal r
+     BackendContext_VK::Resource* res = &backendContext->pResources[resource.internalIndex];
+ 
+     if ((backendContext->vkFunctionTable.vkMapMemory(backendContext->device, res->deviceMemory, 0, res->resourceDescription.size, 0, ptr) != VK_SUCCESS))
+-        return FFX_ERROR_BACKEND_API_ERROR;
++        return ffxVkBackendApiError(__LINE__);
+ 
+     return FFX_OK;
+ }
+@@ -2857,7 +2865,7 @@ FfxErrorCode RegisterResourceVK(
+         addMutableViewForSRV(imageViewCreateInfo, imageViewUsageCreateInfo, backendResource->resourceDescription);
+ 
+         if (backendContext->vkFunctionTable.vkCreateImageView(backendContext->device, &imageViewCreateInfo, NULL, &backendContext->pResourceViews[backendResource->srvViewIndex].imageView) != VK_SUCCESS) {
+-            return FFX_ERROR_BACKEND_API_ERROR;
++            return ffxVkBackendApiError(__LINE__);
+         }
+ #ifdef _DEBUG
+         setVKObjectName(backendContext->vkFunctionTable, backendContext->device, VK_OBJECT_TYPE_IMAGE_VIEW, (uint64_t)backendContext->pResourceViews[backendResource->srvViewIndex].imageView, backendResource->resourceName);
+@@ -2880,7 +2888,7 @@ FfxErrorCode RegisterResourceVK(
+                 imageViewCreateInfo.subresourceRange.baseMipLevel = mip;
+ 
+                 if (backendContext->vkFunctionTable.vkCreateImageView(backendContext->device, &imageViewCreateInfo, NULL, &backendContext->pResourceViews[backendResource->uavViewIndex + mip].imageView) != VK_SUCCESS) {
+-                    return FFX_ERROR_BACKEND_API_ERROR;
++                    return ffxVkBackendApiError(__LINE__);
+                 }
+ #ifdef _DEBUG
+                 setVKObjectName(backendContext->vkFunctionTable, backendContext->device, VK_OBJECT_TYPE_IMAGE_VIEW, (uint64_t)backendContext->pResourceViews[backendResource->uavViewIndex + mip].imageView, backendResource->resourceName);
+@@ -3038,7 +3046,7 @@ FfxErrorCode registerStaticTextureSrv(BackendContext_VK* backendContext, const F
+         if (backendContext->vkFunctionTable.vkCreateImageView(
+                 backendContext->device, &imageViewCreateInfo, NULL, &backendContext->pResourceViews[imageViewIndex].imageView) != VK_SUCCESS)
+         {
+-            return FFX_ERROR_BACKEND_API_ERROR;
++            return ffxVkBackendApiError(__LINE__);
+         }
+ 
+ #ifdef _DEBUG
+@@ -3189,7 +3197,7 @@ FfxErrorCode registerStaticTextureUav(BackendContext_VK* backendContext, const F
+         if (backendContext->vkFunctionTable.vkCreateImageView(
+                 backendContext->device, &imageViewCreateInfo, NULL, &backendContext->pResourceViews[imageViewIndex].imageView) != VK_SUCCESS)
+         {
+-            return FFX_ERROR_BACKEND_API_ERROR;
++            return ffxVkBackendApiError(__LINE__);
+         }
+ 
+ #ifdef _DEBUG
+@@ -3420,7 +3428,7 @@ FfxErrorCode CreatePipelineVK(FfxInterface* backendInterface,
+         }
+ 
+         if (backendContext->vkFunctionTable.vkCreateSampler(backendContext->device, &createInfo, nullptr, &pPipelineLayout->samplers[currentSamplerIndex]) != VK_SUCCESS) {
+-            return FFX_ERROR_BACKEND_API_ERROR;
++            return ffxVkBackendApiError(__LINE__);
+         }
+     }
+ 
+@@ -3532,7 +3540,7 @@ FfxErrorCode CreatePipelineVK(FfxInterface* backendInterface,
+     layoutInfo.pBindings = layoutBindings;
+ 
+     if (backendContext->vkFunctionTable.vkCreateDescriptorSetLayout(backendContext->device, &layoutInfo, nullptr, &pPipelineLayout->descriptorSetLayout) != VK_SUCCESS) {
+-        return FFX_ERROR_BACKEND_API_ERROR;
++        return ffxVkBackendApiError(__LINE__);
+     }
+ 
+     // allocate descriptor sets
+@@ -3547,7 +3555,7 @@ FfxErrorCode CreatePipelineVK(FfxInterface* backendInterface,
+ 
+         if (backendContext->vkFunctionTable.vkAllocateDescriptorSets(backendContext->device, &allocateInfo, &pPipelineLayout->descriptorSets[i]) != VK_SUCCESS)
+         {
+-            return FFX_ERROR_BACKEND_API_ERROR;
++            return ffxVkBackendApiError(__LINE__);
+         }
+     }
+ 
+@@ -3590,7 +3598,7 @@ FfxErrorCode CreatePipelineVK(FfxInterface* backendInterface,
+     pipelineLayoutInfo.pPushConstantRanges    = nullptr;
+ 
+     if (backendContext->vkFunctionTable.vkCreatePipelineLayout(backendContext->device, &pipelineLayoutInfo, nullptr, &pPipelineLayout->pipelineLayout) != VK_SUCCESS) {
+-        return FFX_ERROR_BACKEND_API_ERROR;
++        return ffxVkBackendApiError(__LINE__);
+     }
+ 
+     // set the root signature to pipeline
+@@ -3731,7 +3739,7 @@ FfxErrorCode CreatePipelineVK(FfxInterface* backendInterface,
+     shaderModuleCreateInfo.codeSize = shaderBlob.size;
+ 
+     if (backendContext->vkFunctionTable.vkCreateShaderModule(backendContext->device, &shaderModuleCreateInfo, nullptr, &shaderModule) != VK_SUCCESS) {
+-        return FFX_ERROR_BACKEND_API_ERROR;
++        return ffxVkBackendApiError(__LINE__);
+     }
+ 
+     // fill out shader stage create info
+@@ -3761,7 +3769,7 @@ FfxErrorCode CreatePipelineVK(FfxInterface* backendInterface,
+ 
+     VkPipeline computePipeline = VK_NULL_HANDLE;
+     if (backendContext->vkFunctionTable.vkCreateComputePipelines(backendContext->device, nullptr, 1, &pipelineCreateInfo, nullptr, &computePipeline) != VK_SUCCESS) {
+-        return FFX_ERROR_BACKEND_API_ERROR;
++        return ffxVkBackendApiError(__LINE__);
+     }
+ 
+     // done with shader module, so clean up
+@@ -4391,7 +4399,7 @@ FfxErrorCode BreadcrumbsAllocBlockVK(
+         }
+     }
+     backendContext->vkFunctionTable.vkDestroyBuffer(backendContext->device, buffer, nullptr);
+-    return FFX_ERROR_BACKEND_API_ERROR;
++    return ffxVkBackendApiError(__LINE__);
+ }
+ 
+ void BreadcrumbsFreeBlockVK(

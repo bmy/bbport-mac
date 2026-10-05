@@ -593,9 +593,15 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
 
     // bbport: frame limit (see EmulatorSettings::GetFrameLimit). A request waits in the queue
     // until its slot; slots advance by one period (no drift) but never lag behind by more.
-    const u32 frame_limit = EmulatorSettings.GetFrameLimit();
-    const auto frame_period = frame_limit ? std::chrono::nanoseconds(1000000000 / frame_limit)
-                                          : std::chrono::nanoseconds(0);
+    u32 frame_limit = EmulatorSettings.GetFrameLimit();
+    auto frame_period = frame_limit ? std::chrono::nanoseconds(1000000000 / frame_limit)
+                                    : std::chrono::nanoseconds(0);
+#ifdef __APPLE__
+    // bbport: macOS: a limit taken from the display (uncapped presets, no BB_FPS_LIMIT) follows
+    // the window to another display or refresh rate (MacBook panel 120 Hz, external monitors).
+    const bool follow_display =
+        frame_limit != 0 && EmulatorSettingsImpl::Number("BB_FPS_LIMIT", -1) < 0;
+#endif
     auto next_flip = std::chrono::steady_clock::now();
     std::printf("VideoOut: vblank %u Hz, frame limit %u FPS\n",
                 EmulatorSettings.GetVblankFrequency(), frame_limit);
@@ -617,6 +623,16 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
     while (!token.stop_requested()) {
         timer.Start();
         const auto tick_deadline = std::chrono::steady_clock::now() + vblank_period;
+#ifdef __APPLE__
+        if (follow_display) {
+            const u32 hz = std::min<u32>(BbDisplayRefreshHz(), 120);
+            if (hz != frame_limit) {
+                frame_limit = hz;
+                frame_period = std::chrono::nanoseconds(1000000000 / hz);
+                std::printf("VideoOut: frame limit %u FPS (the window's display changed)\n", hz);
+            }
+        }
+#endif
 
         if (DebugState.IsGuestThreadsPaused()) {
             DrawLastFrame();

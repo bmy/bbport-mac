@@ -3,12 +3,30 @@
 #include <cstring>
 #include <SDL3/SDL.h>
 #ifdef __APPLE__
+#include <algorithm>
+#include <atomic>
+#include <cstdio>
 #include <SDL3/SDL_metal.h>
 #endif
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "sdl_window.h"
 #include "bbport_overlay.h"
+
+#ifdef __APPLE__
+namespace {
+// Refresh rate of the display the window is on, 0 when unknown. Only the main thread may ask
+// AppKit which screen the window is on, so the window thread keeps it here for VideoOut.
+std::atomic<u32> g_display_hz{0};
+} // namespace
+
+// The display the window is on (Linux: the primary display, read once in bbgpu.cpp). A
+// MacBook Pro's ProMotion panel reports 120 Hz; an external display its own rate.
+u32 BbDisplayRefreshHz() {
+    const u32 hz = g_display_hz.load(std::memory_order_relaxed);
+    return hz ? std::max<u32>(hz, 60) : 60;
+}
+#endif
 
 namespace Frontend {
 
@@ -56,6 +74,9 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     width = w;
     height = h;
     LOG_INFO(Frontend, "Window {}x{} on {}", w, h, driver);
+#ifdef __APPLE__
+    UpdateDisplayRefresh();
+#endif
 }
 
 WindowSDL::~WindowSDL() {
@@ -104,6 +125,20 @@ void WindowSDL::AppendTypedKey(int scancode, unsigned mod) {
         text += static_cast<char>(0x80 | ((key >> 6) & 0x3F));
         text += static_cast<char>(0x80 | (key & 0x3F));
     }
+}
+
+void WindowSDL::UpdateDisplayRefresh() {
+    const SDL_DisplayID display = SDL_GetDisplayForWindow(window);
+    const SDL_DisplayMode* mode = display ? SDL_GetCurrentDisplayMode(display) : nullptr;
+    const u32 hz = mode && mode->refresh_rate > 0 ? u32(mode->refresh_rate + 0.5f) : 0;
+    static bool logged = false;
+    if (g_display_hz.exchange(hz) == hz && logged) {
+        return;
+    }
+    logged = true;
+    const char* name = display ? SDL_GetDisplayName(display) : nullptr;
+    std::printf("Window: display \"%s\", %.2f Hz%s\n", name ? name : "?",
+                mode ? double(mode->refresh_rate) : 0.0, hz ? "" : " (unknown: 60 assumed)");
 }
 #endif
 
@@ -164,6 +199,14 @@ bool WindowSDL::PollEvents() {
         case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
             is_open = false;
             break;
+#ifdef __APPLE__
+        // Moved to another display, or its refresh rate was changed in System Settings.
+        case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
+        case SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED:
+        case SDL_EVENT_DISPLAY_DESKTOP_MODE_CHANGED:
+            UpdateDisplayRefresh();
+            break;
+#endif
         default:
             break;
         }

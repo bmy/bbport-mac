@@ -45,6 +45,7 @@ private:
     void UpdateTextTitle();
 #ifdef __APPLE__
     void AppendTypedKey(int scancode, unsigned mod); // text from key presses (SDL values)
+    void UpdateDisplayRefresh(); // refresh rate of the window's display, for BbDisplayRefreshHz
 #endif
     SDL_Window* window{};
     WindowSystemInfo window_info{};

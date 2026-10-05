@@ -177,6 +177,7 @@ std::condition_variable g_window_cv;
 bool g_window_ready;
 } // namespace
 
+#ifndef __APPLE__ // macOS: window.cpp (the window's display, kept by the main thread)
 u32 BbDisplayRefreshHz() {
     static const u32 hz = [] {
         const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetPrimaryDisplay());
@@ -186,6 +187,7 @@ u32 BbDisplayRefreshHz() {
     }();
     return hz;
 }
+#endif
 
 #ifdef BB_PGO_GENERATE
 extern "C" void __gcov_dump(void);

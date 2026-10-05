@@ -125,6 +125,10 @@ public:
     void WaitDeferredSignals() {
         scheduler.WaitDeferredSignals();
     }
+    /// Starts the guest copies batched off the recording thread (Scheduler::QueueHostCopy).
+    void FlushHostCopies() {
+        scheduler.FlushHostCopies();
+    }
     /// Runs `signal` after the guest memory copies issued so far, without waiting here.
     void SignalAfterHostCopies(std::function<void()> signal) {
         scheduler.SignalAfterHostCopies(std::move(signal));

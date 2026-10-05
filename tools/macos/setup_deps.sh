@@ -181,7 +181,7 @@ step "Zydis (static, x86-64)"
 ZY_TAG=$(latest_tag https://github.com/zyantific/zydis.git '^v4\.[0-9]+\.[0-9]+$')
 echo "tag: $ZY_TAG"
 # Zydis' installed config looks for Zycore as its own package, so Zycore is built and installed
-# first from the revision Zydis ships (its submodule), then Zydis against it.
+# first from the revision Zydis ships (its submodule), then Zydis.
 if ! have lib/libZydis.a || ! have lib/cmake/zycore/zycore-config.cmake; then
     rm -rf "$SRC/zydis" "$PREFIX/lib/libZydis.a" "$PREFIX/lib/cmake/zydis"
     git -c advice.detachedHead=false clone -q --depth 1 --recurse-submodules --shallow-submodules \
@@ -191,7 +191,9 @@ if ! have lib/libZydis.a || ! have lib/cmake/zycore/zycore-config.cmake; then
         -DZYCORE_BUILD_SHARED_LIB=OFF -DZYCORE_BUILD_EXAMPLES=OFF -DZYCORE_BUILD_TESTS=OFF
     quiet "zycore build" cmake --build "$SRC/zydis/build-zycore" -j "$JOBS"
     quiet "zycore install" cmake --install "$SRC/zydis/build-zycore"
-    cmake_build zydis -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DZYAN_SYSTEM_ZYCORE=ON \
+    # Zydis itself compiles against its bundled Zycore (building against the installed one drops
+    # Zycore's include path); the installed Zycore above satisfies Zydis' config for consumers.
+    cmake_build zydis -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DZYDIS_BUILD_SHARED_LIB=OFF -DZYDIS_BUILD_TOOLS=OFF -DZYDIS_BUILD_EXAMPLES=OFF \
         -DZYDIS_BUILD_DOXYGEN=OFF -DZYDIS_BUILD_MAN=OFF -DZYDIS_BUILD_TESTS=OFF
 fi

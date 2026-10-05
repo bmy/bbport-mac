@@ -1,0 +1,21 @@
+diff --git a/src/kosmickrisp/vulkan/kk_physical_device.c b/src/kosmickrisp/vulkan/kk_physical_device.c
+index dff0b061b82..7a117e021ab 100644
+--- a/src/kosmickrisp/vulkan/kk_physical_device.c
++++ b/src/kosmickrisp/vulkan/kk_physical_device.c
+@@ -977,6 +977,16 @@ kk_physical_device_init_pipeline_cache(struct kk_physical_device *pdev)
+    STATIC_ASSERT(BLAKE3_KEY_LEN >= VK_UUID_SIZE);
+    memcpy(pdev->vk.properties.pipelineCacheUUID, blake3, VK_UUID_SIZE);
+    memcpy(pdev->vk.properties.shaderBinaryUUID, blake3, VK_UUID_SIZE);
++
++#ifdef ENABLE_SHADER_CACHE
++   /* bbport: create the on-disk shader cache (as NVK and the other Mesa Vulkan drivers do).
++    * Without it vk_pipeline_cache keeps compiled shaders in memory only, so every launch ran the
++    * full NIR lowering and MSL generation again for every pipeline. The key is the driver's
++    * build-id hash, so a rebuilt driver starts a new cache. */
++   char timestamp[BLAKE3_HEX_LEN];
++   _mesa_blake3_format(timestamp, blake3);
++   pdev->vk.disk_cache = disk_cache_create("kosmickrisp", timestamp, 0);
++#endif
+ }
+ 
+ static void

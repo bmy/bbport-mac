@@ -216,11 +216,14 @@ step "KosmicKrisp (Mesa Vulkan-on-Metal driver, x86-64; macOS 26+)"
 # fallback (BB_VK_DRIVER=moltenvk). BB_SKIP_KOSMICKRISP=1 skips this step.
 KK_REV=${KK_REV:-3af112680499cc5eaf519007404a7366679e1c7f}
 macos_major=$(sw_vers -productVersion | cut -d. -f1)
+# This port's Mesa patches (tools/macos/kosmickrisp-patches): a change rebuilds the driver.
+KK_PATCHES=$(cat "$REPO"/tools/macos/kosmickrisp-patches/*.patch 2>/dev/null | shasum | cut -c1-16)
+kk_stamp=$PREFIX/lib/kosmickrisp/.bbport-patches
 if [[ -n ${BB_SKIP_KOSMICKRISP:-} ]]; then
     echo "skipped (BB_SKIP_KOSMICKRISP)"
 elif (( macos_major < 26 )); then
     echo "skipped: needs macOS 26 or later (this Mac: $(sw_vers -productVersion)); MoltenVK will be used"
-elif ! have lib/kosmickrisp/libvulkan_kosmickrisp.dylib; then
+elif ! have lib/kosmickrisp/libvulkan_kosmickrisp.dylib || [[ $(cat "$kk_stamp" 2>/dev/null) != "$KK_PATCHES" ]]; then
     "$BREW" install meson llvm spirv-llvm-translator
     if [[ ! -x $PREFIX/pyenv/bin/python3 ]]; then
         "$("$BREW" --prefix python@3.13)/bin/python3.13" -m venv "$PREFIX/pyenv"
@@ -236,6 +239,14 @@ elif ! have lib/kosmickrisp/libvulkan_kosmickrisp.dylib; then
         echo "fetching Mesa (large, a few minutes)"
         git -C "$kk" submodule update -q --init --depth 1
     fi
+    # Our patches on top of the pinned Mesa (each applied once; a re-run finds them applied).
+    for patch in "$REPO"/tools/macos/kosmickrisp-patches/*.patch; do
+        [[ -f $patch ]] || continue
+        if ! git -C "$kk/externals/mesa" apply --reverse --check "$patch" 2>/dev/null; then
+            git -C "$kk/externals/mesa" apply "$patch"
+            echo "applied $(basename "$patch")"
+        fi
+    done
     # Mesa first builds native (arm64) helper tools against Homebrew packages (LLVM,
     # SPIRV-LLVM-Translator), so this step sees Homebrew's pkg-config files, unlike the x86-64
     # libraries above; the x86-64 driver itself only links the SDK (cross file, --prefer-static).
@@ -251,6 +262,7 @@ elif ! have lib/kosmickrisp/libvulkan_kosmickrisp.dylib; then
     mkdir -p "$PREFIX/lib/kosmickrisp"
     cp "$kk/build-x86_64/outputs/libvulkan_kosmickrisp.dylib" "$kk/build-x86_64/outputs/kosmickrisp_mesa_icd.json" \
         "$PREFIX/lib/kosmickrisp/"
+    echo "$KK_PATCHES" > "$kk_stamp"
 fi
 
 step "Verify: every library must contain x86_64"

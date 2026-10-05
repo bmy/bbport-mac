@@ -1,6 +1,13 @@
 // SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
+#include <chrono>
+#include <cstdlib>
+#include <functional>
+#include <mutex>
+#include <thread>
+#include <algorithm>
 #include "common/serdes.h"
 #include "core/emulator_settings.h"
 #include "shader_recompiler/frontend/fetch_shader.h"
@@ -168,9 +175,21 @@ bool PipelineCache::LoadComputePipeline(Serialization::Archive& ar) {
     const auto [it, is_new] = compute_pipelines.try_emplace(compute_key);
     ASSERT(is_new);
 
-    it.value() =
-        std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile, *pipeline_cache,
-                                          compute_key, *sel.infos[0], sel.modules[0], sdata, true);
+    if (preload_jobs) {
+        // Created later on a worker thread; the map slot stays empty until WarmUp fills it.
+        preload_jobs->emplace_back([this, key = compute_key, info = sel.infos[0],
+                                    module = sel.modules[0], sdata]() mutable {
+            auto pipeline = std::make_unique<ComputePipeline>(
+                instance, scheduler, desc_heap, profile, *pipeline_cache, key, *info, module,
+                sdata, true);
+            std::scoped_lock lock{preload_mutex};
+            compute_pipelines.find(key).value() = std::move(pipeline);
+        });
+    } else {
+        it.value() = std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile,
+                                                       *pipeline_cache, compute_key,
+                                                       *sel.infos[0], sel.modules[0], sdata, true);
+    }
 
     sel.infos.fill(nullptr);
     sel.modules.fill(nullptr);
@@ -243,9 +262,23 @@ bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
     const auto [it, is_new] = graphics_pipelines.try_emplace(sel.graphics_key);
     ASSERT(is_new);
 
-    it.value() = std::make_unique<GraphicsPipeline>(
-        instance, scheduler, desc_heap, profile, sel.graphics_key, *pipeline_cache, sel.infos,
-        sel.runtime_infos, sel.fetch_shader, sel.modules, sdata, true);
+    if (preload_jobs) {
+        // Programs live in program_cache behind unique_ptrs, so the Info pointers stay valid.
+        preload_jobs->emplace_back([this, key = sel.graphics_key, infos = sel.infos,
+                                    runtime_infos = sel.runtime_infos,
+                                    fetch_shader = sel.fetch_shader, modules = sel.modules,
+                                    sdata]() mutable {
+            auto pipeline = std::make_unique<GraphicsPipeline>(
+                instance, scheduler, desc_heap, profile, key, *pipeline_cache, infos,
+                runtime_infos, fetch_shader, modules, sdata, true);
+            std::scoped_lock lock{preload_mutex};
+            graphics_pipelines.find(key).value() = std::move(pipeline);
+        });
+    } else {
+        it.value() = std::make_unique<GraphicsPipeline>(
+            instance, scheduler, desc_heap, profile, sel.graphics_key, *pipeline_cache, sel.infos,
+            sel.runtime_infos, sel.fetch_shader, sel.modules, sdata, true);
+    }
 
     sel.infos.fill(nullptr);
     sel.modules.fill(nullptr);
@@ -351,6 +384,25 @@ void PipelineCache::WarmUp() {
     u32 num_pipelines{};
     u32 num_total_pipelines{};
 
+    // bbport: reading the store and building SPIR-V modules stays on this thread (it shares the
+    // selection state and program cache); the driver compiles, the slow part, run on all cores.
+    // On Linux the driver's own disk cache makes them fast already, so one thread stays the
+    // default there. BB_PRELOAD_THREADS overrides.
+    std::vector<std::function<void()>> jobs;
+    const u32 preload_threads = [] {
+        if (const char* env = std::getenv("BB_PRELOAD_THREADS")) {
+            return std::max(1, std::atoi(env));
+        }
+#ifdef __APPLE__
+        return static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+#else
+        return 1;
+#endif
+    }();
+    if (preload_threads > 1) {
+        preload_jobs = &jobs;
+    }
+
     Storage::DataBase::Instance().ForEachBlob(
         Storage::BlobType::PipelineKey, [&](std::vector<u8>&& data) {
             ++num_total_pipelines;
@@ -379,6 +431,29 @@ void PipelineCache::WarmUp() {
             }
         });
 
+    preload_jobs = nullptr;
+    if (!jobs.empty()) {
+        const auto start = std::chrono::steady_clock::now();
+        std::atomic<size_t> next{0};
+        const auto worker = [&] {
+            for (size_t i; (i = next.fetch_add(1)) < jobs.size();) {
+                jobs[i]();
+            }
+        };
+        std::vector<std::thread> threads;
+        const u32 count = std::min<u32>(preload_threads, static_cast<u32>(jobs.size()));
+        for (u32 t = 1; t < count; ++t) {
+            threads.emplace_back(worker);
+        }
+        worker();
+        for (auto& thread : threads) {
+            thread.join();
+        }
+        LOG_WARNING(Render, "Preloaded {} cached pipelines on {} threads in {:.1f} s",
+                    jobs.size(), count,
+                    std::chrono::duration<double>(std::chrono::steady_clock::now() - start)
+                        .count());
+    }
     LOG_INFO(Render, "Preloaded {} pipelines", num_pipelines);
     if (num_total_pipelines > num_pipelines) {
         LOG_WARNING(Render, "{} stale pipelines were found. Consider re-generating the cache",

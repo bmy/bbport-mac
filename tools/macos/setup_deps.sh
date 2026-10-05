@@ -188,9 +188,46 @@ if ! have lib/libZydis.a; then
         -DZYDIS_BUILD_TOOLS=OFF -DZYDIS_BUILD_EXAMPLES=OFF -DZYDIS_BUILD_DOXYGEN=OFF -DZYDIS_BUILD_MAN=OFF
 fi
 
+step "KosmicKrisp (Mesa Vulkan-on-Metal driver, x86-64; macOS 26+)"
+# The Vulkan driver upstream shadPS4 bundles on macOS; the vendored renderer already carries its
+# driver-specific workarounds. Built with shadPS4's wrapper (meson, cross-compiled to x86-64),
+# pinned to the revision upstream used at the vendored shadPS4 commit. MoltenVK stays as the
+# fallback (BB_VK_DRIVER=moltenvk). BB_SKIP_KOSMICKRISP=1 skips this step.
+KK_REV=${KK_REV:-3af112680499cc5eaf519007404a7366679e1c7f}
+macos_major=$(sw_vers -productVersion | cut -d. -f1)
+if [[ -n ${BB_SKIP_KOSMICKRISP:-} ]]; then
+    echo "skipped (BB_SKIP_KOSMICKRISP)"
+elif (( macos_major < 26 )); then
+    echo "skipped: needs macOS 26 or later (this Mac: $(sw_vers -productVersion)); MoltenVK will be used"
+elif ! have lib/kosmickrisp/libvulkan_kosmickrisp.dylib; then
+    "$BREW" install meson llvm spirv-llvm-translator
+    if [[ ! -x $PREFIX/pyenv/bin/python3 ]]; then
+        "$("$BREW" --prefix python@3.13)/bin/python3.13" -m venv "$PREFIX/pyenv"
+    fi
+    quiet "kosmickrisp python modules" "$PREFIX/pyenv/bin/pip" install mako packaging pyyaml
+    kk=$SRC/mesa-kosmickrisp
+    if [[ $(git -C "$kk" rev-parse HEAD 2>/dev/null) != "$KK_REV" ]]; then
+        rm -rf "$kk" && mkdir -p "$kk"
+        git -C "$kk" init -q
+        git -C "$kk" remote add origin https://github.com/shadexternals/mesa-kosmickrisp.git
+        git -C "$kk" fetch -q --depth 1 origin "$KK_REV"
+        git -C "$kk" -c advice.detachedHead=false checkout -q FETCH_HEAD
+        echo "fetching Mesa (large, a few minutes)"
+        git -C "$kk" submodule update -q --init --depth 1
+    fi
+    # Mesa's build scripts run the first python3 on PATH: the venv with mako/pyyaml.
+    PATH="$PREFIX/pyenv/bin:$PATH" quiet "kosmickrisp configure" cmake -S "$kk" -B "$kk/build-x86_64" -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0
+    echo "building Mesa/KosmicKrisp (10-20 minutes)"
+    PATH="$PREFIX/pyenv/bin:$PATH" quiet "kosmickrisp build" cmake --build "$kk/build-x86_64" -j "$JOBS"
+    mkdir -p "$PREFIX/lib/kosmickrisp"
+    cp "$kk/build-x86_64/outputs/libvulkan_kosmickrisp.dylib" "$kk/build-x86_64/outputs/kosmickrisp_mesa_icd.json" \
+        "$PREFIX/lib/kosmickrisp/"
+fi
+
 step "Verify: every library must contain x86_64"
 bad=0
-for lib in "$PREFIX"/lib/*.dylib "$PREFIX"/lib/*.a; do
+for lib in "$PREFIX"/lib/*.dylib "$PREFIX"/lib/*.a "$PREFIX"/lib/kosmickrisp/*.dylib; do
     [[ -e $lib ]] || continue
     [[ -L $lib ]] && continue
     archs=$(lipo -archs "$lib")
@@ -204,7 +241,16 @@ cat > "$PREFIX/env.sh" <<EOF
 export BB_DEPS="$PREFIX"
 export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig:$PREFIX/share/pkgconfig"
 unset PKG_CONFIG_PATH
-export VK_DRIVER_FILES="$PREFIX/share/vulkan/icd.d/MoltenVK_icd.json"
+# Vulkan driver: KosmicKrisp when built (as upstream shadPS4 on macOS), else MoltenVK.
+# BB_VK_DRIVER=moltenvk|kosmickrisp picks one explicitly.
+case "\${BB_VK_DRIVER:-auto}" in
+    moltenvk) export VK_DRIVER_FILES="$PREFIX/share/vulkan/icd.d/MoltenVK_icd.json" ;;
+    *) if [[ -f "$PREFIX/lib/kosmickrisp/kosmickrisp_mesa_icd.json" && "\${BB_VK_DRIVER:-auto}" != moltenvk ]]; then
+           export VK_DRIVER_FILES="$PREFIX/lib/kosmickrisp/kosmickrisp_mesa_icd.json"
+       else
+           export VK_DRIVER_FILES="$PREFIX/share/vulkan/icd.d/MoltenVK_icd.json"
+       fi ;;
+esac
 export DYLD_LIBRARY_PATH="$PREFIX/lib\${DYLD_LIBRARY_PATH:+:\$DYLD_LIBRARY_PATH}"
 export MACOSX_DEPLOYMENT_TARGET=14.0
 EOF

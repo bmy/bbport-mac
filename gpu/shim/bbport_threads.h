@@ -54,4 +54,10 @@ inline void MakeBackground() {
 #endif
 }
 
+#ifdef __APPLE__
+/// CPU time of the calling thread in microseconds (macOS has no RUSAGE_THREAD).
+/// Defined in bbport_thread_cpu_mac.cpp so Mach headers stay out of shared headers.
+bool CurrentThreadCpuUs(std::uint64_t& user_us, std::uint64_t& sys_us);
+#endif
+
 } // namespace BbThreads

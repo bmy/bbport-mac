@@ -347,6 +347,10 @@ void VideoOutDriver::Flip(const Request& req) {
             timespec ts{};
             clock_gettime(static_cast<clockid_t>(clock), &ts);
             gpu_ns = u64(ts.tv_sec) * 1000000000ull + u64(ts.tv_nsec);
+        } else {
+            // macOS: no CPU clock for another thread; the GPU thread records its own Mach CPU
+            // time after each submission (Liverpool), so use that.
+            gpu_ns = (BbStats::gpu_user_us.load() + BbStats::gpu_sys_us.load()) * 1000ull;
         }
         const u64 images = BbStats::images_registered.load();
         const u64 image_bytes = BbStats::image_upload_bytes.load();

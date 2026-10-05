@@ -1337,6 +1337,11 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
             BbStats::gpu_vol_switches.store(usage.ru_nvcsw, std::memory_order_relaxed);
             BbStats::gpu_minor_faults.store(usage.ru_minflt, std::memory_order_relaxed);
         }
+#elif defined(__APPLE__)
+        if (u64 user_us, sys_us; BbThreads::CurrentThreadCpuUs(user_us, sys_us)) {
+            BbStats::gpu_user_us.store(user_us, std::memory_order_relaxed);
+            BbStats::gpu_sys_us.store(sys_us, std::memory_order_relaxed);
+        }
 #endif
     }
 

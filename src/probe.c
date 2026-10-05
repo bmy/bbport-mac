@@ -575,6 +575,9 @@ static void *probe_thread(void *arg) {
 int main(int argc, char **argv) {
     static MainArgs args;
     args.argc = argc; args.argv = argv;
+    /* stdout is a pipe (run.sh tees it to out/last-run.log): line-buffer it so diagnostics
+     * printed just before a crash reach the log. */
+    setvbuf(stdout, NULL, _IOLBF, 0);
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setstacksize(&attr, (size_t)64 << 20);

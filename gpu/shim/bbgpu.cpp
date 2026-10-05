@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
+#include <functional>
 #include <boost/asio/io_context.hpp>
 #include "common/polyfill_thread.h"
 #include "video_core/renderdoc.h"
@@ -205,6 +206,36 @@ static void StartProfileWriter() {
 }
 #endif
 
+#ifdef __APPLE__
+namespace {
+std::mutex g_main_mutex;
+std::condition_variable g_main_cv;
+std::function<void()> g_main_task;
+} // namespace
+
+extern "C" void bbgpu_main_thread_loop(void) {
+    for (;;) {
+        std::function<void()> task;
+        {
+            std::unique_lock lock{g_main_mutex};
+            g_main_cv.wait(lock, [] { return static_cast<bool>(g_main_task); });
+            task = std::move(g_main_task);
+            g_main_task = nullptr;
+        }
+        task();
+    }
+}
+
+/// Runs `task` on the process's main thread (parked in bbgpu_main_thread_loop).
+static void RunOnMainThread(std::function<void()> task) {
+    {
+        std::scoped_lock lock{g_main_mutex};
+        g_main_task = std::move(task);
+    }
+    g_main_cv.notify_all();
+}
+#endif
+
 extern "C" int bbgpu_init(const BbGpuConfig* config) {
     BbSettings::Load();
 #ifdef BB_PGO_GENERATE
@@ -215,7 +246,7 @@ extern "C" int bbgpu_init(const BbGpuConfig* config) {
     Core::Emulator::FillElfInfo(*config);
     const std::string title = config->title ? config->title : "Bloodborne";
     const s32 width = config->width, height = config->height;
-    g_window_thread = std::thread([title, width, height] {
+    auto window_main = [title, width, height] {
         Common::SetCurrentThreadName("bb:window");
         auto* window = new Frontend::WindowSDL(width, height, title.c_str());
         {
@@ -230,8 +261,13 @@ extern "C" int bbgpu_init(const BbGpuConfig* config) {
         LOG_INFO(Frontend, "Window closed by user");
         std::fflush(stdout);
         std::_Exit(0);
-    });
+    };
+#ifdef __APPLE__
+    RunOnMainThread(window_main); // Cocoa: the window and its events belong to the main thread
+#else
+    g_window_thread = std::thread(window_main);
     g_window_thread.detach();
+#endif
     {
         std::unique_lock lock{g_window_mutex};
         g_window_cv.wait(lock, [] { return g_window_ready; });

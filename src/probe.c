@@ -297,7 +297,7 @@ void runtime_restart(void) {
 #endif
 }
 
-int main(int argc, char **argv) {
+static int probe_main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
 #ifndef _WIN32
     /* Keep host heap objects handed to the guest (thread handles, TLS) in the
@@ -356,7 +356,7 @@ int main(int argc, char **argv) {
     sigemptyset(&sa.sa_mask);
     sigaction(SIGSEGV, &sa, NULL); sigaction(SIGILL, &sa, NULL); sigaction(SIGBUS, &sa, NULL);
     Dl_info self_info;
-    if (dladdr((void *)main,&self_info)) exe_base=(uintptr_t)self_info.dli_fbase;
+    if (dladdr((void *)probe_main,&self_info)) exe_base=(uintptr_t)self_info.dli_fbase;
     struct sigaction dump = {0}; dump.sa_sigaction = thread_dump; dump.sa_flags = SA_SIGINFO|SA_RESTART;
     sigemptyset(&dump.sa_mask); sigaction(SIGUSR2, &dump, NULL);
     struct sigaction alarm_action = {0}; alarm_action.sa_sigaction = watchdog; alarm_action.sa_flags = SA_SIGINFO;
@@ -561,3 +561,28 @@ int main(int argc, char **argv) {
 #endif
     fail("entry unexpectedly returned");
 }
+
+#ifdef __APPLE__
+/* macOS: Cocoa windows exist only on the main thread. The loader and the game's own main thread
+ * run on a secondary thread with a main-sized stack; the real main thread serves the GPU
+ * library's window (bbgpu_main_thread_loop). Whichever side ends the process calls exit. */
+typedef struct { int argc; char **argv; } MainArgs;
+static void *probe_thread(void *arg) {
+    const MainArgs *args = arg;
+    exit(probe_main(args->argc, args->argv));
+}
+int main(int argc, char **argv) {
+    static MainArgs args;
+    args.argc = argc; args.argv = argv;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, (size_t)64 << 20);
+    pthread_t thread;
+    if (pthread_create(&thread, &attr, probe_thread, &args)) { perror("pthread_create"); return 1; }
+    pthread_attr_destroy(&attr);
+    bbgpu_main_thread_loop();
+    return 0;
+}
+#else
+int main(int argc, char **argv) { return probe_main(argc, argv); }
+#endif

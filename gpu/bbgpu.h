@@ -32,6 +32,12 @@ int bbgpu_text_input_poll(char *out_utf8, uint64_t size);
 int bbgpu_overlay_captures_input(void);
 /* Number of symbols registered by the vendored libraries (diagnostics). */
 unsigned bbgpu_symbol_count(void);
+#ifdef __APPLE__
+/* macOS: Cocoa windows exist only on the process's main thread, so the loader runs the game
+ * on a secondary thread and hands the main thread to the GPU library here; it runs the
+ * window thread's work (window, events) when bbgpu_init asks for it. Never returns. */
+void bbgpu_main_thread_loop(void);
+#endif
 #ifdef __cplusplus
 }
 #endif

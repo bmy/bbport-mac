@@ -211,6 +211,8 @@ private:
     /// Everything of a direct draw after the pipeline selection (GPU thread or stage B).
     void DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw* used_prepared,
                     bool is_indexed, u32 index_offset);
+    /// bbport (BB_PASS_MERGE): flushes pending writes when the draw starts a new render pass.
+    void FlushBarriersAtPassStart(const RenderState& state);
     static bool DrawPipeWanted();
     bool UseDrawPipe() const;
     bool OnStageA() const;

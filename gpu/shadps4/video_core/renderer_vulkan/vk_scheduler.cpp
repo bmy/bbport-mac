@@ -96,6 +96,18 @@ struct PassStats {
         PrintTop(end_sites, frames);
         std::printf("Render passes reopened after:");
         PrintTop(reopen_sites, frames);
+        if (BbToggle::PassMergeWanted()) {
+            const auto take = [&](std::atomic<u64>& counter) {
+                return counter.exchange(0, std::memory_order_relaxed) / frames;
+            };
+            const double barriers = take(BbStats::pass_early_barriers);
+            const double uploads = take(BbStats::pass_deferred_uploads);
+            const double avoided = take(BbStats::pass_breaks_avoided);
+            std::printf("Render passes merged (BB_PASS_MERGE%s): %.1f/frame barriers moved to "
+                        "pass starts, %.1f/frame upload copies moved out of passes, %.1f/frame "
+                        "pass breaks avoided by them\n",
+                        BbToggle::PassMergeOn() ? "" : " off", barriers, uploads, avoided);
+        }
         end_sites.clear();
         reopen_sites.clear();
         passes = reopened = 0;

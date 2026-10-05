@@ -102,6 +102,12 @@ public:
 
     void FlushBarriers(std::source_location where = std::source_location::current());
 
+    /// bbport: writes or layout transitions are waiting for FlushBarriers (BB_PASS_MERGE).
+    [[nodiscard]] bool HasPendingWrites() const noexcept {
+        return memory_barrier.srcAccessMask != vk::AccessFlagBits2::eNone ||
+               !image_barriers.empty();
+    }
+
     /// bbport: runs before this thread changes image state (layouts, pending image
     /// barriers): the rasterizer joins its texture binding helper there (BindHelper).
     void SetImageAccessHook(void (*hook)(void*), void* context) {

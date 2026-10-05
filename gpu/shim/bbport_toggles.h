@@ -62,10 +62,31 @@ enum : std::uint64_t {
     // when nothing moves. Static-camera flicker of railings/window bars p99.9 -45% (2026-10-03).
     TaaKeepNearerHistory = 1ull << 55,
     SceneMipBias = 1ull << 57, ///< negative LOD bias of G-buffer samplers at reduced scene sizes
+    PassMerge = 1ull << 58,    ///< fewer render pass breaks (BB_PASS_MERGE, PassMergeOn)
     // Bits 20-29 are used as raw debug toggles by the camera/object motion and the upscaler.
 };
 inline bool Disabled(std::uint64_t bit) {
     return (__atomic_load_n(&runtime_disabled_optimizations, __ATOMIC_RELAXED) & bit) != 0;
+}
+/// Render pass merging: pending barriers are flushed where a pass starts anyway, and buffer
+/// uploads wait for the end of the pass they would break. Every pass costs KosmicKrisp a Metal
+/// command buffer and encoder on the recording thread, so it is on by default on macOS;
+/// BB_PASS_MERGE=0/1 overrides, the PassMerge bit switches it off in a running game.
+inline bool PassMergeWanted() {
+    static const bool wanted = [] {
+        if (const char* env = std::getenv("BB_PASS_MERGE"); env && env[0]) {
+            return env[0] == '1';
+        }
+#ifdef __APPLE__
+        return true;
+#else
+        return false;
+#endif
+    }();
+    return wanted;
+}
+inline bool PassMergeOn() {
+    return PassMergeWanted() && !Disabled(PassMerge);
 }
 } // namespace BbToggle
 
@@ -126,6 +147,10 @@ inline std::atomic<std::uint64_t> gpu_sys_us{0}, gpu_user_us{0}, gpu_invol_switc
     gpu_vol_switches{0}, gpu_minor_faults{0};
 /// Protection faults (signals) taken by the GPU thread itself.
 inline std::atomic<std::uint64_t> gpu_signal_faults{0};
+/// Render pass merging (BB_PASS_MERGE): barriers flushed where a pass started anyway, buffer
+/// uploads moved to the end of the pass they would have broken, and pass breaks avoided.
+inline std::atomic<std::uint64_t> pass_early_barriers{0}, pass_deferred_uploads{0},
+    pass_breaks_avoided{0};
 /// Protection changes: calls and pages, those removing write access (TLB shootdowns) apart.
 inline std::atomic<std::uint64_t> protect_calls{0}, protect_pages{0}, protect_revoke_calls{0},
     protect_revoke_pages{0};

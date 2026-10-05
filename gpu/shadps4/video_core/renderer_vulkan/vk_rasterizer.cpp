@@ -1000,6 +1000,8 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
 
     if (needs_barrier) {
         runtime.FlushBarriers();
+    } else {
+        FlushBarriersAtPassStart(state);
     }
 
     // bbport: screen-space (clip disabled) draws into the upscaler's output-size images.
@@ -1137,6 +1139,19 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     scheduler.KickRecording();
 }
 
+void Rasterizer::FlushBarriersAtPassStart(const RenderState& state) {
+    // bbport (BB_PASS_MERGE): a draw that starts a render pass anyway flushes the writes still
+    // waiting for a barrier (copies, dispatches, the previous pass), outside any pass. Otherwise
+    // the first draw of the new pass to read them ends it for the barrier and reopens it with
+    // the same attachments. Outside a pass the barrier is cheap (KosmicKrisp: an encoder-local
+    // barrier at most).
+    if (BbToggle::PassMergeOn() && scheduler.WillBeginRendering(state) &&
+        runtime.HasPendingWrites()) {
+        runtime.FlushBarriers();
+        BbStats::pass_early_barriers.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
 void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u32 stride,
                               u32 max_count, VAddr count_address, u16 vertex_sgpr_offset,
                               u16 instance_sgpr_offset) {
@@ -1212,6 +1227,8 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
 
     if (needs_barrier) {
         runtime.FlushBarriers();
+    } else {
+        FlushBarriersAtPassStart(state);
     }
 
     // bbport: screen-space (clip disabled) draws into the upscaler's output-size images.

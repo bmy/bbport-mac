@@ -33,7 +33,8 @@ BREW=$(command -v brew || true)
 [[ $("$BREW" --prefix) == /opt/homebrew ]] || echo "note: brew prefix is $("$BREW" --prefix), expected /opt/homebrew"
 
 step "Native build tools (Homebrew)"
-"$BREW" install cmake ninja pkgconf glslang spirv-tools python@3.13 nasm
+"$BREW" install cmake ninja pkgconf glslang spirv-tools python@3.13 nasm \
+    boost magic_enum robin-map vulkan-memory-allocator   # header-only: architecture does not matter
 export PATH="$("$BREW" --prefix)/bin:$PATH"
 
 # x86-64 everywhere below. pkg-config must only see $PREFIX, never Homebrew's arm64 .pc files.
@@ -159,9 +160,30 @@ if ! have lib/libavformat.dylib; then
     cd "$REPO"
 fi
 
+step "miniz (static, x86-64)"
+MZ_TAG=$(latest_tag https://github.com/richgel999/miniz.git '^3\.[0-9]+\.[0-9]+$')
+echo "tag: $MZ_TAG"
+if ! have lib/libminiz.a; then
+    fetch miniz https://github.com/richgel999/miniz.git "$MZ_TAG"
+    cmake_build miniz -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+        -DBUILD_EXAMPLES=OFF -DBUILD_FUZZERS=OFF -DBUILD_TESTS=OFF
+fi
+
+step "Zydis (static, x86-64)"
+ZY_TAG=$(latest_tag https://github.com/zyantific/zydis.git '^v4\.[0-9]+\.[0-9]+$')
+echo "tag: $ZY_TAG"
+if ! have lib/libZydis.a; then
+    rm -rf "$SRC/zydis"
+    git -c advice.detachedHead=false clone -q --depth 1 --recurse-submodules --shallow-submodules \
+        --branch "$ZY_TAG" https://github.com/zyantific/zydis.git "$SRC/zydis"
+    cmake_build zydis -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+        -DZYDIS_BUILD_TOOLS=OFF -DZYDIS_BUILD_EXAMPLES=OFF -DZYDIS_BUILD_DOXYGEN=OFF -DZYDIS_BUILD_MAN=OFF
+fi
+
 step "Verify: every library must contain x86_64"
 bad=0
-for lib in "$PREFIX"/lib/*.dylib; do
+for lib in "$PREFIX"/lib/*.dylib "$PREFIX"/lib/*.a; do
+    [[ -e $lib ]] || continue
     [[ -L $lib ]] && continue
     archs=$(lipo -archs "$lib")
     printf '  %-40s %s\n' "$(basename "$lib")" "$archs"

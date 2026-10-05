@@ -267,7 +267,8 @@ vk::UniqueInstance CreateInstance(Frontend::WindowSystemType window_type, bool e
         _NSGetExecutablePath(path, &length);
         return std::filesystem::path(path).parent_path();
     }();
-    setenv("VK_DRIVER_FILES", icd_path.c_str(), true);
+    // bbport: keep a driver list set by the environment (tools/macos env.sh names MoltenVK).
+    setenv("VK_DRIVER_FILES", icd_path.c_str(), false);
 #endif
 
     static vk::detail::DynamicLoader dl;

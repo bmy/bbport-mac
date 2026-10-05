@@ -159,7 +159,7 @@ private:
     void Run(std::stop_token stop) {
         Common::SetCurrentThreadName("bb:DrawRec");
         on_stage_b = true;
-        stage_b_tid.store(static_cast<u32>(gettid()), std::memory_order_release);
+        stage_b_tid.store(static_cast<u32>(BbThreads::HostTid()), std::memory_order_release);
         u64 at = 0;
         while (true) {
             // Packets follow each other within microseconds while a frame is decoded: spin,

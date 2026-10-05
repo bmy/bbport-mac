@@ -49,7 +49,9 @@ find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(XXHASH REQUIRED IMPORTED_TARGET libxxhash)
 pkg_check_modules(SDL3 REQUIRED IMPORTED_TARGET sdl3)
-pkg_check_modules(X11 REQUIRED IMPORTED_TARGET x11)
+if (NOT APPLE)
+    pkg_check_modules(X11 REQUIRED IMPORTED_TARGET x11)
+endif()
 find_package(miniz REQUIRED)
 find_package(Zydis REQUIRED)
 find_program(GLSLANG_COMPILER NAMES glslang glslangValidator REQUIRED)
@@ -136,10 +138,14 @@ target_include_directories(bbgpu PRIVATE shim shadps4 ${SHADER_INCLUDE} third_pa
 target_compile_definitions(bbgpu PRIVATE BOOST_ASIO_STANDALONE NDEBUG)
 target_compile_options(bbgpu PRIVATE -Wno-deprecated-declarations -Wno-missing-field-initializers)
 # Runtime symbols (runtime_memory_*, runtime_process_*) resolve against bb-probe.
-target_link_options(bbgpu PRIVATE -Wl,--allow-shlib-undefined)
+if (APPLE)
+    target_link_options(bbgpu PRIVATE -undefined dynamic_lookup)
+else()
+    target_link_options(bbgpu PRIVATE -Wl,--allow-shlib-undefined)
+endif()
 target_link_libraries(bbgpu PRIVATE ffx-vulkan::portable ffx-vulkan::fsr4-v07-vulkan)
 target_link_libraries(bbgpu PUBLIC Vulkan::Headers fmt::fmt Boost::headers magic_enum::magic_enum
-    tsl::robin_map GPUOpen::VulkanMemoryAllocator PkgConfig::XXHASH PkgConfig::SDL3 PkgConfig::X11 PkgConfig::FFMPEG miniz::miniz Zydis::Zydis sirit)
+    tsl::robin_map GPUOpen::VulkanMemoryAllocator PkgConfig::XXHASH PkgConfig::SDL3 $<$<NOT:$<PLATFORM_ID:Darwin>>:PkgConfig::X11> PkgConfig::FFMPEG miniz::miniz Zydis::Zydis sirit)
 
 # Explicit test targets; neither launches the game nor needs a Vulkan device.
 add_executable(motion-history-test EXCLUDE_FROM_ALL ../tests/test_motion_history.cpp)

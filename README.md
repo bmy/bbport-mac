@@ -149,9 +149,31 @@ More detail, including troubleshooting: [tools/macos/README-macos.md](tools/maco
 1. **Fix two-thread recording,** so dense scenes get closer to 60: rotating command pools per
    thread, and the full-screen crash.
 2. **Finish and polish the Mac app.**
-3. **Possibly run the renderer as a separate native arm64 process.** Only the game itself would
-   stay under Rosetta; KosmicKrisp and Metal would run natively. This only goes ahead if a
-   benchmark shows a large enough gain.
+3. **Move the renderer into a separate native arm64 process.** The renderer is the shadPS4-based
+   GPU library plus KosmicKrisp and Metal. It would share guest memory with the game process
+   through the existing shared-memory pool. This removes Rosetta from the frame-rate bottleneck,
+   and it is also the first step towards a Rosetta-free port (below). A benchmark of native
+   versus Rosetta KosmicKrisp decides when it's worth doing.
+
+### Planning for the end of Rosetta
+
+Apple has said macOS 27 is the last release with Rosetta for general use. From macOS 28 it
+remains only for certain older, unmaintained games that rely on Intel-based frameworks, and
+it's unclear whether bbport would qualify. Apple's statements on this differ in detail. The
+game's code is x86-64, so a long-term Mac port needs its own translation:
+
+- **Renderer.** After roadmap item 3, the renderer no longer needs Rosetta. Only the game code
+  and bbport's small runtime remain x86-64.
+- **Game code.** bbport targets a single, fixed executable (Bloodborne 1.09), which it already
+  analyses and relinks offline. It also already bundles the Zydis x86 disassembler. That makes
+  ahead-of-time recompilation of that one binary to arm64 feasible, with a small runtime
+  fallback for indirect jumps that can't be resolved in advance. The main difficulty is memory
+  ordering: x86 has stronger guarantees than arm64, and the hardware mode Rosetta uses for this
+  isn't available to ordinary apps, so translated code needs barriers. This is a research-sized
+  project.
+- **Fallbacks.** An existing x86-to-arm64 translator, if one gains macOS support, or running the
+  Linux build in an arm64 Linux virtual machine with such a translator. Both would likely be
+  slower than today.
 
 ## Credits and licence
 

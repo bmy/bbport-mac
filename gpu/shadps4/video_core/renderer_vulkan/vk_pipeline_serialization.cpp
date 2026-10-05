@@ -383,6 +383,7 @@ void PipelineCache::WarmUp() {
 
     u32 num_pipelines{};
     u32 num_total_pipelines{};
+    const auto warmup_start = std::chrono::steady_clock::now();
 
     // bbport: BB_PRELOAD_THREADS=N creates the cached pipelines (the driver compile) on N
     // threads; reading the store and building SPIR-V modules stays on this thread (it shares the
@@ -450,7 +451,10 @@ void PipelineCache::WarmUp() {
                     std::chrono::duration<double>(std::chrono::steady_clock::now() - start)
                         .count());
     }
-    LOG_INFO(Render, "Preloaded {} pipelines", num_pipelines);
+    // bbport: always reported (startup time depends on it; the driver's disk cache shortens it).
+    LOG_WARNING(Render, "Preloaded {} pipelines in {:.1f} s", num_pipelines,
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - warmup_start)
+                    .count());
     if (num_total_pipelines > num_pipelines) {
         LOG_WARNING(Render, "{} stale pipelines were found. Consider re-generating the cache",
                     num_total_pipelines - num_pipelines);

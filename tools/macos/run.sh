@@ -20,6 +20,9 @@ grep -q '^show_fps=' "$ini" 2>/dev/null || echo "show_fps=1" >> "$ini"
 # Upscaler: bbport.ini, which the overlay menu saves; BB_UPSCALER=off|fsr3|taa|metalfx overrides
 # it for one run. Off until chosen: FSR 3.1, the port's own default, is unproven on KosmicKrisp.
 grep -q '^upscaler=' "$ini" 2>/dev/null || echo "upscaler=off" >> "$ini"
+# Character motion vectors, as the Linux launcher defaults: without them temporal upscalers
+# (FSR 3.1, MetalFX, TAA) smear animated characters. BB_OBJECT_MOTION=0 turns them off.
+grep -q '^object_motion=' "$ini" 2>/dev/null || echo "object_motion=1" >> "$ini"
 # Keep a copy of everything the port prints for diagnosis.
 exec > >(tee out/last-run.log) 2>&1
 echo "macOS run: $(sw_vers -productVersion), game $BB_GAME_DIR, fps $BB_FPS, upscaler ${BB_UPSCALER:-from $ini}"

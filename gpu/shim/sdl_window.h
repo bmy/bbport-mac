@@ -43,6 +43,9 @@ private:
     int text_state{};
     std::string text, text_prompt, base_title;
     void UpdateTextTitle();
+#ifdef __APPLE__
+    void AppendTypedKey(int scancode, unsigned mod); // text from key presses (SDL values)
+#endif
     SDL_Window* window{};
     WindowSystemInfo window_info{};
 };

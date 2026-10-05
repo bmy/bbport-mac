@@ -82,6 +82,31 @@ void WindowSDL::UpdateTextTitle() {
     SDL_SetWindowTitle(window, title.c_str());
 }
 
+#ifdef __APPLE__
+void WindowSDL::AppendTypedKey(int scancode, unsigned mod) {
+    if (mod & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) {
+        return;
+    }
+    const SDL_Keycode key =
+        SDL_GetKeyFromScancode(static_cast<SDL_Scancode>(scancode), static_cast<SDL_Keymod>(mod), false);
+    if ((key & SDLK_SCANCODE_MASK) || key < 0x20 || key == 0x7F || (key >= 0x80 && key < 0xA0) ||
+        key > 0xFFFF) {
+        return; // not a printable character (arrows, function keys, controls)
+    }
+    // UTF-8 encode one code point (<= U+FFFF).
+    if (key < 0x80) {
+        text += static_cast<char>(key);
+    } else if (key < 0x800) {
+        text += static_cast<char>(0xC0 | (key >> 6));
+        text += static_cast<char>(0x80 | (key & 0x3F));
+    } else {
+        text += static_cast<char>(0xE0 | (key >> 12));
+        text += static_cast<char>(0x80 | ((key >> 6) & 0x3F));
+        text += static_cast<char>(0x80 | (key & 0x3F));
+    }
+}
+#endif
+
 bool WindowSDL::PollEvents() {
     {
         std::scoped_lock lock{text_mutex};
@@ -100,7 +125,9 @@ bool WindowSDL::PollEvents() {
         if (text_active && (event.type == SDL_EVENT_TEXT_INPUT || event.type == SDL_EVENT_KEY_DOWN)) {
             std::scoped_lock lock{text_mutex};
             if (event.type == SDL_EVENT_TEXT_INPUT) {
+#ifndef __APPLE__
                 text += event.text.text;
+#endif
             } else if (event.key.key == SDLK_BACKSPACE && !text.empty()) {
                 size_t cut = text.size() - 1; // drop one UTF-8 code point
                 while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80) --cut;
@@ -110,6 +137,14 @@ bool WindowSDL::PollEvents() {
                 text_active = false;
                 SDL_StopTextInput(window);
             }
+#ifdef __APPLE__
+            else if (event.type == SDL_EVENT_KEY_DOWN) {
+                // macOS: SDL's text-input events (Cocoa's text input system) did not arrive in
+                // the game window, while key events do, so the name is built from key presses
+                // with the current layout and Shift/Option state. Shortcuts are left alone.
+                AppendTypedKey(static_cast<int>(event.key.scancode), static_cast<unsigned>(event.key.mod));
+            }
+#endif
             UpdateTextTitle();
             continue;
         }

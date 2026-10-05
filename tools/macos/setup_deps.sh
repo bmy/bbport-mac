@@ -168,6 +168,17 @@ if ! have include/vk_mem_alloc.h; then
     cmake_build VulkanMemoryAllocator -DVMA_BUILD_DOCUMENTATION=OFF -DVMA_BUILD_SAMPLES=OFF
 fi
 
+step "xbyak (header-only; revision upstream shadPS4 pins)"
+XBYAK_REV=44a72f369268f7d552650891b296693e91db86bb
+if ! have include/xbyak/xbyak.h; then
+    rm -rf "$SRC/xbyak" && mkdir -p "$SRC/xbyak"
+    git -C "$SRC/xbyak" init -q
+    git -C "$SRC/xbyak" fetch -q --depth 1 https://github.com/herumi/xbyak.git "$XBYAK_REV"
+    git -C "$SRC/xbyak" -c advice.detachedHead=false checkout -q FETCH_HEAD
+    mkdir -p "$PREFIX/include"
+    cp -R "$SRC/xbyak/xbyak" "$PREFIX/include/"
+fi
+
 step "miniz (static, x86-64)"
 MZ_TAG=$(latest_tag https://github.com/richgel999/miniz.git '^3\.[0-9]+\.[0-9]+$')
 echo "tag: $MZ_TAG"

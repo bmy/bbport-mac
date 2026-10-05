@@ -179,11 +179,9 @@ public:
         return gpu_id;
     }
 
-#ifdef __linux__
     u32 GetGpuCommandProcessorThreadId() {
         return gpu_tid;
     }
-#endif
 
 private:
     struct Task {

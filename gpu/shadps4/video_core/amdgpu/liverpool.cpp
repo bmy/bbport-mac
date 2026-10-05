@@ -6,6 +6,7 @@
 #include <sys/resource.h>
 #include <time.h>
 #include "bbport_copy.h"
+#include "bbport_threads.h"
 #include "bbport_toggles.h"
 #include <cstdio>
 #include <boost/preprocessor/stringize.hpp>
@@ -108,9 +109,7 @@ void Liverpool::Process(std::stop_token stoken) {
     }
 #endif
     gpu_id = std::this_thread::get_id();
-#ifdef __linux__
-    gpu_tid = gettid();
-#endif
+    gpu_tid = static_cast<u32>(BbThreads::HostTid());
 
     while (!stoken.stop_requested()) {
         {

@@ -6,7 +6,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#ifdef __APPLE__
+#include <sys/ucontext.h>
+#else
 #include <ucontext.h>
+#endif
 #include <unistd.h>
 #include <x86intrin.h>
 #include "bbport_threads.h"

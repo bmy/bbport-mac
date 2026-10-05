@@ -5,7 +5,7 @@
 # libbbgpu must be x86-64. Build tools only run at build time and stay native (arm64).
 #   native (Apple Silicon Homebrew): cmake ninja pkgconf glslang spirv-tools python3
 #   x86-64, built here into $PREFIX:   SDL3 fmt xxHash Vulkan-Headers Vulkan-Loader FFmpeg
-#   x86-64, prebuilt (universal):      MoltenVK (KhronosGroup release)
+#                                      KosmicKrisp (Mesa's Vulkan-on-Metal driver)
 # Intel Homebrew is avoided: it is Tier 3 (no new bottles) since 2026.
 #
 # Usage: bash tools/macos/setup_deps.sh [prefix]   (default: <repo>/deps-x86_64)
@@ -25,6 +25,8 @@ die() { printf 'STOP: %s\n' "$*" >&2; exit 1; }
 
 step "Checks"
 [[ $(uname -s) == Darwin ]] || die "run this on the Mac"
+# KosmicKrisp, the only Vulkan driver that runs bbport on the Mac, needs macOS 26.
+(( $(sw_vers -productVersion | cut -d. -f1) >= 26 )) || die "macOS 26 or later required (this Mac: $(sw_vers -productVersion))"
 arch -x86_64 /usr/bin/true 2>/dev/null || die "Rosetta 2 missing: softwareupdate --install-rosetta --agree-to-license"
 xcrun --find clang >/dev/null 2>&1 || die "Command Line Tools missing: xcode-select --install"
 BREW=$(command -v brew || true)
@@ -84,29 +86,10 @@ if ! have lib/libvulkan.1.dylib; then
     cmake_build Vulkan-Loader -DVULKAN_HEADERS_INSTALL_DIR="$PREFIX" -DBUILD_TESTS=OFF
 fi
 
-step "MoltenVK (prebuilt universal release)"
-if ! have lib/libMoltenVK.dylib; then
-    url=$(curl -fsSL https://api.github.com/repos/KhronosGroup/MoltenVK/releases/latest |
-          python3 -c 'import json,sys; a=json.load(sys.stdin)["assets"]; print(next(x["browser_download_url"] for x in a if x["name"]=="MoltenVK-macos.tar"))')
-    echo "from: $url"
-    curl -fL "$url" -o "$SRC/MoltenVK-macos.tar"
-    rm -rf "$SRC/MoltenVK-macos" && mkdir -p "$SRC/MoltenVK-macos"
-    tar -xf "$SRC/MoltenVK-macos.tar" -C "$SRC/MoltenVK-macos"
-    dylib=$(find "$SRC/MoltenVK-macos" -path '*dynamic*' -name libMoltenVK.dylib | head -1)
-    icd=$(find "$SRC/MoltenVK-macos" -name MoltenVK_icd.json | head -1)
-    [[ -n $dylib && -n $icd ]] || die "MoltenVK archive layout changed (no libMoltenVK.dylib / MoltenVK_icd.json)"
-    mvk_archs=$(lipo -archs "$dylib")
-    [[ $mvk_archs == *x86_64* ]] || die "MoltenVK dylib has no x86_64 slice: $mvk_archs"
-    mkdir -p "$PREFIX/lib" "$PREFIX/share/vulkan/icd.d"
-    cp "$dylib" "$PREFIX/lib/"
-    python3 - "$icd" "$PREFIX" <<'PY'
-import json, sys
-icd, prefix = sys.argv[1], sys.argv[2]
-data = json.load(open(icd))
-data["ICD"]["library_path"] = f"{prefix}/lib/libMoltenVK.dylib"
-json.dump(data, open(f"{prefix}/share/vulkan/icd.d/MoltenVK_icd.json", "w"), indent=2)
-PY
-fi
+# MoltenVK was the driver here once; it can't run bbport (no sparse buffers). Remove what an
+# older setup left behind.
+rm -rf "$PREFIX/lib/libMoltenVK.dylib" "$PREFIX/share/vulkan/icd.d/MoltenVK_icd.json" \
+       "$SRC/MoltenVK-macos" "$SRC/MoltenVK-macos.tar"
 
 step "SDL3"
 SDL_TAG=$(latest_tag https://github.com/libsdl-org/SDL.git '^release-3\.[0-9]+\.[0-9]+$')
@@ -209,21 +192,15 @@ if ! have lib/libZydis.a || ! have lib/cmake/zycore/zycore-config.cmake; then
         -DZYDIS_BUILD_DOXYGEN=OFF -DZYDIS_BUILD_MAN=OFF -DZYDIS_BUILD_TESTS=OFF
 fi
 
-step "KosmicKrisp (Mesa Vulkan-on-Metal driver, x86-64; macOS 26+)"
+step "KosmicKrisp (Mesa Vulkan-on-Metal driver, x86-64)"
 # The Vulkan driver upstream shadPS4 bundles on macOS; the vendored renderer already carries its
 # driver-specific workarounds. Built with shadPS4's wrapper (meson, cross-compiled to x86-64),
-# pinned to the revision upstream used at the vendored shadPS4 commit. MoltenVK stays as the
-# fallback (BB_VK_DRIVER=moltenvk). BB_SKIP_KOSMICKRISP=1 skips this step.
+# pinned to the revision upstream used at the vendored shadPS4 commit.
 KK_REV=${KK_REV:-3af112680499cc5eaf519007404a7366679e1c7f}
-macos_major=$(sw_vers -productVersion | cut -d. -f1)
 # This port's Mesa patches (tools/macos/kosmickrisp-patches): a change rebuilds the driver.
 KK_PATCHES=$(cat "$REPO"/tools/macos/kosmickrisp-patches/*.patch 2>/dev/null | shasum | cut -c1-16)
 kk_stamp=$PREFIX/lib/kosmickrisp/.bbport-patches
-if [[ -n ${BB_SKIP_KOSMICKRISP:-} ]]; then
-    echo "skipped (BB_SKIP_KOSMICKRISP)"
-elif (( macos_major < 26 )); then
-    echo "skipped: needs macOS 26 or later (this Mac: $(sw_vers -productVersion)); MoltenVK will be used"
-elif ! have lib/kosmickrisp/libvulkan_kosmickrisp.dylib || [[ $(cat "$kk_stamp" 2>/dev/null) != "$KK_PATCHES" ]]; then
+if ! have lib/kosmickrisp/libvulkan_kosmickrisp.dylib || [[ $(cat "$kk_stamp" 2>/dev/null) != "$KK_PATCHES" ]]; then
     "$BREW" install meson llvm spirv-llvm-translator
     if [[ ! -x $PREFIX/pyenv/bin/python3 ]]; then
         "$("$BREW" --prefix python@3.13)/bin/python3.13" -m venv "$PREFIX/pyenv"
@@ -281,16 +258,8 @@ cat > "$PREFIX/env.sh" <<EOF
 export BB_DEPS="$PREFIX"
 export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig:$PREFIX/share/pkgconfig"
 unset PKG_CONFIG_PATH
-# Vulkan driver: KosmicKrisp when built (as upstream shadPS4 on macOS), else MoltenVK.
-# BB_VK_DRIVER=moltenvk|kosmickrisp picks one explicitly.
-case "\${BB_VK_DRIVER:-auto}" in
-    moltenvk) export VK_DRIVER_FILES="$PREFIX/share/vulkan/icd.d/MoltenVK_icd.json" ;;
-    *) if [[ -f "$PREFIX/lib/kosmickrisp/kosmickrisp_mesa_icd.json" && "\${BB_VK_DRIVER:-auto}" != moltenvk ]]; then
-           export VK_DRIVER_FILES="$PREFIX/lib/kosmickrisp/kosmickrisp_mesa_icd.json"
-       else
-           export VK_DRIVER_FILES="$PREFIX/share/vulkan/icd.d/MoltenVK_icd.json"
-       fi ;;
-esac
+# Vulkan driver: KosmicKrisp (Mesa on Metal), as upstream shadPS4 bundles on macOS.
+export VK_DRIVER_FILES="$PREFIX/lib/kosmickrisp/kosmickrisp_mesa_icd.json"
 export DYLD_LIBRARY_PATH="$PREFIX/lib\${DYLD_LIBRARY_PATH:+:\$DYLD_LIBRARY_PATH}"
 export MACOSX_DEPLOYMENT_TARGET=14.0
 EOF

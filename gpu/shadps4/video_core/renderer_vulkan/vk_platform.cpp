@@ -205,8 +205,8 @@ std::vector<const char*> GetInstanceExtensions(Frontend::WindowSystemType window
     }
 
 #ifdef __APPLE__
-    // bbport: MoltenVK is a portability driver; the loader lists it only for instances that
-    // enable this extension and set eEnumeratePortabilityKHR (otherwise ErrorIncompatibleDriver).
+    // bbport: lets the loader list portability drivers (it hides them otherwise, giving
+    // ErrorIncompatibleDriver); harmless for KosmicKrisp.
     extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
 #endif
 
@@ -273,7 +273,7 @@ vk::UniqueInstance CreateInstance(Frontend::WindowSystemType window_type, bool e
         _NSGetExecutablePath(path, &length);
         return std::filesystem::path(path).parent_path();
     }();
-    // bbport: keep a driver list set by the environment (tools/macos env.sh names MoltenVK).
+    // bbport: keep a driver list set by the environment (tools/macos env.sh names KosmicKrisp).
     setenv("VK_DRIVER_FILES", icd_path.c_str(), false);
 #endif
 

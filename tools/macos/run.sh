@@ -8,6 +8,7 @@ cd -- "$(dirname -- "$0")/../.."
 DEPS=${BB_DEPS:-$PWD/deps-x86_64}
 # shellcheck disable=SC1091
 source "$DEPS/env.sh"
+[[ -f ${VK_DRIVER_FILES:-} ]] || { echo "STOP: KosmicKrisp missing (${VK_DRIVER_FILES:-unset}); run tools/macos/setup_deps.sh" >&2; exit 1; }
 [[ -x out/bb-probe ]] || { echo "STOP: out/bb-probe missing; run tools/macos/build.sh" >&2; exit 1; }
 : "${BB_GAME_DIR:?set BB_GAME_DIR to the merged 1.09 game folder}"
 export BB_PREBUILT=1 BB_PROBE="$PWD/out/bb-probe"

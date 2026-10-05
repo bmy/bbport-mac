@@ -112,11 +112,6 @@ enum Catalog {
         Choice(value: "5", label: "Italian"),
     ]
 
-    static let vkDrivers: [Choice<String>] = [
-        Choice(value: "kosmickrisp", label: "KosmicKrisp (default)"),
-        Choice(value: "moltenvk", label: "MoltenVK"),
-    ]
-
     static func contains<Value: Hashable & Sendable>(_ choices: [Choice<Value>], _ value: Value) -> Bool {
         choices.contains { $0.value == value }
     }
@@ -127,7 +122,6 @@ enum Catalog {
 struct LauncherPrefs: Equatable {
     var gameFolder = ""
     var repoOverride = ""
-    var vkDriver = "kosmickrisp"
     var userFolder = ""
     var modsFolder = ""
     var modsEnabled = true
@@ -148,7 +142,6 @@ struct LauncherPrefs: Equatable {
     private enum Key {
         static let gameFolder = "gameFolder"
         static let repoOverride = "repoOverride"
-        static let vkDriver = "vkDriver"
         static let userFolder = "userFolder"
         static let modsFolder = "modsFolder"
         static let modsEnabled = "modsEnabled"
@@ -173,7 +166,6 @@ struct LauncherPrefs: Equatable {
         func flag(_ key: String, _ fallback: Bool) -> Bool { defaults.object(forKey: key) as? Bool ?? fallback }
         p.gameFolder = text(Key.gameFolder, p.gameFolder)
         p.repoOverride = text(Key.repoOverride, p.repoOverride)
-        p.vkDriver = text(Key.vkDriver, p.vkDriver)
         p.userFolder = text(Key.userFolder, p.userFolder)
         p.modsFolder = text(Key.modsFolder, p.modsFolder)
         p.modsEnabled = flag(Key.modsEnabled, p.modsEnabled)
@@ -191,7 +183,6 @@ struct LauncherPrefs: Equatable {
         p.vkValidation = flag(Key.vkValidation, p.vkValidation)
         p.extraEnv = text(Key.extraEnv, p.extraEnv)
         // Values from an older version that the pickers no longer offer.
-        if !Catalog.contains(Catalog.vkDrivers, p.vkDriver) { p.vkDriver = "kosmickrisp" }
         if !Catalog.contains(Catalog.languages, p.language) { p.language = "1" }
         if !Catalog.contains(Catalog.presentModes, p.presentMode) { p.presentMode = "Mailbox" }
         if !Catalog.contains(Catalog.fpsModes, p.fpsMode) { p.fpsMode = Catalog.defaultFPSMode }
@@ -203,7 +194,6 @@ struct LauncherPrefs: Equatable {
     func save(to defaults: UserDefaults) {
         defaults.set(gameFolder, forKey: Key.gameFolder)
         defaults.set(repoOverride, forKey: Key.repoOverride)
-        defaults.set(vkDriver, forKey: Key.vkDriver)
         defaults.set(userFolder, forKey: Key.userFolder)
         defaults.set(modsFolder, forKey: Key.modsFolder)
         defaults.set(modsEnabled, forKey: Key.modsEnabled)

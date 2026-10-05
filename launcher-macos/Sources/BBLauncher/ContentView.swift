@@ -247,12 +247,6 @@ struct DisplaySection: View {
 
     var body: some View {
         Section {
-            Picker(selection: $model.prefs.vkDriver) {
-                ForEach(Catalog.vkDrivers) { Text($0.label).tag($0.value) }
-            } label: {
-                Text("Vulkan driver")
-                Text("BB_VK_DRIVER. KosmicKrisp is used when setup_deps.sh built it (macOS 26+), otherwise MoltenVK.")
-            }
             Picker(selection: $model.game.outputRes) {
                 ForEach(Catalog.outputResolutions) { Text($0.label).tag($0.value) }
             } label: {

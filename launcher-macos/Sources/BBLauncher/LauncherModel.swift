@@ -340,7 +340,6 @@ final class LauncherModel: ObservableObject {
         env["BB_MODS_ENABLED"] = p.modsEnabled ? "1" : "0"
         env["BB_PATCHES_DIR"] = patchesFolderURL.path
         env["BB_PATCHES_CONFIG"] = patchesConfigURL.path
-        env["BB_VK_DRIVER"] = p.vkDriver
         env["BB_LANGUAGE"] = p.language
         env["BB_FULLSCREEN"] = p.fullscreen ? "1" : "0"
         env["BB_PRESENT_MODE"] = p.presentMode
@@ -381,7 +380,7 @@ final class LauncherModel: ObservableObject {
         lastProblem = nil
         exitSeen = nil
         let env = environment()
-        let summary = ["BB_GAME_DIR", "BB_VK_DRIVER", "BB_FPS", "BB_UPSCALER", "BB_FULLSCREEN", "BB_PRESENT_MODE"]
+        let summary = ["BB_GAME_DIR", "BB_FPS", "BB_UPSCALER", "BB_FULLSCREEN", "BB_PRESENT_MODE"]
             .map { "\($0)=\(env[$0] ?? "")" }.joined(separator: " ")
         appendLines(["$ cd \(repo.path)", "$ \(summary) bash tools/macos/run.sh"])
 

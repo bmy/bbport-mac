@@ -1,0 +1,41 @@
+diff --git a/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp b/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp
+index 44e86d2..26365cc 100644
+--- a/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp
++++ b/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp
+@@ -433,6 +433,10 @@ uint32_t findMemoryTypeIndex(
+     vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
+ 
+     uint32_t bestCandidate = UINT32_MAX;
++    // bbport: unified-memory devices (Apple Silicon via KosmicKrisp/MoltenVK) have only
++    // DEVICE_LOCAL|HOST_VISIBLE types; when nothing better exists, use one of them.
++    uint32_t hostVisibleLocalFallback = UINT32_MAX;
++    VkMemoryPropertyFlags fallbackProperties = 0;
+ 
+     for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+         const VkMemoryPropertyFlags memoryProperties = memProperties.memoryTypes[i].propertyFlags;
+@@ -448,8 +452,13 @@ uint32_t findMemoryTypeIndex(
+             (memoryProperties & requestedProperties) == requestedProperties) {
+ 
+             // if just device-local memory is requested, make sure this is the invisible heap to prevent over-subscribing the local heap
+-            if (requestedProperties == VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT && (memoryProperties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT))
++            if (requestedProperties == VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT && (memoryProperties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
++                if (hostVisibleLocalFallback == UINT32_MAX) {
++                    hostVisibleLocalFallback = i;
++                    fallbackProperties = memoryProperties;
++                }
+                 continue;
++            }
+ 
+             bestCandidate = i;
+             outProperties = memoryProperties;
+@@ -460,6 +469,10 @@ uint32_t findMemoryTypeIndex(
+         }
+     }
+ 
++    if (bestCandidate == UINT32_MAX && hostVisibleLocalFallback != UINT32_MAX) {
++        outProperties = fallbackProperties;
++        return hostVisibleLocalFallback;
++    }
+     return bestCandidate;
+ }
+ 

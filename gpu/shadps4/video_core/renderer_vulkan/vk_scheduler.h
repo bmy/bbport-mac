@@ -10,6 +10,7 @@
 #include <deque>
 #include <functional>
 #include <memory>
+#include <source_location>
 #include <span>
 #include <utility>
 #include <vector>
@@ -691,8 +692,8 @@ public:
     /// Starts a new rendering scope with provided state.
     void BeginRendering(const RenderState& new_state);
 
-    /// Ends current rendering scope.
-    void EndRendering();
+    /// Ends current rendering scope. bbport: `where` attributes the pass end (BB_FRAME_STATS).
+    void EndRendering(std::source_location where = std::source_location::current());
 
     /// Sets a function to be called on every scheduler submission.
     void SetSubmitCallback(SubmitFunc&& on_submit) {
@@ -902,6 +903,10 @@ private:
     std::jthread priority_pending_ops_thread;
     RenderState render_state;
     bool is_rendering = false;
+    /// bbport (BB_FRAME_STATS): the state of the pass ended last, to count passes reopened with
+    /// identical attachments (merge candidates).
+    RenderState last_ended_state;
+    bool last_ended_valid = false;
     // bbport: threaded recording
     std::unique_ptr<RecordChunk> record_chunk;
     std::vector<std::unique_ptr<RecordChunk>> full_chunks;

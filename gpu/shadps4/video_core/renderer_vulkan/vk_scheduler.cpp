@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <mutex>
+#include <string_view>
+#include <string>
 #include <thread>
 #include <algorithm>
 #include <cstdio>
@@ -52,11 +55,62 @@ Scheduler::~Scheduler() {
 #endif
 }
 
+namespace {
+/// bbport (BB_FRAME_STATS): render passes per frame, passes reopened with the attachments the
+/// previous pass just closed, and where passes end. Each pass costs a Metal encoder on
+/// KosmicKrisp, so these show how much merging could save.
+struct PassStats {
+    std::mutex mutex;
+    std::unordered_map<std::string, u64> end_sites;
+    u64 passes = 0, reopened = 0, frame_base = 0;
+    std::chrono::steady_clock::time_point last_print = std::chrono::steady_clock::now();
+
+    void Print() {
+        const auto now = std::chrono::steady_clock::now();
+        if (now - last_print < std::chrono::seconds(5)) {
+            return;
+        }
+        last_print = now;
+        const u64 frame = BbStats::gpu_frames.load(std::memory_order_relaxed);
+        const double frames = frame > frame_base ? double(frame - frame_base) : 1.0;
+        frame_base = frame;
+        std::vector<std::pair<u64, std::string>> top;
+        for (auto& [site, count] : end_sites) {
+            top.emplace_back(count, site);
+        }
+        std::sort(top.rbegin(), top.rend());
+        std::printf("Render passes: %.0f/frame, %.0f/frame reopened with identical attachments; "
+                    "ended by:",
+                    passes / frames, reopened / frames);
+        for (size_t i = 0; i < top.size() && i < 8; ++i) {
+            std::printf(" %s %.0f%s", top[i].second.c_str(), top[i].first / frames,
+                        i + 1 < top.size() && i < 7 ? "," : "");
+        }
+        std::printf("\n");
+        end_sites.clear();
+        passes = reopened = 0;
+    }
+};
+PassStats& GetPassStats() {
+    static PassStats stats;
+    return stats;
+}
+} // namespace
+
 void Scheduler::BeginRendering(const RenderState& new_state) {
     if (is_rendering && render_state == new_state) {
         return;
     }
     EndRendering();
+    if (BbStats::enabled) {
+        auto& stats = GetPassStats();
+        std::scoped_lock lock{stats.mutex};
+        ++stats.passes;
+        if (last_ended_valid && last_ended_state == new_state) {
+            ++stats.reopened;
+        }
+        stats.Print();
+    }
     is_rendering = true;
     render_state = new_state;
 
@@ -122,9 +176,20 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
     });
 }
 
-void Scheduler::EndRendering() {
+void Scheduler::EndRendering(std::source_location where) {
     if (!is_rendering) {
         return;
+    }
+    if (BbStats::enabled) {
+        last_ended_state = render_state;
+        last_ended_valid = true;
+        std::string_view file = where.file_name();
+        if (const auto slash = file.find_last_of('/'); slash != std::string_view::npos) {
+            file.remove_prefix(slash + 1);
+        }
+        auto& stats = GetPassStats();
+        std::scoped_lock lock{stats.mutex};
+        ++stats.end_sites[std::string(file) + ":" + std::to_string(where.line())];
     }
     is_rendering = false;
     Record([](vk::CommandBuffer cmdbuf) { cmdbuf.endRendering(); });

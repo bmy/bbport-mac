@@ -5,6 +5,7 @@
  * encode 40-bit addresses, so host-default 0x7f... addresses would not fit. */
 #define _GNU_SOURCE
 #include "runtime.h"
+#include "platform.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -32,7 +33,7 @@ static uint64_t pool_size_bytes(void) {
 #define POOL_SIZE pool_size_bytes()
 #define FLEXIBLE_SIZE (UINT64_C(448) * 1024 * 1024)
 #define PAGE UINT64_C(16384)
-#define USER_MIN UINT64_C(0x1000000000)
+#define USER_MIN BB_USER_MIN
 #define USER_MAX UINT64_C(0xfc00000000)
 #define LIMIT 4096
 #define INVALID ((int32_t)UINT32_C(0x80020016))
@@ -93,7 +94,15 @@ static int host_prot(int prot) {
 /* Direct memory occupies [0,POOL_SIZE) of the memfd, flexible memory [POOL_SIZE,+FLEX_SPAN). */
 static int pool(void) {
     if (pool_fd>=0) return 0;
+#ifdef __APPLE__
+    /* No memfd on macOS: an unlinked POSIX shared memory object (as upstream shadPS4). */
+    char name[64];
+    snprintf(name,sizeof(name),"/bbport-guest-%d",(int)getpid());
+    pool_fd=shm_open(name,O_RDWR|O_CREAT|O_EXCL,0600);
+    if (pool_fd>=0) shm_unlink(name);
+#else
     pool_fd=memfd_create("bb-guest-memory", MFD_CLOEXEC);
+#endif
     if (pool_fd<0 || ftruncate(pool_fd,(off_t)(POOL_SIZE+FLEX_SPAN))) return -1;
     void *view=mmap(NULL,POOL_SIZE+FLEX_SPAN,PROT_READ|PROT_WRITE,MAP_SHARED|MAP_NORESERVE,pool_fd,0);
     if (view==MAP_FAILED) return -1;
@@ -132,9 +141,18 @@ static uint64_t flex_alloc(uint64_t size) {
     }
     return UINT64_MAX;
 }
+/* Returns pool pages to the host and makes them read back as zero. */
+static void pool_discard(uint64_t phys, uint64_t size) {
+#ifdef __APPLE__
+    /* No hole punching in shared memory objects: zero through the backing view. */
+    memset(backing_base+phys,0,size);
+#else
+    fallocate(pool_fd,FALLOC_FL_PUNCH_HOLE|FALLOC_FL_KEEP_SIZE,(off_t)phys,(off_t)size);
+#endif
+}
 static void flex_free(uint64_t phys, uint64_t size) {
     flex_set((phys-POOL_SIZE)/PAGE,size/PAGE,0);
-    fallocate(pool_fd,FALLOC_FL_PUNCH_HOLE|FALLOC_FL_KEEP_SIZE,(off_t)phys,(off_t)size);
+    pool_discard(phys,size);
 }
 static size_t vma_index(uintptr_t a) { /* first VMA with end > a */
     size_t lo=0, hi=vma_count;
@@ -212,7 +230,15 @@ static int32_t place(void **inout, uint64_t size, int prot, int flags, uint64_t 
         address=find_free(address,size,alignment);
         if (!address) return NO_MEMORY;
     }
-    void *mapped = kind!=KIND_RESERVED
+    int private_exec=0;
+#ifdef __APPLE__
+    /* macOS refuses executable shared (file) mappings: such ranges get private anonymous
+     * memory, as in upstream shadPS4 (no aliasing for executable guest memory). */
+    private_exec = kind!=KIND_RESERVED && (host_prot(prot)&PROT_EXEC);
+#endif
+    void *mapped = private_exec
+        ? mmap((void *)address,size,host_prot(prot),MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED,-1,0)
+        : kind!=KIND_RESERVED
         ? mmap((void *)address,size,host_prot(prot),MAP_SHARED|MAP_FIXED,pool_fd,(off_t)phys)
         : mmap((void *)address,size,PROT_NONE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE|MAP_FIXED,-1,0);
     if (mapped==MAP_FAILED) return NO_MEMORY;
@@ -343,7 +369,7 @@ static ABI int32_t direct_release(uint64_t start, uint64_t size) {
         if (right.size) for (int j=0;j<LIMIT;++j) if (!blocks[j].used) { blocks[j]=right; break; }
         live_bytes-=e-a;
     }
-    fallocate(pool_fd,FALLOC_FL_PUNCH_HOLE|FALLOC_FL_KEEP_SIZE,(off_t)start,(off_t)size); /* zero on reuse */
+    pool_discard(start,size); /* zero on reuse */
     write_unlock();
     flush_hooks();
     return 0;
@@ -497,8 +523,8 @@ void *runtime_low_map(size_t size, int prot) {
     size=align_up(size,PAGE);
     write_lock();
     void *p=MAP_FAILED;
-    while (low_next+size<=USER_MIN) {
-        p=mmap((void *)low_next,size,prot,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED_NOREPLACE,-1,0);
+    while (low_next+size<=BB_LOW_MAX) {
+        p=bb_map_noreplace((void *)low_next,size,prot);
         low_next+=size+PAGE; /* unmapped gap catches overruns */
         if (p!=MAP_FAILED) break;
     }

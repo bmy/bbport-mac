@@ -271,19 +271,17 @@ std::unique_ptr<RecordChunk> Scheduler::AcquireChunk() {
 }
 
 namespace {
-/// BB_COPIES_OFF_RECORDER=0/1; default on macOS, where the recording thread is the bottleneck
-/// (each Vulkan call is ~20 us through KosmicKrisp and Metal under Rosetta) and copies or
-/// fences queued behind its backlog made the draw recording thread wait at EOS/WriteData.
+/// BB_COPIES_OFF_RECORDER=0/1: copies and fences off the recording thread (and with it parallel
+/// recording, which needs it). Off by default for now: on macOS the game twice hit invalid
+/// guest formats (garbage resource descriptors) right after a native full-screen switch with
+/// it on, and survived the switch with it off; suspected guest-memory ordering of the moved
+/// copies/fences under the resize's timing upset. Re-enable by default once that is fixed.
 bool CopiesOffRecorderWanted() {
     static const bool wanted = [] {
         if (const char* env = std::getenv("BB_COPIES_OFF_RECORDER"); env && env[0]) {
             return env[0] == '1';
         }
-#ifdef __APPLE__
-        return true;
-#else
         return false;
-#endif
     }();
     return wanted;
 }

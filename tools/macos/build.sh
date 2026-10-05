@@ -35,9 +35,13 @@ if [[ -z ${BB_SKIP_GPU:-} ]]; then
         -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
         -DCMAKE_PREFIX_PATH="$DEPS;$BREW_PREFIX" -DBB_LTO=OFF -DBB_PGO=off > out/gpu-configure.log 2>&1 ||
         { tail -40 out/gpu-configure.log >&2; echo "STOP: GPU library configure failed (out/gpu-configure.log)" >&2; exit 1; }
-    if ! ninja -C out/gpu -j "$JOBS" bbgpu > out/gpu-build.log 2>&1; then
-        grep -E 'error|Error' out/gpu-build.log | head -40 >&2
-        echo "STOP: GPU library build failed (full log: out/gpu-build.log)" >&2
+    # -k 0: keep compiling after failures, so one run reports every file's errors.
+    if ! ninja -C out/gpu -k 0 -j "$JOBS" bbgpu > out/gpu-build.log 2>&1; then
+        # Each distinct error once, with the line after it (usually the template/include context).
+        grep -A1 -E ': (fatal )?error:' out/gpu-build.log | grep -v '^--$' | awk '!seen[$0]++' > out/gpu-errors.txt
+        head -80 out/gpu-errors.txt >&2
+        echo "STOP: GPU library build failed: $(grep -cE ': (fatal )?error:' out/gpu-errors.txt) distinct errors" \
+             "(all in out/gpu-errors.txt, full log out/gpu-build.log)" >&2
         exit 1
     fi
 fi

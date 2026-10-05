@@ -384,20 +384,16 @@ void PipelineCache::WarmUp() {
     u32 num_pipelines{};
     u32 num_total_pipelines{};
 
-    // bbport: reading the store and building SPIR-V modules stays on this thread (it shares the
-    // selection state and program cache); the driver compiles, the slow part, run on all cores.
-    // On Linux the driver's own disk cache makes them fast already, so one thread stays the
-    // default there. BB_PRELOAD_THREADS overrides.
+    // bbport: BB_PRELOAD_THREADS=N creates the cached pipelines (the driver compile) on N
+    // threads; reading the store and building SPIR-V modules stays on this thread (it shares the
+    // selection state and program cache). Off by default: KosmicKrisp (Mesa rev pinned in
+    // tools/macos/setup_deps.sh) produced pipelines that drew nothing when it compiled on 18
+    // threads at once (black screen with audio; one thread was fine). Repeat launches are made
+    // fast by the driver's disk cache instead.
     std::vector<std::function<void()>> jobs;
     const u32 preload_threads = [] {
-        if (const char* env = std::getenv("BB_PRELOAD_THREADS")) {
-            return std::max(1, std::atoi(env));
-        }
-#ifdef __APPLE__
-        return static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
-#else
-        return 1;
-#endif
+        const char* env = std::getenv("BB_PRELOAD_THREADS");
+        return env ? std::max(1, std::atoi(env)) : 1;
     }();
     if (preload_threads > 1) {
         preload_jobs = &jobs;

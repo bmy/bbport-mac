@@ -8,6 +8,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #ifdef __APPLE__
 #include <stdlib.h>
 #else
@@ -28,6 +29,22 @@
 #else
 #define BB_LOW_MAX UINT64_C(0x1000000000)
 #define BB_USER_MIN UINT64_C(0x1000000000)
+#endif
+
+/* struct stat timestamps, clocks, rusage, mutex initialisers. */
+#ifdef __APPLE__
+#define st_atim st_atimespec
+#define st_mtim st_mtimespec
+#define st_ctim st_ctimespec
+#endif
+#if !defined(CLOCK_REALTIME_COARSE)
+#define CLOCK_REALTIME_COARSE CLOCK_REALTIME
+#endif
+#if !defined(RUSAGE_THREAD)
+#define RUSAGE_THREAD RUSAGE_SELF /* macOS: no per-thread getrusage */
+#endif
+#if !defined(PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP) && defined(PTHREAD_RECURSIVE_MUTEX_INITIALIZER)
+#define PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP PTHREAD_RECURSIVE_MUTEX_INITIALIZER
 #endif
 
 /* Signal context registers. */

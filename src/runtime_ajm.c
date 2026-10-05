@@ -5,6 +5,7 @@
  * LibAtrac9 (MIT, third_party/LibAtrac9). MP3/AAC instances stop explicitly. */
 #define _GNU_SOURCE
 #include "runtime.h"
+#include "platform.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

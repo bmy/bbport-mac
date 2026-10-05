@@ -8,6 +8,7 @@
  *   IJKL d-pad (I up, K down, J left, L right). */
 #define _GNU_SOURCE
 #include "runtime.h"
+#include "platform.h"
 #include "gpu/bbgpu.h"
 #include <stdio.h>
 #include <stdlib.h>

@@ -20,7 +20,11 @@
 #endif
 #include <unistd.h>
 #include <signal.h>
+#ifdef __APPLE__
+#include <sys/ucontext.h>
+#else
 #include <ucontext.h>
+#endif
 #include <fcntl.h>
 #include <dlfcn.h>
 #include <execinfo.h>
@@ -54,7 +58,7 @@ static uint64_t read64(FILE *f) {
     for (int i = 7; i >= 0; --i) n = (n << 8) | b[i];
     return n;
 }
-static size_t round_page(size_t size) { return (size + page_size - 1) & ~(page_size - 1); }
+static size_t bb_round_page(size_t size) { return (size + page_size - 1) & ~(page_size - 1); }
 static void *allocate(size_t size) {
 #ifndef _WIN32
     void *low=runtime_low_map(size,PROT_READ|PROT_WRITE);
@@ -293,8 +297,12 @@ int main(int argc, char **argv) {
 #ifndef _WIN32
     /* Keep host heap objects handed to the guest (thread handles, TLS) in the
        non-PIE brk heap, i.e. below 1 TiB: the guest packs pointers into 40 bits. */
+#ifdef __APPLE__
+    /* macOS: the runtime's allocations come from the low heap instead (src/low_heap.c). */
+#else
     mallopt(M_ARENA_MAX,1);
     mallopt(M_MMAP_THRESHOLD,32*1024*1024);
+#endif
 #endif
     if (argc == 2 && !strcmp(argv[1], "--vulkan-only")) return vulkan_smoke();
     int cpu_only = 0, strict_imports = 0;
@@ -448,7 +456,7 @@ int main(int argc, char **argv) {
             if (!executable) fail("native function is not executable");
         }
     }
-    image = allocate(round_page(size));
+    image = allocate(bb_round_page(size));
     if (fread(image, 1, size, f) != size || fgetc(f) != EOF) fail("incorrect memory image size");
     fclose(f);
     if (!cpu_only) {
@@ -465,7 +473,7 @@ int main(int argc, char **argv) {
         if (bbgpu_init(&gpu)) fail("GPU initialization failed");
         printf("GPU: window and Vulkan presenter ready; SDK 0x%08x, %u HLE symbols\n",(unsigned)sdk,bbgpu_symbol_count());
     }
-    unsigned char *traps = allocate(round_page((import_count + 1) * 32));
+    unsigned char *traps = allocate(bb_round_page((import_count + 1) * 32));
     unsigned char *data_traps = allocate((import_count + 1) * page_size);
     protect(data_traps, (import_count + 1) * page_size, 0);
     for (uint64_t i = 0; i < import_count; ++i) {
@@ -502,11 +510,11 @@ int main(int argc, char **argv) {
         printf("TLS: %zu guest TCB loads redirected to the pthread TSD slot\n", tls_sites);
     }
 #endif
-    protect(traps, round_page((import_count + 1) * 32), 5);
-    protect(image, round_page(size), 0);
+    protect(traps, bb_round_page((import_count + 1) * 32), 5);
+    protect(image, bb_round_page(size), 0);
     int executable_entry = 0;
     for (uint64_t i = 0; i < ns; ++i) {
-        protect(image + segments[i].address, round_page(segments[i].size), (unsigned)segments[i].flags);
+        protect(image + segments[i].address, bb_round_page(segments[i].size), (unsigned)segments[i].flags);
         if ((segments[i].flags & 1) && entry >= segments[i].address && entry - segments[i].address < segments[i].size)
             executable_entry = 1;
     }

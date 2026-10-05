@@ -61,7 +61,7 @@ read -r -a pkg_libs <<< "$(pkg-config --libs vulkan sdl3)"
 gpu_lib=out/gpu/libbbgpu.dylib
 [[ -f $gpu_lib ]] || { echo "STOP: $gpu_lib missing" >&2; exit 1; }
 if ! clang "${ARCH[@]}" -std=c11 -O2 -g -Wall -Wextra -pthread "${pkg_cflags[@]}" -I. -Isrc \
-        src/probe.c src/runtime*.c src/vulkan_smoke.c out/libatrac9.a -lm \
+        src/probe.c src/runtime*.c src/low_heap.c src/vulkan_smoke.c out/libatrac9.a -lm \
         -Lout/gpu -lbbgpu -Wl,-rpath,@loader_path/gpu -Wl,-export_dynamic \
         "${pkg_libs[@]}" -o out/bb-probe 2> out/loader-build.log; then
     grep -E 'error' out/loader-build.log | head -40 >&2

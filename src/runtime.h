@@ -2,6 +2,7 @@
 #define BB_RUNTIME_H
 #include <stdint.h>
 #include <stddef.h>
+#include "low_heap.h"
 #ifndef _WIN32
 #include <setjmp.h>
 /* Recovery point for speculative guest memory reads on this thread (probe.c fault handler). */

@@ -18,7 +18,9 @@ SRC=$PREFIX/src
 mkdir -p "$PREFIX" "$SRC"
 exec > >(tee -a "$PREFIX/setup.log") 2>&1
 JOBS=$(sysctl -n hw.ncpu)
-step() { printf '\n=== %s\n' "$*"; }
+CURRENT_STEP=start
+step() { CURRENT_STEP=$*; printf '\n=== %s\n' "$*"; }
+trap 'printf "\nSTOP: failed during: %s (line %s). Full output above and in %s\n" "$CURRENT_STEP" "$LINENO" "$PREFIX/setup.log" >&2' ERR
 die() { printf 'STOP: %s\n' "$*" >&2; exit 1; }
 
 step "Checks"
@@ -37,6 +39,7 @@ export PATH="$("$BREW" --prefix)/bin:$PATH"
 # x86-64 everywhere below. pkg-config must only see $PREFIX, never Homebrew's arm64 .pc files.
 export MACOSX_DEPLOYMENT_TARGET=14.0
 X86_CMAKE=(-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64
+           -DCMAKE_SYSTEM_NAME=Darwin -DCMAKE_SYSTEM_PROCESSOR=x86_64
            -DCMAKE_INSTALL_PREFIX="$PREFIX" -DCMAKE_PREFIX_PATH="$PREFIX"
            -DCMAKE_FIND_ROOT_PATH="$PREFIX" -DBUILD_SHARED_LIBS=ON)
 export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig:$PREFIX/share/pkgconfig"
@@ -54,11 +57,21 @@ fetch() {  # fetch <name> <git url> <tag>
 }
 cmake_build() {  # cmake_build <name> [cmake args...]
     local name=$1; shift
-    cmake -S "$SRC/$name" -B "$SRC/$name/build-x86_64" "${X86_CMAKE[@]}" "$@" >/dev/null
-    cmake --build "$SRC/$name/build-x86_64" -j "$JOBS" >/dev/null
-    cmake --install "$SRC/$name/build-x86_64" >/dev/null
+    quiet "$name configure" cmake -S "$SRC/$name" -B "$SRC/$name/build-x86_64" "${X86_CMAKE[@]}" "$@"
+    quiet "$name build" cmake --build "$SRC/$name/build-x86_64" -j "$JOBS"
+    quiet "$name install" cmake --install "$SRC/$name/build-x86_64"
 }
 have() { [[ -e $PREFIX/$1 ]]; }
+quiet() {  # quiet <label> <command...>: run with output in a log; print its tail on failure
+    local label=$1; shift
+    local log="$PREFIX/logs/${label// /-}.log"
+    mkdir -p "$PREFIX/logs"
+    if ! "$@" >"$log" 2>&1; then
+        printf 'STOP: %s failed; last lines of %s:\n' "$label" "$log" >&2
+        tail -30 "$log" >&2
+        return 1
+    fi
+}
 
 step "Vulkan-Headers + Vulkan-Loader"
 VK_TAG=$(latest_tag https://github.com/KhronosGroup/Vulkan-Loader.git '^v1\.4\.[0-9]+$')
@@ -115,10 +128,10 @@ XXH_TAG=$(latest_tag https://github.com/Cyan4973/xxHash.git '^v0\.8\.[0-9]+$')
 echo "tag: $XXH_TAG"
 if ! have lib/libxxhash.dylib; then
     fetch xxHash https://github.com/Cyan4973/xxHash.git "$XXH_TAG"
-    cmake -S "$SRC/xxHash/build/cmake" -B "$SRC/xxHash/build-x86_64" "${X86_CMAKE[@]}" \
-          -DXXHASH_BUILD_XXHSUM=OFF >/dev/null
-    cmake --build "$SRC/xxHash/build-x86_64" -j "$JOBS" >/dev/null
-    cmake --install "$SRC/xxHash/build-x86_64" >/dev/null
+    quiet "xxHash configure" cmake -S "$SRC/xxHash/build/cmake" -B "$SRC/xxHash/build-x86_64" "${X86_CMAKE[@]}" \
+          -DXXHASH_BUILD_XXHSUM=OFF
+    quiet "xxHash build" cmake --build "$SRC/xxHash/build-x86_64" -j "$JOBS"
+    quiet "xxHash install" cmake --install "$SRC/xxHash/build-x86_64"
 fi
 
 step "FFmpeg (decoders the game's movies need; x86-64)"
@@ -126,14 +139,15 @@ FF_TAG=$(latest_tag https://git.ffmpeg.org/ffmpeg.git '^n[0-9]+\.[0-9]+(\.[0-9]+
 echo "tag: $FF_TAG"
 if ! have lib/libavformat.dylib; then
     fetch ffmpeg https://git.ffmpeg.org/ffmpeg.git "$FF_TAG"
-    ( cd "$SRC/ffmpeg"
-      arch -x86_64 ./configure --prefix="$PREFIX" --arch=x86_64 --cc="clang -arch x86_64" \
-          --enable-shared --disable-static --disable-programs --disable-doc --disable-network \
-          --disable-everything --enable-avformat --enable-avcodec --enable-swscale --enable-swresample \
-          --enable-demuxer=mov,mp4,m4v,h264,aac,mpegts --enable-parser=h264,aac \
-          --enable-decoder=h264,hevc,aac --enable-parser=hevc --enable-demuxer=hevc --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb --enable-protocol=file >/dev/null
-      arch -x86_64 make -j "$JOBS" >/dev/null
-      make install >/dev/null )
+    cd "$SRC/ffmpeg"
+    quiet "ffmpeg configure" arch -x86_64 ./configure --prefix="$PREFIX" --arch=x86_64 --cc="clang -arch x86_64" \
+        --enable-shared --disable-static --disable-programs --disable-doc --disable-network \
+        --disable-everything --enable-avformat --enable-avcodec --enable-swscale --enable-swresample \
+        --enable-demuxer=mov,h264,hevc,aac,mpegts --enable-parser=h264,hevc,aac \
+        --enable-decoder=h264,hevc,aac --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb --enable-protocol=file
+    quiet "ffmpeg build" arch -x86_64 make -j "$JOBS"
+    quiet "ffmpeg install" make install
+    cd "$REPO"
 fi
 
 step "Verify: every library must contain x86_64"

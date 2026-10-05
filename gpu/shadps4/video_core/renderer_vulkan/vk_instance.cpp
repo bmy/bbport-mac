@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
 #include <boost/container/static_vector.hpp>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
@@ -295,7 +296,17 @@ bool Instance::CreateDevice() {
     depth_clip_control = add_extension(VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME);
     depth_clip_enable = add_extension(VK_EXT_DEPTH_CLIP_ENABLE_EXTENSION_NAME);
     vertex_input_dynamic_state = add_extension(VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
-    list_restart = add_extension(VK_EXT_PRIMITIVE_TOPOLOGY_LIST_RESTART_EXTENSION_NAME);
+    // bbport (from upstream shadPS4 #5161): games leave restart enabled on list topologies
+    // without needing it, and KosmicKrisp then "unrolls" every such indexed draw with an extra
+    // compute dispatch and encoder switch. BB_LIST_RESTART=1 keeps it on (A/B testing).
+    const bool kk_skip_list_restart = driver_id == vk::DriverId::eMesaKosmickrisp &&
+                                      !(std::getenv("BB_LIST_RESTART") &&
+                                        std::getenv("BB_LIST_RESTART")[0] == '1');
+    list_restart = !kk_skip_list_restart &&
+                   add_extension(VK_EXT_PRIMITIVE_TOPOLOGY_LIST_RESTART_EXTENSION_NAME);
+    if (kk_skip_list_restart) {
+        LOG_WARNING(Render_Vulkan, "List primitive restart disabled on KosmicKrisp (speed)");
+    }
     if (list_restart) {
         list_restart_features =
             feature_chain.get<vk::PhysicalDevicePrimitiveTopologyListRestartFeaturesEXT>();

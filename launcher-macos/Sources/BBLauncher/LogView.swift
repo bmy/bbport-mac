@@ -5,7 +5,8 @@ import SwiftUI
 
 struct LogView: View {
     @EnvironmentObject var model: LauncherModel
-    @State private var follow = true
+    // Not @State: in the macOS 27 SDK @State is a macro whose plugin ships only with Xcode, so
+    // a Command Line Tools build fails; the flag lives in the model instead.
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -24,7 +25,7 @@ struct LogView: View {
             .defaultScrollAnchor(.bottom)
             .background(Color(nsColor: .textBackgroundColor))
             .onChange(of: model.logLines.last?.id) { _, newID in
-                guard follow, let newID else { return }
+                guard model.followLog, let newID else { return }
                 proxy.scrollTo(newID, anchor: .bottom)
             }
             .overlay {
@@ -39,7 +40,7 @@ struct LogView: View {
         .navigationSubtitle(model.statusText)
         .toolbar {
             ToolbarItemGroup {
-                Toggle(isOn: $follow) {
+                Toggle(isOn: $model.followLog) {
                     Label("Follow Output", systemImage: "arrow.down.to.line")
                 }
                 .help("Keep the newest output in view")

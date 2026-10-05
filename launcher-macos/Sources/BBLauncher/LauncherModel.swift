@@ -50,6 +50,8 @@ final class LauncherModel: ObservableObject {
     @Published private(set) var gameCheck = Check(level: .error, message: "")
     @Published private(set) var state: RunState = .idle
     @Published private(set) var logLines: [LogLine] = []
+    /// Log window: keep scrolled to the newest line.
+    @Published var followLog = true
     /// The last "STOP:" or error line, shown when the game exits with an error.
     @Published private(set) var lastProblem: String? = nil
 

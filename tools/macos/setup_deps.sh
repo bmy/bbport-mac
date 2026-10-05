@@ -140,12 +140,21 @@ echo "tag: $FF_TAG"
 if ! have lib/libavformat.dylib; then
     fetch ffmpeg https://git.ffmpeg.org/ffmpeg.git "$FF_TAG"
     cd "$SRC/ffmpeg"
-    quiet "ffmpeg configure" arch -x86_64 ./configure --prefix="$PREFIX" --arch=x86_64 --cc="clang -arch x86_64" \
+    # Configure natively and cross-compile to x86-64 (the standard universal-build recipe).
+    if ! quiet "ffmpeg configure" ./configure --prefix="$PREFIX" \
+        --enable-cross-compile --target-os=darwin --arch=x86_64 --cc=clang \
+        --extra-cflags="-arch x86_64 -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET" \
+        --extra-ldflags="-arch x86_64 -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET" \
+        --x86asmexe=nasm \
         --enable-shared --disable-static --disable-programs --disable-doc --disable-network \
         --disable-everything --enable-avformat --enable-avcodec --enable-swscale --enable-swresample \
         --enable-demuxer=mov,h264,hevc,aac,mpegts --enable-parser=h264,hevc,aac \
-        --enable-decoder=h264,hevc,aac --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb --enable-protocol=file
-    quiet "ffmpeg build" arch -x86_64 make -j "$JOBS"
+        --enable-decoder=h264,hevc,aac --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb --enable-protocol=file; then
+        echo "--- last lines of ffbuild/config.log:" >&2
+        tail -25 ffbuild/config.log >&2
+        false
+    fi
+    quiet "ffmpeg build" make -j "$JOBS"
     quiet "ffmpeg install" make install
     cd "$REPO"
 fi

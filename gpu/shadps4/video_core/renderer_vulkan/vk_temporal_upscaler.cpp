@@ -438,11 +438,25 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
             PrintIssues("create info", issues);
             return false;
         }
-        if (ffxVkPortableUpscaleContextCreate(&device_info, &create_info, &context) !=
-            FFX_VK_PORTABLE_OK) {
-            std::printf("Upscaler: FSR 3 context creation failed\n");
+        auto result = ffxVkPortableUpscaleContextCreate(&device_info, &create_info, &context);
+        if (result != FFX_VK_PORTABLE_OK) {
+            // bbport: say why. -3 Vulkan call, -4 argument, -5 memory, -6 unsupported device,
+            // -7 FidelityFX backend (shader/pipeline creation). A second attempt with FFX debug
+            // checking prints the library's own messages.
+            std::printf("Upscaler: FSR 3 context creation failed (result %d); retrying with "
+                        "FidelityFX debug messages\n",
+                        static_cast<int>(result));
+            std::fflush(stdout);
             context = nullptr;
-            return false;
+            create_info.flags |= FFX_VK_PORTABLE_CONTEXT_DEBUG_CHECKING;
+            result = ffxVkPortableUpscaleContextCreate(&device_info, &create_info, &context);
+            if (result != FFX_VK_PORTABLE_OK) {
+                std::printf("Upscaler: FSR 3 context creation failed again (result %d)\n",
+                            static_cast<int>(result));
+                context = nullptr;
+                return false;
+            }
+            std::printf("Upscaler: FSR 3 context created with debug checking on\n");
         }
     }
 

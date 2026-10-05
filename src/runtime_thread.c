@@ -13,9 +13,11 @@
 #include <setjmp.h>
 #include <errno.h>
 #include <unistd.h>
-#include <sys/syscall.h>
 #include <sys/mman.h>
+#ifndef __APPLE__
+#include <sys/syscall.h>
 #include <asm/prctl.h>
+#endif
 #define ERR(n) ((int32_t)(UINT32_C(0x80020000)|(n)))
 #define ATTR_MAGIC UINT32_C(0x41545452)
 #define STACK_MARGIN (256*1024)
@@ -57,9 +59,52 @@ void runtime_set_main_tls(const void *data,uint64_t filesz,uint64_t memsz,uint64
     tls_template=data; tls_filesz=filesz; tls_memsz=memsz; tls_align=align ? align : 16;
 }
 static uint64_t tls_offset(void) { return (tls_memsz+tls_align-1)&~(tls_align-1); }
+#ifdef __APPLE__
+/* macOS (x86-64, also under Rosetta 2): user code cannot set the FS or GS base, but GS
+ * already points at each thread's pthread TSD array, so `mov rax, gs:[key*8]` reads
+ * pthread_getspecific(key). The guest's `mov rax, fs:[0]` (tcb_self) becomes exactly that:
+ * the linker writes gs:[0] (link_modules.py), runtime_tls_fixup sets the displacement to
+ * key*8, and each guest thread stores its TCB in that key. Same 9 bytes, no trampolines. */
+static pthread_key_t guest_tcb_key;
+static pthread_once_t guest_tcb_once=PTHREAD_ONCE_INIT;
+static void create_guest_tcb_key(void) {
+    if (pthread_key_create(&guest_tcb_key,NULL)) { perror("STOP: pthread_key_create (guest TCB)"); exit(21); }
+    if ((uint64_t)guest_tcb_key>(uint64_t)INT32_MAX/8) { fputs("STOP: guest TCB key out of range\n",stderr); exit(21); }
+}
+static void *read_gs_slot(uint64_t offset) {
+    void *value;
+    __asm__ volatile("movq %%gs:(%1), %0" : "=r"(value) : "r"(offset));
+    return value;
+}
+static void set_gs(void *base) {
+    pthread_once(&guest_tcb_once,create_guest_tcb_key);
+    if (pthread_setspecific(guest_tcb_key,base)) { perror("STOP: pthread_setspecific (guest TCB)"); exit(21); }
+    void *seen=read_gs_slot((uint64_t)guest_tcb_key*8);
+    if (seen!=base) {
+        fprintf(stderr,"STOP: gs:[%lu*8] reads %p, expected guest TCB %p\n",(unsigned long)guest_tcb_key,seen,base);
+        exit(21);
+    }
+}
+/* Rewrites every `mov rax, gs:[0]` the linker produced in [code, code+size) to read the guest
+ * TCB slot. Called on writable image memory before the segments are protected. */
+size_t runtime_tls_fixup(unsigned char *code, size_t size) {
+    static const unsigned char load[9]={0x65,0x48,0x8b,0x04,0x25,0,0,0,0};
+    pthread_once(&guest_tcb_once,create_guest_tcb_key);
+    const uint32_t displacement=(uint32_t)((uint64_t)guest_tcb_key*8);
+    size_t count=0;
+    for (size_t i=0;i+sizeof(load)<=size;) {
+        if (memcmp(code+i,load,sizeof(load))) { ++i; continue; }
+        memcpy(code+i+5,&displacement,4);
+        ++count;
+        i+=sizeof(load);
+    }
+    return count;
+}
+#else
 static void set_gs(void *base) {
     if (syscall(SYS_arch_prctl,ARCH_SET_GS,(unsigned long)base)) { perror("STOP: arch_prctl(ARCH_SET_GS)"); exit(21); }
 }
+#endif
 /* Build TCB/static TLS for the calling host thread and point GS at it. */
 static void attach(GuestThread *t) {
     uint64_t offset=tls_offset();

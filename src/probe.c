@@ -472,6 +472,14 @@ int main(int argc, char **argv) {
         memcpy(image + relocs[i].target, &value, 8);
     }
     if (patch_file) apply_patches(patch_file, segments, ns, relocs, nr);
+#ifdef __APPLE__
+    {
+        size_t tls_sites=0;
+        for (uint64_t i = 0; i < ns; ++i)
+            if (segments[i].flags & 1) tls_sites += runtime_tls_fixup(image + segments[i].address, segments[i].size);
+        printf("TLS: %zu guest TCB loads redirected to the pthread TSD slot\n", tls_sites);
+    }
+#endif
     protect(traps, round_page((import_count + 1) * 32), 5);
     protect(image, round_page(size), 0);
     int executable_entry = 0;

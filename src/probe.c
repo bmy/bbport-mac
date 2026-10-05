@@ -119,7 +119,8 @@ static ABI void guest_exit(void) { puts("Runtime: process finalizer callback rea
 #ifndef _WIN32
 static void fault(int sig, siginfo_t *info, void *context) {
     /* GPU page tracking (write-protected guest pages) is resolved first. */
-    if (gpu_enabled && sig == SIGSEGV && bbgpu_handle_fault(context, info->si_addr)) return;
+    /* macOS reports protection faults on shared (pool) mappings as SIGBUS, Linux as SIGSEGV. */
+    if (gpu_enabled && (sig == SIGSEGV || sig == SIGBUS) && bbgpu_handle_fault(context, info->si_addr)) return;
     /* A speculative guest memory read (runtime_memory.c) failed: resume its recovery point. */
     if ((sig == SIGSEGV || sig == SIGBUS) && runtime_fault_recover) {
         sigjmp_buf *recover = runtime_fault_recover;

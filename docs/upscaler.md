@@ -133,6 +133,12 @@ The previous frame's matrices are not there; the port keeps them itself.
 - FSR 3.1 (`BB_UPSCALER=fsr3`, FireBurn/FSR-Vulkan submodule): scene color before the
   post-processing combine (compute shader 9a9cf8a9), 1:1, RGB written back (the game keeps data
   in the alpha). Toggle 1<<24 switches it off at run time.
+- MetalFX (`BB_UPSCALER=metalfx`, macOS with KosmicKrisp only, `vk_metalfx.cpp` and
+  `shim/bbport_metalfx.mm`): the same inputs, copied into buffers on exportable memory whose
+  MTLHeaps MetalFX reads on KosmicKrisp's MTLDevice; synchronous (CPU waits on both sides).
+  Diagnostics: `BB_METALFX_INVERT_JITTER=1`, `BB_METALFX_INVERT_MOTION=1`,
+  `BB_METALFX_DEPTH_REVERSED=1`. FSR 4 is not offered on macOS (KosmicKrisp lacks compute
+  shader derivatives and accelerated INT8 dot products); DLSS needs NVIDIA hardware.
 - Jitter: viewport offset of scene geometry (drawn with the scene depth, not full-screen
   quads), Halton(2,3) 8 phases; sign checked by sharpness (correct 255, flipped 208, off 271 —
   1:1 jitter trades high-frequency aliasing for a slightly softer image). Toggle 1<<25 off.

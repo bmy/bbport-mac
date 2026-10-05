@@ -40,20 +40,30 @@ int main() {
                 Load();
                 assert(s.upscaler == requested);
                 ConfigureUpscalerSupport(fsr4, fsr411);
-                const bool unsupported = (requested == UpscalerFsr4 && !fsr4) ||
+                const bool fsr4_unsupported = (requested == UpscalerFsr4 && !fsr4) ||
                     (requested == UpscalerFsr411 && !(fsr4 && fsr411));
-                assert(s.upscaler == (unsupported ? UpscalerFsr3 : requested));
+                // MetalFX (macOS only) is unsupported by default and falls back to off.
+                const bool metalfx_unsupported = requested == UpscalerMetalFx;
+                const bool unsupported = fsr4_unsupported || metalfx_unsupported;
+                const int fallback = metalfx_unsupported ? UpscalerOff : UpscalerFsr3;
+                assert(s.upscaler == (unsupported ? fallback : requested));
                 assert(s.fsr4_supported == fsr4);
                 assert(s.fsr411_supported == (fsr4 && fsr411));
-                assert(bool(s.fsr4_problem.load()) == unsupported);
+                assert(bool(s.fsr4_problem.load()) == fsr4_unsupported);
                 assert(s.preset == Performance && s.output_res == 2);
                 // Startup patch settings still describe the already applied guest patches.
                 assert(s.startup_upscaler == requested);
                 ConfigureUpscalerSupport(fsr4, fsr411);
-                assert(s.upscaler == (unsupported ? UpscalerFsr3 : requested));
+                assert(s.upscaler == (unsupported ? fallback : requested));
             }
         }
     }
+    // A supported MetalFX choice stays.
+    s.upscaler = UpscalerMetalFx;
+    ConfigureUpscalerSupport(false, false, true);
+    assert(s.upscaler == UpscalerMetalFx && s.metalfx_supported);
+    ConfigureUpscalerSupport(false, false, false);
+    assert(s.upscaler == UpscalerOff && !s.metalfx_supported);
     s.startup_preset = Quality;
     s.startup_upscaler = UpscalerFsr3;
     s.upscaler = UpscalerFsr3;
@@ -78,5 +88,5 @@ int main() {
     assert(!FixedRenderSession() && !ResolutionNeedsRestart());
     unsetenv("BB_RENDER_RES");
     std::remove(path);
-    std::puts("Upscaler support: saved choices and FSR 3.1 fallback PASS");
+    std::puts("Upscaler support: saved choices, FSR 3.1 and MetalFX fallbacks PASS");
 }

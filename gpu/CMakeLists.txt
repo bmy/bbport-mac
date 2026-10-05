@@ -2,6 +2,9 @@
 # drivers, adapted to the native_probe runtime through shims in shim/.
 cmake_minimum_required(VERSION 3.24)
 project(bbgpu LANGUAGES C CXX)
+if (APPLE)
+    enable_language(OBJCXX) # bbport: the MetalFX upscaler's Metal side (shim/bbport_metalfx.mm)
+endif()
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
@@ -126,6 +129,13 @@ add_library(bbgpu SHARED ${VIDEO_CORE} ${RECOMPILER} ${COMMON} ${SHIM_SOURCES}
     shadps4/core/libraries/kernel/equeue.cpp ${AVPLAYER}
     shadps4/core/libraries/videodec/video_utils.cpp)
 add_dependencies(bbgpu host_shaders)
+# bbport: MetalFX temporal upscaler, Metal side (Objective-C++ with ARC). MetalFX.framework is
+# opened at run time (dlopen), so a missing x86-64 slice cannot break the link or the start.
+if (APPLE)
+    target_sources(bbgpu PRIVATE shim/bbport_metalfx.mm)
+    set_source_files_properties(shim/bbport_metalfx.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    target_link_libraries(bbgpu PRIVATE "-framework Metal" "-framework Foundation")
+endif()
 # In-game settings menu: Dear ImGui (third_party/imgui, MIT) with its Vulkan backend, and an
 # embedded Cyrillic font (third_party/fonts).
 target_sources(bbgpu PRIVATE third_party/imgui/imgui.cpp third_party/imgui/imgui_draw.cpp

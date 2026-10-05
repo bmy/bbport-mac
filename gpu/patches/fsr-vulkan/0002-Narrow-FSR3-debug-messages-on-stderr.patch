@@ -1,0 +1,17 @@
+diff --git a/src/ffx_vk_fsr3_portable.cpp b/src/ffx_vk_fsr3_portable.cpp
+index 578f9a3..46a688e 100644
+--- a/src/ffx_vk_fsr3_portable.cpp
++++ b/src/ffx_vk_fsr3_portable.cpp
+@@ -171,7 +171,11 @@ static void ffxMessage(FfxMsgType type, const wchar_t* message)
+     const wchar_t* prefix = type == FFX_MESSAGE_TYPE_ERROR
+         ? L"portable FSR3 error: "
+         : L"portable FSR3 warning: ";
+-    std::fwprintf(stderr, L"%ls%ls\n", prefix, message ? message : L"(no message)");
++    // bbport: narrow output. fwprintf would make stderr wide-oriented for the whole process,
++    // after which the host's own fprintf(stderr, ...) diagnostics are silently dropped.
++    char text[1024];
++    std::snprintf(text, sizeof(text), "%ls%ls", prefix, message ? message : L"(no message)");
++    std::fprintf(stderr, "%s\n", text);
+ }
+ 
+ static uint32_t findMemoryType(

@@ -21,6 +21,7 @@
 #include "common/types.h"
 #include "video_core/renderer_vulkan/vk_common.h"
 #include "video_core/renderer_vulkan/vk_fsr4.h"
+#include "video_core/renderer_vulkan/vk_metalfx.h"
 #include "video_core/texture_cache/image.h"
 
 struct FfxVkPortableUpscaleContext;
@@ -168,9 +169,16 @@ private:
     bool RecordFsr4(vk::CommandBuffer cmdbuf, Fsr4Upscaler::Image color, Fsr4Upscaler::Image depth,
                     u32 w, u32 h, u32 ow, u32 oh, float frame_ms);
     void RecordTaa(vk::CommandBuffer cmdbuf, vk::ImageView color, vk::ImageView depth);
+    /// bbport: MetalFX is selected, available and has not failed (macOS, vk_metalfx).
+    [[nodiscard]] bool UseMetalFx() const;
+    /// MetalFX into output_image. Ends the submission: callers fetch CommandBuffer() again.
+    bool RecordMetalFx(const MetalFxUpscaler::Input& color, const MetalFxUpscaler::Input& depth,
+                       u32 w, u32 h, u32 ow, u32 oh, bool hdr);
     /// Sharpness above 1 for FSR 3/4 (their RCAS stops at 1): one more RCAS pass over the target
     /// (output_image, or the 8-bit UI image with ldr) in General layout after the upscaler.
-    void ExtraSharpen(vk::CommandBuffer cmdbuf, vk::Image target, bool ldr, u32 w, u32 h);
+    /// `applied`: the strength the upscaler applied itself (0 for MetalFX, which has no RCAS).
+    void ExtraSharpen(vk::CommandBuffer cmdbuf, vk::Image target, bool ldr, u32 w, u32 h,
+                      float applied = 1.0f);
 
     const Instance& instance;
     Scheduler& scheduler;
@@ -244,6 +252,8 @@ private:
     bool resources_taa = false;
     std::unique_ptr<Fsr4Upscaler> fsr4;
     bool fsr4_failed = false;
+    std::unique_ptr<MetalFxUpscaler> metalfx;
+    bool resources_metalfx = false; ///< made for MetalFX (no FSR 3 context)
     VideoCore::UniqueImage motion_image;
     VideoCore::UniqueImage output_image;
     vk::UniqueImageView motion_view;

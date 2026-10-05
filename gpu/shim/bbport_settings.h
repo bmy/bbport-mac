@@ -10,7 +10,7 @@
 namespace BbSettings {
 
 enum Upscaler : int { UpscalerOff = 0, UpscalerFsr3 = 1, UpscalerFsr4 = 2, UpscalerFsr411 = 3,
-                      UpscalerTaa = 4, UpscalerCount };
+                      UpscalerTaa = 4, UpscalerMetalFx = 5, UpscalerCount };
 /// FSR 4 v07 or FSR 4.1.1: the same inputs, settings and placement in the frame.
 inline bool IsFsr4(int upscaler) {
     return upscaler == UpscalerFsr4 || upscaler == UpscalerFsr411;
@@ -19,23 +19,34 @@ enum Preset : int { NativeAA = 0, Quality, Balanced, Performance, UltraPerforman
 enum DebugView : int { DebugNone = 0, DebugReactive = 1, DebugMotion = 2, DebugViewCount };
 
 /// Game effects switched by the community patches at start (patches.py EFFECTS): ini key,
-/// menu label, default (the game's own behaviour).
+/// menu label (Russian, English), default (the game's own behaviour).
 struct Effect {
     const char* key;
     const char* label;
+    const char* label_en;
     bool default_on;
 };
 inline constexpr Effect Effects[] = {
-    {"effect_chromatic_aberration", "Хроматическая аберрация", true},
-    {"effect_dof", "Глубина резкости (DoF)", true},
-    {"effect_motion_blur", "Размытие в движении", true},
-    {"effect_ssao", "Затенение SSAO", true},
-    {"effect_game_aa", "Собственное сглаживание игры", true},
-    {"effect_dynamic_shadows", "Тени от динамических источников", true},
-    {"effect_ssr", "Отражения SSR (не было в игре)", false},
-    {"skip_intro", "Пропуск заставок при запуске", false},
-    {"debug_camera", "Свободная камера (Cross + L3)", false},
-    {"debug_menu", "Debug menu (нужны файлы шрифтов)", false},
+    {"effect_chromatic_aberration", "Хроматическая аберрация",
+     "Chromatic aberration", true},
+    {"effect_dof", "Глубина резкости (DoF)",
+     "Depth of field (DoF)", true},
+    {"effect_motion_blur", "Размытие в движении",
+     "Motion blur", true},
+    {"effect_ssao", "Затенение SSAO",
+     "SSAO", true},
+    {"effect_game_aa", "Собственное сглаживание игры",
+     "The game's own anti-aliasing", true},
+    {"effect_dynamic_shadows", "Тени от динамических источников",
+     "Dynamic light shadows", true},
+    {"effect_ssr", "Отражения SSR (не было в игре)",
+     "SSR reflections (not in the original game)", false},
+    {"skip_intro", "Пропуск заставок при запуске",
+     "Skip the intro videos", false},
+    {"debug_camera", "Свободная камера (Cross + L3)",
+     "Free camera (Cross + L3)", false},
+    {"debug_menu", "Debug menu (нужны файлы шрифтов)",
+     "Debug menu (needs font files)", false},
 };
 inline constexpr int EffectCount = int(sizeof(Effects) / sizeof(Effects[0]));
 /// Live output resolutions: the upscaler's output and the UI host targets.
@@ -71,6 +82,9 @@ struct Values {
     /// Why FSR 4 cannot run (assets, device features), or null. Set by the renderer.
     std::atomic<const char*> fsr4_problem{nullptr};
     std::atomic<bool> fsr4_supported{false}, fsr411_supported{false};
+    /// MetalFX (macOS with KosmicKrisp only); why it cannot run, or null. Set by the renderer.
+    std::atomic<bool> metalfx_supported{false};
+    std::atomic<const char*> metalfx_problem{nullptr};
 
     /// Startup settings for the explicit BB_RENDER_RES compatibility patch only.
     int startup_preset = NativeAA;
@@ -86,8 +100,8 @@ Values& Get();
 
 /// Reads the file, then the environment overrides. Called once at start.
 void Load();
-/// Checks the loaded choice before the first frame; unsupported FSR 4 uses FSR 3.1.
-void ConfigureUpscalerSupport(bool fsr4, bool fsr411);
+/// Checks the loaded choice before the first frame: unsupported FSR 4 uses FSR 3.1, MetalFX off.
+void ConfigureUpscalerSupport(bool fsr4, bool fsr411, bool metalfx = false);
 /// Startup-patched scene dimensions cannot change until run.sh prepares a new image.
 bool FixedRenderSession();
 int RenderPreset();

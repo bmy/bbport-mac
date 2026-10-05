@@ -95,7 +95,7 @@ static ABI __attribute__((noreturn)) void unresolved(uint32_t id, uintptr_t argu
     uintptr_t caller=(uintptr_t)__builtin_return_address(0)-(uintptr_t)image;
     for (uint64_t m=0;m<module_count;++m)
         if (caller>=modules[m].base && caller-modules[m].base<modules[m].size)
-            printf("Caller in linked module %" PRIu64 " (%s): +0x%" PRIxPTR "\n",m,m==0 ? "libc.prx" : "system module",caller-modules[m].base);
+            printf("Caller in linked module %" PRIu64 " (%s): +0x%" PRIxPTR "\n",m,m==0 ? "libc.prx" : "system module",(uintptr_t)(caller-modules[m].base));
     runtime_report();
     puts(entered_game ? "Original guest entry instructions executed; game initialization is incomplete." :
                         "Native libc initialization is incomplete; game entry has not run.");
@@ -105,7 +105,12 @@ static ABI __attribute__((noreturn)) void unresolved(uint32_t id, uintptr_t argu
 #ifndef _WIN32
 /* enter_on_stack(entry, arg0, arg1, stack_top): call entry(arg0,arg1) on a new stack. */
 void enter_on_stack(void *entry, void *arg0, void *arg1, void *top);
-__asm__(".text\n.globl enter_on_stack\nenter_on_stack:\n"
+#ifdef __APPLE__
+#define ASM_SYMBOL(name) "_" #name /* Mach-O: C symbols carry a leading underscore */
+#else
+#define ASM_SYMBOL(name) #name
+#endif
+__asm__(".text\n.globl " ASM_SYMBOL(enter_on_stack) "\n" ASM_SYMBOL(enter_on_stack) ":\n"
         " push %rbp\n mov %rsp,%rbp\n and $-16,%rcx\n mov %rcx,%rsp\n"
         " mov %rdi,%rax\n mov %rsi,%rdi\n mov %rdx,%rsi\n call *%rax\n"
         " mov %rbp,%rsp\n pop %rbp\n ret\n");

@@ -11,12 +11,14 @@ void *bb_low_aligned_alloc(size_t alignment, size_t size);
 void bb_low_free(void *p);
 char *bb_low_strdup(const char *s);
 int bb_low_posix_memalign(void **out, size_t alignment, size_t size);
-#define malloc bb_low_malloc
-#define calloc bb_low_calloc
-#define realloc bb_low_realloc
-#define aligned_alloc bb_low_aligned_alloc
-#define free bb_low_free
-#define strdup bb_low_strdup
-#define posix_memalign bb_low_posix_memalign
+/* Function-like, so attribute spellings such as __attribute__((malloc)) in system and SDL
+ * headers stay untouched; nothing in the runtime passes these functions as values. */
+#define malloc(size) bb_low_malloc(size)
+#define calloc(count, size) bb_low_calloc(count, size)
+#define realloc(p, size) bb_low_realloc(p, size)
+#define aligned_alloc(alignment, size) bb_low_aligned_alloc(alignment, size)
+#define free(p) bb_low_free(p)
+#define strdup(s) bb_low_strdup(s)
+#define posix_memalign(out, alignment, size) bb_low_posix_memalign(out, alignment, size)
 #endif
 #endif

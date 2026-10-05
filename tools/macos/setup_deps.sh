@@ -34,7 +34,7 @@ BREW=$(command -v brew || true)
 
 step "Native build tools (Homebrew)"
 "$BREW" install cmake ninja pkgconf glslang spirv-tools python@3.13 nasm \
-    boost magic_enum robin-map vulkan-memory-allocator   # header-only: architecture does not matter
+    boost magic_enum robin-map   # header-only: architecture does not matter
 export PATH="$("$BREW" --prefix)/bin:$PATH"
 
 # x86-64 everywhere below. pkg-config must only see $PREFIX, never Homebrew's arm64 .pc files.
@@ -158,6 +158,14 @@ if ! have lib/libavformat.dylib; then
     quiet "ffmpeg build" make -j "$JOBS"
     quiet "ffmpeg install" make install
     cd "$REPO"
+fi
+
+step "VulkanMemoryAllocator (header-only)"
+VMA_TAG=$(latest_tag https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git '^v3\.[0-9]+\.[0-9]+$')
+echo "tag: $VMA_TAG"
+if ! have include/vk_mem_alloc.h; then
+    fetch VulkanMemoryAllocator https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git "$VMA_TAG"
+    cmake_build VulkanMemoryAllocator -DVMA_BUILD_DOCUMENTATION=OFF -DVMA_BUILD_SAMPLES=OFF
 fi
 
 step "miniz (static, x86-64)"

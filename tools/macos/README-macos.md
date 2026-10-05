@@ -1,7 +1,7 @@
 # bbport on macOS (Apple Silicon)
 
-The game code runs as x86-64 under Rosetta 2. Vulkan runs on Metal through KosmicKrisp
-(the default) or MoltenVK. You need the game folder: Bloodborne CUSA03173, merged with
+The game code runs as x86-64 under Rosetta 2. Vulkan runs on Metal through KosmicKrisp.
+MoltenVK can't run bbport, because it has no sparse buffers. You need the game folder: Bloodborne CUSA03173, merged with
 update 1.09, the one with `eboot.bin` in it.
 
 ## One-time setup
@@ -48,7 +48,7 @@ BB_GAME_DIR=~/Games/shadPS4/CUSA03173-109 bash tools/macos/run.sh
 ```
 
 `run.sh` takes the same environment variables the app sets, for example `BB_FPS=30|60|90|uncap`,
-`BB_UPSCALER=off|fsr3|taa|metalfx`, `BB_VK_DRIVER=kosmickrisp|moltenvk` and `BB_FULLSCREEN=1`.
+`BB_UPSCALER=off|fsr3|taa|metalfx`, `BB_FULLSCREEN=1`.
 
 ### First launch: the shader warm-up
 
@@ -86,7 +86,8 @@ The overlay menu (upscaler, FPS counter, effects) opens with **F1**, **`` ` ``**
 - The app says "not built yet": run `bash tools/macos/build.sh`.
 - `swift build` fails in `build_launcher.sh`: send the whole terminal output.
 - The build fails: `out/gpu-errors.txt` and `out/loader-build.log` hold the errors.
-- The game misbehaves with KosmicKrisp: try **Vulkan driver: MoltenVK** in the app, or
-  `BB_VK_DRIVER=moltenvk` in Terminal.
+- If it crashes after switching to full screen: make sure `BB_COPIES_OFF_RECORDER` is not set
+  to 1, since experimental two-thread recording has a known full-screen crash.
+- If it runs slowly: turn Low Power Mode off and plug the Mac in.
 - The black screen lasts much longer than usual: check whether the log is still moving. The
   pipeline preload reports its count and time there when it finishes.

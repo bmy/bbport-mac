@@ -215,11 +215,18 @@ elif ! have lib/kosmickrisp/libvulkan_kosmickrisp.dylib; then
         echo "fetching Mesa (large, a few minutes)"
         git -C "$kk" submodule update -q --init --depth 1
     fi
+    # Mesa first builds native (arm64) helper tools against Homebrew packages (LLVM,
+    # SPIRV-LLVM-Translator), so this step sees Homebrew's pkg-config files, unlike the x86-64
+    # libraries above; the x86-64 driver itself only links the SDK (cross file, --prefer-static).
     # Mesa's build scripts run the first python3 on PATH: the venv with mako/pyyaml.
-    PATH="$PREFIX/pyenv/bin:$PATH" quiet "kosmickrisp configure" cmake -S "$kk" -B "$kk/build-x86_64" -G Ninja \
+    kk_env=(env -u PKG_CONFIG_LIBDIR
+            PKG_CONFIG_PATH="$("$BREW" --prefix)/lib/pkgconfig:$("$BREW" --prefix spirv-llvm-translator)/lib/pkgconfig"
+            PATH="$PREFIX/pyenv/bin:$PATH")
+    rm -rf "$kk/build-x86_64"   # meson does not re-run a failed setup in place
+    quiet "kosmickrisp configure" "${kk_env[@]}" cmake -S "$kk" -B "$kk/build-x86_64" -G Ninja \
         -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0
     echo "building Mesa/KosmicKrisp (10-20 minutes)"
-    PATH="$PREFIX/pyenv/bin:$PATH" quiet "kosmickrisp build" cmake --build "$kk/build-x86_64" -j "$JOBS"
+    quiet "kosmickrisp build" "${kk_env[@]}" cmake --build "$kk/build-x86_64" -j "$JOBS"
     mkdir -p "$PREFIX/lib/kosmickrisp"
     cp "$kk/build-x86_64/outputs/libvulkan_kosmickrisp.dylib" "$kk/build-x86_64/outputs/kosmickrisp_mesa_icd.json" \
         "$PREFIX/lib/kosmickrisp/"

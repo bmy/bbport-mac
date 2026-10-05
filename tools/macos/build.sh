@@ -68,7 +68,7 @@ if ! clang "${ARCH[@]}" -std=c11 -O2 -g -Wall -Wextra -pthread "${pkg_cflags[@]}
     echo "STOP: loader build failed (full log: out/loader-build.log)" >&2
     exit 1
 fi
-grep -c 'warning:' out/loader-build.log | xargs -I{} echo "loader warnings: {} (out/loader-build.log)"
+echo "loader warnings: $(grep -c 'warning:' out/loader-build.log || true) (out/loader-build.log)"
 clang "${ARCH[@]}" -std=c11 -O2 -Wall -Wextra tools/gpu_capabilities.c "${pkg_libs[@]}" "${pkg_cflags[@]}" \
     -o out/bb-gpu-capabilities
 echo "Built: $(lipo -archs out/bb-probe) out/bb-probe, $(lipo -archs "$gpu_lib") $gpu_lib"

@@ -117,6 +117,12 @@ void BufferCache::RunGuestCopy(const BbCopy::Item& item) {
 // Small guest copies run on the recording thread (it spins for work: no wakeup, and it is
 // idle most of the time); PoolSmallCopies (toggle 524288) batches them for the copy threads.
 void BufferCache::SmallGuestCopy(const BbCopy::Item& item) {
+    // BB_COPIES_OFF_RECORDER: the recording thread is the bottleneck (macOS); the scheduler
+    // batches the copy for the copy threads, and its fences wait for the batch.
+    if (scheduler.HostCopiesOffRecorder()) {
+        scheduler.QueueHostCopy(item);
+        return;
+    }
     if (scheduler.IsRecordingDeferred() && !BbToggle::Disabled(BbToggle::PoolSmallCopies)) {
         scheduler.RecordHostCopy([item] { item.run(item); });
         return;

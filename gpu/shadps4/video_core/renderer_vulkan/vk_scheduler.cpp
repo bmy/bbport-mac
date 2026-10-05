@@ -35,6 +35,7 @@ Scheduler::Scheduler(const Instance& instance, bool threaded_recording)
         record_chunk = AcquireChunk();
         recorder_thread = std::jthread(std::bind_front(&Scheduler::RecorderThread, this));
     }
+    LatchRecordingMode();
 #if TRACY_GPU_ENABLED
     profiler_scope = reinterpret_cast<tracy::VkCtxScope*>(std::malloc(sizeof(tracy::VkCtxScope)));
 #endif
@@ -238,10 +239,107 @@ std::unique_ptr<RecordChunk> Scheduler::AcquireChunk() {
     return chunk;
 }
 
+namespace {
+/// BB_COPIES_OFF_RECORDER=0/1; default on macOS, where the recording thread is the bottleneck
+/// (each Vulkan call is ~20 us through KosmicKrisp and Metal under Rosetta) and copies or
+/// fences queued behind its backlog made the draw recording thread wait at EOS/WriteData.
+bool CopiesOffRecorderWanted() {
+    static const bool wanted = [] {
+        if (const char* env = std::getenv("BB_COPIES_OFF_RECORDER"); env && env[0]) {
+            return env[0] == '1';
+        }
+#ifdef __APPLE__
+        return true;
+#else
+        return false;
+#endif
+    }();
+    return wanted;
+}
+} // namespace
+
+void Scheduler::LatchRecordingMode() {
+    // Called with no stream copy or stream signal pending (constructor; SubmitExecution after
+    // SyncRecording and WaitHostCopies), so a switch cannot reorder copies or fences: every
+    // stream signal has already been handed to BbCopy::AfterCopies, and signals handed over
+    // from now on are queued behind it.
+    copies_off_recorder = recorder_thread.joinable() && CopiesOffRecorderWanted() &&
+                          !BbToggle::Disabled(BbToggle::RecorderHostCopies);
+}
+
+std::vector<BbCopy::Item> Scheduler::TakeHostCopies() {
+    std::scoped_lock lk{host_batch_mutex};
+    std::vector<BbCopy::Item> items;
+    items.swap(host_batch);
+    host_batch_bytes = 0;
+    return items;
+}
+
+void Scheduler::QueueHostCopy(const BbCopy::Item& item) {
+    if (!BbCopy::Enabled()) {
+        item.run(item); // no copy threads: copied now, as BbCopy::QueueCopy does
+        return;
+    }
+    if (BbStats::enabled) {
+        BbStats::host_batch_copies.fetch_add(1, std::memory_order_relaxed);
+    }
+    {
+        std::scoped_lock lk{host_batch_mutex};
+        host_batch.push_back(item);
+        host_batch_bytes += item.size;
+        // One wakeup per ~512 KiB or 256 copies, as BbCopy::QueueCopy.
+        if (host_batch_bytes < 512 * 1024 && host_batch.size() < 256) {
+            return;
+        }
+    }
+    FlushHostCopies();
+}
+
+void Scheduler::FlushHostCopies() {
+    auto items = TakeHostCopies();
+    if (items.empty()) {
+        return;
+    }
+    if (BbStats::enabled) {
+        BbStats::host_batches.fetch_add(1, std::memory_order_relaxed);
+    }
+    auto shared = std::make_shared<std::vector<BbCopy::Item>>(std::move(items));
+    BbCopy::Async([shared] {
+        for (const auto& item : *shared) {
+            item.run(item);
+        }
+    });
+}
+
 void Scheduler::SignalAfterHostCopies(std::function<void()> signal) {
     if (!IsRecordingDeferred()) {
         WaitHostCopies();
         signal();
+        return;
+    }
+    if (copies_off_recorder) {
+        // Invariants (the guest frees the memory a fence guards once it sees the value, and
+        // frees objects holding fence labels once the GPU is idle):
+        // 1. A fence is written only after every guest copy issued before it has finished:
+        //    the batch is started (Async) before AfterCopies, which waits for every task
+        //    started so far.
+        // 2. Fences are written in issue order: AfterCopies runs callbacks in registration
+        //    order, and stream signals from before a mode switch were registered earlier
+        //    (LatchRecordingMode).
+        // 3. WaitDeferredSignals (GPU idle, WriteData, EOS, flip) waits for these signals:
+        //    deferred_signals_issued/done count them like the stream ones.
+        // Nothing waits for the recording thread: the guest observes fences, not Vulkan
+        // recording, and recorded commands read only host buffers filled by those copies.
+        FlushHostCopies();
+        BbCopy::FlushBatch();
+        deferred_signals_issued.fetch_add(1, std::memory_order_relaxed);
+        if (BbStats::enabled) {
+            BbStats::copy_thread_fences.fetch_add(1, std::memory_order_relaxed);
+        }
+        BbCopy::AfterCopies([signal = std::move(signal), done = deferred_signals_done]() mutable {
+            signal();
+            done->fetch_add(1, std::memory_order_release);
+        });
         return;
     }
     BbCopy::FlushBatch();
@@ -280,6 +378,11 @@ void Scheduler::WaitHostCopies() {
         }
     }
     BbStats::WaitTimer timer{BbStats::copy_threads_wait_ns};
+    // Copies batched off the recorder (QueueHostCopy) run here: handing them over only to
+    // wait for them costs a wakeup.
+    for (const auto& item : TakeHostCopies()) {
+        item.run(item);
+    }
     BbCopy::WaitAsync();
 }
 
@@ -360,7 +463,17 @@ void Scheduler::RecorderThread(std::stop_token stoken) {
             recorder_busy = true;
         }
         // current_cmdbuf only changes after SyncRecording(), which waits for this thread.
-        chunk->Execute(current_cmdbuf);
+        if (BbStats::enabled) {
+            const auto start = std::chrono::steady_clock::now();
+            chunk->Execute(current_cmdbuf);
+            BbStats::recorder_busy_ns.fetch_add(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - start)
+                    .count(),
+                std::memory_order_relaxed);
+        } else {
+            chunk->Execute(current_cmdbuf);
+        }
         {
             std::scoped_lock lk{recorder_mutex};
             free_chunks.push_back(std::move(chunk));
@@ -502,6 +615,9 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
 
     work_semaphore.Refresh();
+    // Every stream copy and stream signal of this submission has run (SyncRecording,
+    // WaitHostCopies): the mode may change here.
+    LatchRecordingMode();
     AllocateWorkerCommandBuffers();
 
     // Apply pending operations
@@ -532,6 +648,23 @@ void Scheduler::PriorityPendingOpsThread(std::stop_token stoken) {
 
         op.callback();
     }
+}
+
+void Scheduler::PrintRecordingStats(double seconds, double frames) {
+    const auto take = [](std::atomic<u64>& counter) {
+        return counter.exchange(0, std::memory_order_relaxed);
+    };
+    const double per_frame = frames > 0 ? 1.0 / frames : 0.0;
+    const double percent = seconds > 0 ? 100.0 / (seconds * 1e9) : 0.0;
+    std::printf("Recording: host copies %s the recorder (BB_COPIES_OFF_RECORDER), %.0f/frame "
+                "batched in %.1f/frame, %.1f fences/frame via copy threads; recorder busy %.1f%%\n",
+                CopiesOffRecorderWanted() && !BbToggle::Disabled(BbToggle::RecorderHostCopies)
+                    ? "off"
+                    : "on",
+                take(BbStats::host_batch_copies) * per_frame,
+                take(BbStats::host_batches) * per_frame,
+                take(BbStats::copy_thread_fences) * per_frame,
+                take(BbStats::recorder_busy_ns) * percent);
 }
 
 void DynamicState::Commit(const Instance& instance, const vk::CommandBuffer& cmdbuf) {

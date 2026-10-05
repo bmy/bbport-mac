@@ -18,6 +18,7 @@
 #include <thread>
 #include <queue>
 
+#include "bbport_copy.h"
 #include "bbport_toggles.h"
 #include "common/assert.h"
 #include "common/interval_set.h"
@@ -797,9 +798,11 @@ public:
     void WaitHostCopies();
 
     /// Runs `copy` on the recording thread in order with the commands (the thread spins for
-    /// work anyway, so small copies cost no wakeup); WaitHostCopies() covers it.
+    /// work anyway, so small copies cost no wakeup); WaitHostCopies() covers it. Not with
+    /// HostCopiesOffRecorder(): copies then use QueueHostCopy().
     template <typename Func>
     void RecordHostCopy(Func&& copy) {
+        ASSERT_MSG(!copies_off_recorder, "host copy recorded while copies bypass the recorder");
         Record([copy = std::forward<Func>(copy), this,
                 seq = ++host_copies_issued](vk::CommandBuffer) {
             copy();
@@ -809,8 +812,29 @@ public:
 
     /// bbport: runs `signal` once the guest memory copies issued so far are done, without
     /// waiting here: the recording thread reaches it after the copies queued before it and hands
-    /// it to the copy threads' completion (BbCopy::AfterCopies).
+    /// it to the copy threads' completion (BbCopy::AfterCopies). With HostCopiesOffRecorder()
+    /// the signal goes to BbCopy::AfterCopies directly (see the invariants in the .cpp).
     void SignalAfterHostCopies(std::function<void()> signal);
+
+    /// bbport (BB_COPIES_OFF_RECORDER, default on macOS): small guest copies are batched for
+    /// the copy threads (QueueHostCopy) and deferred fence signals go straight to
+    /// BbCopy::AfterCopies, so nothing with a side effect outside Vulkan is recorded: EOS and
+    /// WriteData then wait for the copy threads only, not for the recording thread to catch up.
+    /// Latched per submission (LatchRecordingMode); toggle bit RecorderHostCopies turns it off.
+    [[nodiscard]] bool HostCopiesOffRecorder() const noexcept {
+        return copies_off_recorder;
+    }
+
+    /// bbport: queues a small guest copy (HostCopiesOffRecorder()) in a batch for the copy
+    /// threads. The batch belongs to the scheduler, not to the calling thread, so a fence
+    /// signalled from any thread covers copies queued from any other.
+    void QueueHostCopy(const BbCopy::Item& item);
+
+    /// bbport: starts the batched guest copies on the copy threads.
+    void FlushHostCopies();
+
+    /// bbport (BB_FRAME_STATS): prints the "Recording:" line for the last `seconds`.
+    static void PrintRecordingStats(double seconds, double frames);
 
     /// bbport: before a guest-visible write that is not deferred (WriteData, end-of-shader
     /// fences, flip): waits until every signal handed to SignalAfterHostCopies ran, so that
@@ -879,6 +903,13 @@ private:
 
     void SubmitExecution(SubmitInfo& info);
 
+    /// bbport: decides HostCopiesOffRecorder() for the next submission. Only called where no
+    /// copy or signal from the stream is pending (construction, after a submission's sync).
+    void LatchRecordingMode();
+
+    /// Takes the batch of QueueHostCopy() (under host_batch_mutex).
+    std::vector<BbCopy::Item> TakeHostCopies();
+
     void PriorityPendingOpsThread(std::stop_token stoken);
 
 private:
@@ -920,6 +951,10 @@ private:
     bool recorder_sleeping = false; ///< waiting on recorder_cv (guarded by recorder_mutex)
     bool direct_mode = false; ///< the command buffer is recorded on the caller's thread
     u64 host_copies_issued = 0;
+    bool copies_off_recorder = false; ///< latched per submission (LatchRecordingMode)
+    std::mutex host_batch_mutex;
+    std::vector<BbCopy::Item> host_batch; ///< QueueHostCopy(), guarded by host_batch_mutex
+    u64 host_batch_bytes = 0;
     std::atomic<u64> host_copies_done{0};
     std::atomic<u64> deferred_signals_issued{0}; ///< by the thread recording (A or B)
     std::shared_ptr<std::atomic<u64>> deferred_signals_done =

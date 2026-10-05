@@ -407,11 +407,18 @@ void PipelineCache::WarmUp() {
     // bbport: BB_PRELOAD_THREADS=N creates the cached pipelines (the driver compile) on N
     // threads; reading the store and building SPIR-V modules stays on this thread (it shares the
     // selection state and program cache), and so does inserting the built pipelines into the
-    // maps. Opt-in while it is being validated on KosmicKrisp.
+    // maps. Default: every hardware thread on macOS (KosmicKrisp compiles under Rosetta, ~50 ms
+    // per pipeline); one on Linux, where the driver's disk cache already makes this fast.
     std::vector<PreloadJob> jobs;
     const u32 preload_threads = [] {
-        const char* env = std::getenv("BB_PRELOAD_THREADS");
-        return env ? std::max(1, std::atoi(env)) : 1;
+        if (const char* env = std::getenv("BB_PRELOAD_THREADS")) {
+            return std::max(1, std::atoi(env));
+        }
+#ifdef __APPLE__
+        return static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+#else
+        return 1;
+#endif
     }();
     if (preload_threads > 1) {
         preload_jobs = &jobs;

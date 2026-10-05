@@ -663,7 +663,7 @@ bool BufferCache::SynchronizeHeld(const Buffer* arena, VAddr device_addr, u32 si
         });
         held_uploads.push_back({arena, staging, staging_offset, start, copies[0].size});
         held_min = std::min(held_min, start);
-        held_max = std::max(held_max, start + copies[0].size);
+        held_max = std::max(held_max, static_cast<VAddr>(start + copies[0].size));
         ++held_count;
         BbStats::pass_deferred_uploads.fetch_add(1, std::memory_order_relaxed);
         result = {staging, staging_offset + (device_addr - start)};

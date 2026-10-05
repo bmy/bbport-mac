@@ -269,12 +269,26 @@ bool Instance::CreateDevice() {
                "Required Vulkan extension unavailable: {}", VK_EXT_ROBUSTNESS_2_EXTENSION_NAME);
 
     const auto robustness2_features = feature_chain.get<vk::PhysicalDeviceRobustness2FeaturesEXT>();
+#ifdef __APPLE__
+    // bbport: MoltenVK lacks robustBufferAccess2; run without it (only what the driver has is
+    // enabled below) instead of refusing to start. Out-of-range accesses are then undefined.
+    for (const auto& [have, name] :
+         {std::pair{bool(robustness2_features.robustBufferAccess2), "robustBufferAccess2"},
+          std::pair{bool(robustness2_features.robustImageAccess2), "robustImageAccess2"},
+          std::pair{bool(robustness2_features.nullDescriptor), "nullDescriptor"}}) {
+        if (!have) {
+            LOG_WARNING(Render_Vulkan, "Vulkan feature {} unavailable; continuing without it",
+                        name);
+        }
+    }
+#else
     ASSERT_MSG(robustness2_features.robustBufferAccess2,
                "Required Vulkan feature unavailable: robustBufferAccess2");
     ASSERT_MSG(robustness2_features.robustImageAccess2,
                "Required Vulkan feature unavailable: robustImageAccess2");
     ASSERT_MSG(robustness2_features.nullDescriptor,
                "Required Vulkan feature unavailable: nullDescriptor");
+#endif
 
     // Optional
     maintenance_5 = add_extension(VK_KHR_MAINTENANCE_5_EXTENSION_NAME);
@@ -508,9 +522,9 @@ bool Instance::CreateDevice() {
             .depthClipEnable = true,
         },
         vk::PhysicalDeviceRobustness2FeaturesEXT{
-            .robustBufferAccess2 = true,
-            .robustImageAccess2 = true,
-            .nullDescriptor = true,
+            .robustBufferAccess2 = robustness2_features.robustBufferAccess2,
+            .robustImageAccess2 = robustness2_features.robustImageAccess2,
+            .nullDescriptor = robustness2_features.nullDescriptor,
         },
         vk::PhysicalDeviceVertexInputDynamicStateFeaturesEXT{
             .vertexInputDynamicState = true,

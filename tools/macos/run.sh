@@ -12,6 +12,10 @@ source "$DEPS/env.sh"
 export BB_PREBUILT=1 BB_PROBE="$PWD/out/bb-probe"
 export BB_FPS=${BB_FPS:-30} BB_UPSCALER=${BB_UPSCALER:-off}
 mkdir -p out
+# FPS counter on by default, as the Linux launcher does; the overlay menu (F1, ` or §) toggles
+# it and saves the choice.
+ini=${BB_CONFIG:-bbport.ini}
+grep -q '^show_fps=' "$ini" 2>/dev/null || echo "show_fps=1" >> "$ini"
 # Keep a copy of everything the port prints for diagnosis.
 exec > >(tee out/last-run.log) 2>&1
 echo "macOS run: $(sw_vers -productVersion), game $BB_GAME_DIR, fps $BB_FPS, upscaler $BB_UPSCALER"

@@ -702,7 +702,11 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
     switch (regs.stage_enable.raw) {
     case AmdGpu::ShaderStageEnable::VgtStages::EsGs:
         if (!instance.IsGeometryStageSupported()) {
-            LOG_WARNING(Render_Vulkan, "Geometry shader stage unsupported, skipping");
+            // bbport: once per run (Metal drivers have no geometry stage; it was every draw).
+            if (static std::atomic_flag warned; !warned.test_and_set()) {
+                LOG_WARNING(Render_Vulkan, "Geometry shader stage unsupported, skipping draws "
+                                           "that need it");
+            }
             return false;
         }
         if (regs.vgt_gs_mode.onchip || regs.vgt_strmout_config.raw) {
@@ -735,7 +739,11 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
             return false;
         }
         if (!instance.IsGeometryStageSupported()) {
-            LOG_WARNING(Render_Vulkan, "Geometry shader stage unsupported, skipping");
+            // bbport: once per run (Metal drivers have no geometry stage; it was every draw).
+            if (static std::atomic_flag warned; !warned.test_and_set()) {
+                LOG_WARNING(Render_Vulkan, "Geometry shader stage unsupported, skipping draws "
+                                           "that need it");
+            }
             return false;
         }
         if (regs.vgt_gs_mode.onchip || regs.vgt_strmout_config.raw) {

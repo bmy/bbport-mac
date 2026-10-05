@@ -4,6 +4,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
+#include <memory>
 #include <functional>
 #include <mutex>
 #include <thread>
@@ -172,20 +174,28 @@ bool PipelineCache::LoadComputePipeline(Serialization::Archive& ar) {
         return false;
     }
 
-    const auto [it, is_new] = compute_pipelines.try_emplace(compute_key);
-    ASSERT(is_new);
-
     if (preload_jobs) {
-        // Created later on a worker thread; the map slot stays empty until WarmUp fills it.
-        preload_jobs->emplace_back([this, key = compute_key, info = sel.infos[0],
-                                    module = sel.modules[0], sdata]() mutable {
-            auto pipeline = std::make_unique<ComputePipeline>(
-                instance, scheduler, desc_heap, profile, *pipeline_cache, key, *info, module,
-                sdata, true);
-            std::scoped_lock lock{preload_mutex};
-            compute_pipelines.find(key).value() = std::move(pipeline);
+        // bbport: built on a worker; inserted into the map afterwards on this thread, with the
+        // key bytes exactly as read from the store (the map hashes and compares raw bytes).
+        auto slot = std::make_shared<std::unique_ptr<ComputePipeline>>();
+        auto key = std::make_shared<ComputePipelineKey>();
+        std::memcpy(key.get(), &compute_key, sizeof(ComputePipelineKey));
+        preload_jobs->push_back({
+            [this, slot, key, info = sel.infos[0], module = sel.modules[0], sdata]() mutable {
+                *slot = std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile,
+                                                          *pipeline_cache, *key, *info, module,
+                                                          sdata, true);
+            },
+            [this, slot, key] {
+                const auto [it, is_new] = compute_pipelines.try_emplace(*key);
+                if (is_new) {
+                    it.value() = std::move(*slot);
+                }
+            },
         });
     } else {
+        const auto [it, is_new] = compute_pipelines.try_emplace(compute_key);
+        ASSERT(is_new);
         it.value() = std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile,
                                                        *pipeline_cache, compute_key,
                                                        *sel.infos[0], sel.modules[0], sdata, true);
@@ -259,22 +269,31 @@ bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
         }
     }
 
-    const auto [it, is_new] = graphics_pipelines.try_emplace(sel.graphics_key);
-    ASSERT(is_new);
-
     if (preload_jobs) {
+        // bbport: built on a worker; inserted into the map afterwards on this thread, with the
+        // key bytes exactly as read from the store (the map hashes and compares raw bytes,
+        // padding and unused bit-field bits included, so a member-wise copy may not match).
         // Programs live in program_cache behind unique_ptrs, so the Info pointers stay valid.
-        preload_jobs->emplace_back([this, key = sel.graphics_key, infos = sel.infos,
-                                    runtime_infos = sel.runtime_infos,
-                                    fetch_shader = sel.fetch_shader, modules = sel.modules,
-                                    sdata]() mutable {
-            auto pipeline = std::make_unique<GraphicsPipeline>(
-                instance, scheduler, desc_heap, profile, key, *pipeline_cache, infos,
-                runtime_infos, fetch_shader, modules, sdata, true);
-            std::scoped_lock lock{preload_mutex};
-            graphics_pipelines.find(key).value() = std::move(pipeline);
+        auto slot = std::make_shared<std::unique_ptr<GraphicsPipeline>>();
+        auto key = std::make_shared<GraphicsPipelineKey>();
+        std::memcpy(static_cast<void*>(key.get()), &sel.graphics_key, sizeof(GraphicsPipelineKey));
+        preload_jobs->push_back({
+            [this, slot, key, infos = sel.infos, runtime_infos = sel.runtime_infos,
+             fetch_shader = sel.fetch_shader, modules = sel.modules, sdata]() mutable {
+                *slot = std::make_unique<GraphicsPipeline>(
+                    instance, scheduler, desc_heap, profile, *key, *pipeline_cache, infos,
+                    runtime_infos, fetch_shader, modules, sdata, true);
+            },
+            [this, slot, key] {
+                const auto [it, is_new] = graphics_pipelines.try_emplace(*key);
+                if (is_new) {
+                    it.value() = std::move(*slot);
+                }
+            },
         });
     } else {
+        const auto [it, is_new] = graphics_pipelines.try_emplace(sel.graphics_key);
+        ASSERT(is_new);
         it.value() = std::make_unique<GraphicsPipeline>(
             instance, scheduler, desc_heap, profile, sel.graphics_key, *pipeline_cache, sel.infos,
             sel.runtime_infos, sel.fetch_shader, sel.modules, sdata, true);
@@ -387,11 +406,9 @@ void PipelineCache::WarmUp() {
 
     // bbport: BB_PRELOAD_THREADS=N creates the cached pipelines (the driver compile) on N
     // threads; reading the store and building SPIR-V modules stays on this thread (it shares the
-    // selection state and program cache). Off by default: KosmicKrisp (Mesa rev pinned in
-    // tools/macos/setup_deps.sh) produced pipelines that drew nothing when it compiled on 18
-    // threads at once (black screen with audio; one thread was fine). Repeat launches are made
-    // fast by the driver's disk cache instead.
-    std::vector<std::function<void()>> jobs;
+    // selection state and program cache), and so does inserting the built pipelines into the
+    // maps. Opt-in while it is being validated on KosmicKrisp.
+    std::vector<PreloadJob> jobs;
     const u32 preload_threads = [] {
         const char* env = std::getenv("BB_PRELOAD_THREADS");
         return env ? std::max(1, std::atoi(env)) : 1;
@@ -434,7 +451,7 @@ void PipelineCache::WarmUp() {
         std::atomic<size_t> next{0};
         const auto worker = [&] {
             for (size_t i; (i = next.fetch_add(1)) < jobs.size();) {
-                jobs[i]();
+                jobs[i].build();
             }
         };
         std::vector<std::thread> threads;
@@ -445,6 +462,9 @@ void PipelineCache::WarmUp() {
         worker();
         for (auto& thread : threads) {
             thread.join();
+        }
+        for (auto& job : jobs) {
+            job.finish();
         }
         LOG_WARNING(Render, "Preloaded {} cached pipelines on {} threads in {:.1f} s",
                     jobs.size(), count,

@@ -56,6 +56,9 @@ enum : std::uint64_t {
     // thread again (the behaviour before BB_COPIES_OFF_RECORDER). Takes effect at the next
     // submission (Scheduler::LatchRecordingMode).
     RecorderHostCopies = 1ull << 59,
+    // Bit set: one Vulkan recording thread and one command buffer per submission instead of
+    // segments on BB_VK_RECORD_WORKERS workers. Takes effect at the next submission.
+    ParallelRecording = 1ull << 60,
     UpdateImageFastPath = 1u << 30,
     // TAA A/B in one run: optional techniques, off by default (no measured gain, 2026-10-02).
     TaaTonemapBlend = 1ull << 51,

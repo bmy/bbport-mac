@@ -4,6 +4,27 @@ Design only, 2026-10-05, based on `macos-port` b46134b. `rv/` is
 `gpu/shadps4/video_core/renderer_vulkan/`; "KK" is Mesa `src/kosmickrisp/` at dc41592a, the
 revision the port builds.
 
+## Status (2026-10-05)
+
+Phases 1 and 2 are implemented on `macos-mtrec`, untested on a Mac.
+
+| Setting | Default | Effect |
+|---|---|---|
+| `BB_COPIES_OFF_RECORDER=0/1` | 1 on macOS, 0 on Linux | Phase 1: small guest copies batched for the copy threads (`Scheduler::QueueHostCopy`), EOP fences through `BbCopy::AfterCopies` directly |
+| `BB_VK_RECORD_WORKERS=N` (1–8) | 2 on macOS with KosmicKrisp, else 1 | Phase 2: recording workers (`bb:VkRec0`…) |
+| `BB_VK_SEGMENTS=0/1` | 1 when N > 1 | Segments; `BB_VK_RECORD_WORKERS=1 BB_VK_SEGMENTS=1` is the cut-only test mode |
+| `BB_VK_SEGMENT_UNITS` | 250 | Cut threshold (a draw or dispatch is 1 unit, a render pass 8) |
+| Toggle bit 1<<59 `RecorderHostCopies` | clear | Set: copies and fences through the recorder again, and no segments |
+| Toggle bit 1<<60 `ParallelRecording` | clear | Set: one recorder, one command buffer per submission |
+
+Both toggle bits and the modes take effect at the next submission (`LatchRecordingMode`), when
+nothing of the stream is pending. Segments require copies off the recorder. `BB_FRAME_STATS=1`
+prints a `Recording:` line every 5 s with the mode, copies, batches and fences via the copy
+threads, busy % of the single recorder and of each worker, segments, cuts and skipped cuts per
+frame, the cost of beginning and ending a segment, and the submit wait. `CutPoint` is called in
+`DrawRecord`, `DrawIndirectRecord`, `DispatchRecord` and `DispatchIndirectRecord`; debug label
+depth comes from `Rasterizer::ScopeMarkerBegin/End`.
+
 ## 1. Summary
 
 - The single recorder `bb:VkRecorder` is saturated (93% busy). Removing waits elsewhere recovers

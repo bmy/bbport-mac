@@ -363,6 +363,11 @@ bool Instance::CreateDevice() {
         compute_shader_derivatives_features =
             feature_chain.get<vk::PhysicalDeviceComputeShaderDerivativesFeaturesKHR>();
     }
+#ifdef __APPLE__
+    // bbport: MetalFX upscaler (vk_metalfx): KosmicKrisp exports memory as MTLHeaps. The name
+    // macro lives in vulkan_metal.h, outside this file's platform defines.
+    external_memory_metal = add_extension("VK_EXT_external_memory_metal");
+#endif
     shader_clock = add_extension(VK_KHR_SHADER_CLOCK_EXTENSION_NAME);
     if (shader_clock) {
         shader_clock_features = feature_chain.get<vk::PhysicalDeviceShaderClockFeaturesKHR>();

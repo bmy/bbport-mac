@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <iterator>
 #include <mutex>
 
 #include <SDL3/SDL.h>
@@ -175,13 +176,24 @@ void Menu() {
 
     ImGui::SeparatorText("Временной апскейлер");
     static const char* upscalers[] = {"Выкл", "FSR 3.1", "FSR 4 (INT8)", "FSR 4.1.1 (INT8)",
-                                     "TAA (нативное сглаживание)"};
-    static const char* later[] = {"DLSS", "XeSS"};
+                                     "TAA (нативное сглаживание)", "MetalFX (Apple)"};
+    static_assert(std::size(upscalers) == BbSettings::UpscalerCount);
     int upscaler = s.upscaler;
     if (ImGui::BeginCombo("Апскейлер", upscalers[upscaler])) {
         for (int i = 0; i < BbSettings::UpscalerCount; ++i) {
             const bool supported = i == BbSettings::UpscalerFsr4 ? s.fsr4_supported.load()
-                : i == BbSettings::UpscalerFsr411 ? s.fsr411_supported.load() : true;
+                : i == BbSettings::UpscalerFsr411 ? s.fsr411_supported.load()
+                : i == BbSettings::UpscalerMetalFx ? s.metalfx_supported.load() : true;
+#ifdef __APPLE__
+            // bbport: FSR 4 needs INT8 dot products and compute derivatives that KosmicKrisp lacks.
+            if (BbSettings::IsFsr4(i) && !supported) {
+                continue;
+            }
+#else
+            if (i == BbSettings::UpscalerMetalFx) {
+                continue; // macOS only
+            }
+#endif
             ImGui::BeginDisabled(!supported);
             if (ImGui::Selectable(upscalers[i], i == upscaler)) {
                 Store(s.upscaler, i, true);
@@ -192,6 +204,8 @@ void Menu() {
                 ImGui::TextDisabled("— не поддерживается видеокартой");
             }
         }
+#ifndef __APPLE__ // bbport: DLSS needs an NVIDIA GPU and driver, XeSS is not ported to macOS.
+        static const char* later[] = {"DLSS", "XeSS"};
         for (const char* name : later) {
             ImGui::BeginDisabled();
             ImGui::Selectable(name, false);
@@ -199,8 +213,21 @@ void Menu() {
             ImGui::SameLine();
             ImGui::TextDisabled("— в работе");
         }
+#endif
         ImGui::EndCombo();
     }
+#ifdef __APPLE__
+    if (const char* problem = s.metalfx_problem.load()) {
+        ImGui::PushTextWrapPos();
+        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f), "MetalFX недоступен: %s", problem);
+        ImGui::PopTextWrapPos();
+    }
+    if (s.upscaler == BbSettings::UpscalerMetalFx) {
+        Hint("MetalFX: временной апскейлер Apple на том же GPU, что и KosmicKrisp. Первая версия "
+             "ждёт GPU на каждом кадре, поэтому медленнее, чем могла бы. Native AA (x1.0) "
+             "работает, только если GPU поддерживает масштаб 1: иначе выберите другой пресет.");
+    }
+#endif
     if (const char* problem = s.fsr4_problem.load()) {
         ImGui::PushTextWrapPos();
         ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f), "FSR 4 недоступен: %s", problem);
@@ -415,6 +442,7 @@ void FpsCounter() {
                 : s.upscaler == BbSettings::UpscalerFsr4 ? "FSR 4"
                 : s.upscaler == BbSettings::UpscalerFsr411 ? "FSR 4.1.1"
                 : s.upscaler == BbSettings::UpscalerTaa ? "TAA"
+                : s.upscaler == BbSettings::UpscalerMetalFx ? "MetalFX"
                                                          : "");
     ImGui::End();
 }

@@ -246,6 +246,20 @@ bool GraphicsPipeline::SerializationSupport::Deserialize(Serialization::Archive&
 bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
     sel.graphics_key.Deserialize(ar);
 
+    // bbport: the cache outlives the driver. Pipelines stored while the driver had a geometry or
+    // tessellation stage can't be built without it: the stage feeding the geometry shader is not
+    // a valid vertex shader (KosmicKrisp: "invalid return type", then an assertion). Draws that
+    // need them are skipped at run time anyway.
+    const auto has_stage = [&](Shader::SwStage stage) {
+        return sel.graphics_key.stage_hashes[static_cast<u32>(stage)] != 0;
+    };
+    if ((has_stage(Shader::SwStage::Geometry) && !instance.IsGeometryStageSupported()) ||
+        ((has_stage(Shader::SwStage::TessellationControl) ||
+          has_stage(Shader::SwStage::TessellationEval)) &&
+         !instance.IsTessellationSupported())) {
+        return false;
+    }
+
     GraphicsPipeline::SerializationSupport sdata{};
     sdata.Deserialize(ar);
 

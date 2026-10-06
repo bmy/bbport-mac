@@ -25,6 +25,8 @@ grep -q '^upscaler=' "$ini" 2>/dev/null || echo "upscaler=off" >> "$ini"
 # (FSR 3.1, MetalFX, TAA) smear animated characters. BB_OBJECT_MOTION=0 turns them off.
 grep -q '^object_motion=' "$ini" 2>/dev/null || echo "object_motion=1" >> "$ini"
 # Keep a copy of everything the port prints for diagnosis.
+# Keep the previous run's log: a quick relaunch would otherwise overwrite the one to report.
+[[ -f out/last-run.log ]] && mv -f out/last-run.log out/previous-run.log
 exec > >(tee out/last-run.log) 2>&1
 echo "macOS run: $(sw_vers -productVersion), game $BB_GAME_DIR, fps $BB_FPS, upscaler ${BB_UPSCALER:-from $ini}"
 exec bash run.sh "$@"

@@ -11,6 +11,7 @@ Russian and English (bbport_i18n: the Russian text is the key).
 import json
 import os
 import signal
+import subprocess
 import sys
 from pathlib import Path
 from bbport_assets import fsr411_problem
@@ -25,6 +26,7 @@ from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 PORT_DIR = Path(__file__).resolve().parent.parent  # native_probe (or the package's copy)
 sys.path.insert(0, str(PORT_DIR / 'scripts'))
 from mods import discover as discover_mods  # noqa: E402
+import game_check  # noqa: E402
 from patches import external_patches  # noqa: E402
 # Packaged (AppImage): generated files, saves and bbport.ini live in BB_DATA_DIR.
 PACKAGED = bool(os.environ.get("BB_PREBUILT"))
@@ -59,11 +61,17 @@ FPS_MODES = [("Без ограничения (патч)", "uncap"), ("60", "60")
              ("30 (как на PS4)", "30")]
 PRESENT_MODES = [("Mailbox", "Mailbox"), ("FIFO (VSync)", "Fifo"),
                  ("FIFO Relaxed", "FifoRelaxed"), ("Immediate", "Immediate")]
-DRAW_PIPE = [("Авто (8+ потоков)", ""), ("Включён", "1"), ("Выключен (стабильнее)", "0")]
+# A third element is a note shown under the row's title while that choice is selected: the
+# choice labels stay short, so the selected one is shown in full.
+DRAW_PIPE = [("Авто", "", "Включён при 8 и более потоках процессора"), ("Включён", "1"),
+             ("Выключен", "0", "Стабильнее, но медленнее")]
 LANGUAGES = [("Английский", "1"), ("Русский", "8"), ("Японский", "0"), ("Французский", "2"),
              ("Испанский", "3"), ("Немецкий", "4"), ("Итальянский", "5")]
 LIVE_RESOLUTION = [("Авто (по видеокарте)", "auto"), ("Выключена (быстрее)", "0"), ("Включена", "1")]
-READBACKS = [("Relaxed (по умолчанию)", ""), ("Выключены", "0"), ("Precise", "2")]
+READBACKS = [("Relaxed", "", "По умолчанию"), ("Выключены", "0"), ("Precise", "2")]
+# Background pre-upload of the game's GPU memory into VRAM (BB_PREUPLOAD): auto = on with a discrete GPU.
+PREUPLOAD = [("Обычная", "", "Без лишней видеопамяти"), ("Полная", "2", "Около 3 ГБ видеопамяти сверху"),
+             ("Выключена", "0")]
 
 DEFAULTS = {
     "ui_language": "",
@@ -76,12 +84,18 @@ DEFAULTS = {
     "fullscreen": False,
     "hdr": False,
     "present_mode": "Mailbox",
+    "gamepad": "",
+    "gamepad_name": "",
     "fps_mode": "uncap",
     "fps_limit": 0,
     "draw_pipe": "",
     "readbacks": "",
+    "preupload": "",
     "mangohud": False,
     "frame_stats": False,
+    "save_log": False,
+    "crash_diag": False,
+    "new_memory_model": False,
     "gpu_profile": False,
     "vk_validation": False,
     "extra_env": "",
@@ -135,21 +149,23 @@ def load_ini():
 
 
 def save_ini(values, lines):
-    """Rewrites the edited keys in place, appends missing ones, keeps comments and others."""
+    """Rewrites the edited keys in place, appends missing ones, keeps comments and others; a key
+    whose value is None is removed (a control binding back to its default)."""
     written = set()
     out = []
     for line in lines:
         if "=" in line and not line.lstrip().startswith("#"):
             key = line.split("=", 1)[0].strip()
             if key in values:
-                out.append(f"{key}={values[key]}")
+                if values[key] is not None:
+                    out.append(f"{key}={values[key]}")
                 written.add(key)
                 continue
         out.append(line)
     if not lines:
         out.append("# bbport settings (in-game menu: Insert / L3+R3)")
     for key, value in values.items():
-        if key not in written:
+        if key not in written and value is not None:
             out.append(f"{key}={value}")
     ini_path().write_text("\n".join(out) + "\n")
 
@@ -172,6 +188,8 @@ def game_environment(s):
     env["BB_LANGUAGE"] = s["language"]
     env["BB_FULLSCREEN"] = "1" if s["fullscreen"] else "0"
     env["BB_PRESENT_MODE"] = s["present_mode"]
+    if s.get("gamepad"):
+        env["BB_GAMEPAD"] = s["gamepad"]
     if s["hdr"]:
         env["BB_HDR"] = "1"
     env["BB_FPS"] = s["fps_mode"]
@@ -181,10 +199,20 @@ def game_environment(s):
         env["BB_DRAW_PIPE"] = s["draw_pipe"]
     if s["readbacks"]:
         env["BB_READBACKS"] = s["readbacks"]
+    if s.get("preupload"):
+        env["BB_PREUPLOAD"] = s["preupload"]
     if s["mangohud"]:
         env["MANGOHUD"] = "1"
     if s["frame_stats"]:
         env["BB_FRAME_STATS"] = "1"
+    if s.get("save_log"):
+        env["BB_SAVE_LOG"] = "1"
+    # The PC memory model is experimental and off by default (run.sh); the keys "pc_memory" and
+    # "old_memory_model" of older settings are ignored.
+    env["BB_GUEST_IN_PLACE"] = "1" if s.get("new_memory_model") else "0"
+    if s.get("crash_diag"):
+        env["BB_FREE_CHECK"] = "1"
+        env["BB_WRITE_LOG"] = "1"
     if s["gpu_profile"]:
         env["BB_GPU_PROFILE"] = "1"
     if s["vk_validation"]:
@@ -213,18 +241,65 @@ def open_folder(window, path):
 
 
 def combo_row(title, subtitle, choices, current):
-    model = Gtk.StringList.new([tr(label) for label, _ in choices])
+    model = Gtk.StringList.new([tr(choice[0]) for choice in choices])
     row = Adw.ComboRow(title=title, model=model)
-    if subtitle:
-        row.set_subtitle(subtitle)
-    values = [value for _, value in choices]
+    values = [choice[1] for choice in choices]
+    notes = [tr(choice[2]) if len(choice) > 2 else None for choice in choices]
+
+    def show_note(*_):
+        lines = [line for line in (subtitle, notes[row.get_selected()]) if line]
+        row.set_subtitle("\n".join(lines))
+
     row.set_selected(values.index(current) if current in values else 0)
+    show_note()
+    row.connect("notify::selected", show_note)
     row.values = values
     return row
 
 
 def combo_value(row):
     return row.values[row.get_selected()]
+
+
+# Controls (runtime_pad.c): input, label, default keyboard keys, default gamepad buttons (SDL names).
+# bbport.ini key.<input>= / pad.<input>= replace a default; no line keeps it.
+CONTROLS = [
+    ("cross", "Крест", "Space", "a"),
+    ("circle", "Круг", "Left Shift", "b"),
+    ("square", "Квадрат", "E", "x"),
+    ("triangle", "Треугольник", "Q", "y"),
+    ("l1", "L1", "1", "leftshoulder"),
+    ("r1", "R1", "3", "rightshoulder"),
+    ("l2", "L2", "R", "lefttrigger"),
+    ("r2", "R2", "F", "righttrigger"),
+    ("l3", "L3", "Z", "leftstick"),
+    ("r3", "R3", "C", "rightstick"),
+    ("options", "Options", "Return", "start"),
+    ("touchpad", "Тачпад, левая половина", "Tab", "back, touchpad"),
+    ("touchpad_right", "Тачпад, правая половина", "Backspace", ""),
+    ("up", "Крестовина вверх", "I", "dpup"),
+    ("down", "Крестовина вниз", "K", "dpdown"),
+    ("left", "Крестовина влево", "J", "dpleft"),
+    ("right", "Крестовина вправо", "L", "dpright"),
+    ("move_up", "Движение вперёд", "W", None),
+    ("move_down", "Движение назад", "S", None),
+    ("move_left", "Движение влево", "A", None),
+    ("move_right", "Движение вправо", "D", None),
+    ("look_up", "Камера вверх", "Up", None),
+    ("look_down", "Камера вниз", "Down", None),
+    ("look_left", "Камера влево", "Left", None),
+    ("look_right", "Камера вправо", "Right", None),
+]
+
+
+def connected_gamepads():
+    """(GUID, name) of the connected gamepads (bb-gpu-capabilities --gamepads), [] if unknown."""
+    tool = PORT_DIR / ("bin" if PACKAGED else "out") / "bb-gpu-capabilities"
+    try:
+        run = subprocess.run([str(tool), "--gamepads"], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [tuple(line.split("\t", 1)) for line in run.stdout.splitlines() if "\t" in line]
 
 
 class FolderList:
@@ -385,6 +460,36 @@ class LauncherWindow(Adw.ApplicationWindow):
         screen.add(self.hdr_row)
         page.add(screen)
 
+        # Issue #15: the first gamepad SDL found was taken (wheels and other controllers too).
+        controls = Adw.PreferencesGroup(title=tr("Управление"))
+        self.gamepad_row = Adw.ComboRow(title=tr("Контроллер"))
+        # Controller names are long: the selected one is shown in full under the title.
+        self.gamepad_row.connect("notify::selected", lambda *_: self.show_gamepad())
+        self.gamepad_row.add_suffix(flat_button("view-refresh-symbolic", tr("Обновить список"),
+                                                lambda _button: self.fill_gamepads()))
+        self.fill_gamepads()
+        controls.add(self.gamepad_row)
+        # Bindings: "Assign" waits for a key or button (bb-gpu-capabilities --read-input).
+        self.control_rows = {}
+        for kind, title, icon in (("key", tr("Клавиатура"), "input-keyboard-symbolic"),
+                                  ("pad", tr("Геймпад"), "input-gaming-symbolic")):
+            expander = Adw.ExpanderRow(title=title,
+                                       subtitle=tr("Назначение кнопок; применяется при запуске игры"))
+            for name, label, key_default, pad_default in CONTROLS:
+                default = key_default if kind == "key" else pad_default
+                if default is None:
+                    continue
+                row = Adw.ActionRow(title=tr(label))
+                row.add_suffix(flat_button(icon, tr("Назначить"),
+                                           lambda _b, k=kind, n=name: self.assign_control(k, n)))
+                row.add_suffix(flat_button("edit-undo-symbolic", tr("Сбросить"),
+                                           lambda _b, k=kind, n=name: self.set_control(k, n, None)))
+                expander.add_row(row)
+                self.control_rows[(kind, name)] = (row, default)
+                self.show_control(kind, name)
+            controls.add(expander)
+        page.add(controls)
+
         upscaler = Adw.PreferencesGroup(
             title=tr("Апскейлер"),
             description=tr("Хранится в bbport.ini; в игре меняется через меню (Insert или L3+R3)"))
@@ -435,8 +540,7 @@ class LauncherWindow(Adw.ApplicationWindow):
         frames.add(self.fps_row)
         self.limit_row = Adw.SpinRow.new_with_range(0, 480, 1)
         self.limit_row.set_title(tr("Ограничение FPS"))
-        self.limit_row.set_subtitle(tr("0 — по частоте экрана (не выше 120 Гц); "
-                                       "укажите число, чтобы ограничить иначе"))
+        self.limit_row.set_subtitle(tr("0 — без ограничения; укажите число, чтобы ограничить FPS"))
         self.limit_row.set_value(self.settings["fps_limit"])
         frames.add(self.limit_row)
         page.add(frames)
@@ -450,11 +554,32 @@ class LauncherWindow(Adw.ApplicationWindow):
         self.readbacks_row = combo_row(tr("Чтение данных GPU процессором"), None, READBACKS,
                                        self.settings["readbacks"])
         perf.add(self.readbacks_row)
+        self.preupload_row = combo_row(
+            tr("Фоновая загрузка в видеопамять"),
+            tr("Меньше рывков при подгрузке зон"), PREUPLOAD,
+            self.settings.get("preupload", ""))
+        perf.add(self.preupload_row)
+        self.new_memory_row = Adw.SwitchRow(
+            title=tr("Новая модель памяти (экспериментально)"),
+            subtitle=tr("Как у игры для ПК: быстрее и меньше рывков. Проверена только на RX 7800 XT "
+                        "и Steam Deck, может вылетать, на NVIDIA работает неправильно"),
+            active=self.settings.get("new_memory_model", False))
+        perf.add(self.new_memory_row)
         page.add(perf)
 
         dev = Adw.PreferencesGroup(title=tr("Для разработчика"))
         self.mangohud_row = Adw.SwitchRow(title="MangoHud", active=self.settings["mangohud"])
         dev.add(self.mangohud_row)
+        self.save_log_row = Adw.SwitchRow(
+            title=tr("Сохранять журнал и статистику в файл"),
+            subtitle=tr("В папку logs в каталоге данных: для разбора рывков и вылетов"),
+            active=self.settings.get("save_log", False))
+        dev.add(self.save_log_row)
+        self.crash_diag_row = Adw.SwitchRow(
+            title=tr("Диагностика вылетов"),
+            subtitle=tr("Проверяет кучу игры и записывает записи в её память; немного медленнее"),
+            active=self.settings.get("crash_diag", False))
+        dev.add(self.crash_diag_row)
         self.stats_row = Adw.SwitchRow(title=tr("Статистика кадров в журнале"),
                                        subtitle="BB_FRAME_STATS",
                                        active=self.settings["frame_stats"])
@@ -553,12 +678,40 @@ class LauncherWindow(Adw.ApplicationWindow):
         self.sharpness_row.set_sensitive(value != "off")
         self.upscaler_row.set_subtitle(hint or "")
 
+    def game_problem(self, path):
+        """game_check.problem for the folder, kept until its eboot.bin or param.sfo changes (the
+        image hash reads ~90 MB)."""
+        try:
+            key = (str(path),) + tuple(
+                (f.stat().st_size, f.stat().st_mtime_ns) for f in (path / "eboot.bin", path / "sce_sys/param.sfo"))
+        except OSError:
+            key = (str(path),)
+        if getattr(self, "_game_problem_key", None) != key:
+            self._game_problem_key = key
+            self._game_problem = game_check.problem(path)
+        return self._game_problem
+
     def update_game_status(self):
         path = self.game_dir()
         ok = bool(self.settings["game_dir"]) and (path / "eboot.bin").is_file()
         self.game_row.set_subtitle(str(path) if self.settings["game_dir"] else tr("не выбрана"))
-        self.game_status.set_from_icon_name("object-select-symbolic" if ok else "dialog-warning-symbolic")
-        self.game_status.set_tooltip_text(tr("Найден eboot.bin") if ok else tr("Нет eboot.bin в папке"))
+        # Other versions of the game start and then crash in its code (issues #7, #13, #14).
+        problem = self.game_problem(path) if ok else None
+        if not ok:
+            tooltip = tr("Нет eboot.bin в папке")
+        elif problem:
+            kind, title, version = problem
+            tooltip = {
+                "missing_update": tr("Нужно обновление 1.09: скопируйте файлы дампа обновления 1.09 в папку игры с заменой (найдена версия {})").format(version),
+                "wrong_eboot": tr("eboot.bin не от версии 1.09: скопируйте eboot.bin из дампа обновления 1.09 в папку игры с заменой"),
+                "other_title": tr("Поддерживается только CUSA03173 с обновлением 1.09 (найдено {})").format(title),
+                "unreadable": tr("eboot.bin не читается как расшифрованный исполняемый файл PS4: сделайте дамп заново"),
+            }[kind]
+            self.game_row.set_subtitle(f"{path}\n{tooltip}")
+        else:
+            tooltip = tr("Bloodborne CUSA03173, версия 1.09")
+        self.game_status.set_from_icon_name("object-select-symbolic" if ok and not problem else "dialog-warning-symbolic")
+        self.game_status.set_tooltip_text(tooltip)
         self.launch_button.set_sensitive(ok or self.process is not None)
 
     def on_choose_game(self, _button):
@@ -568,8 +721,68 @@ class LauncherWindow(Adw.ApplicationWindow):
             self.store()
         self.choose_folder(tr("Папка игры (с eboot.bin)"), self.game_dir(), chosen)
 
+    def show_control(self, kind, name):
+        row, default = self.control_rows[(kind, name)]
+        value = self.ini.get(f"{kind}.{name}")
+        if value is None:
+            row.set_subtitle(tr("{} (по умолчанию)").format(default) if default else tr("не назначено"))
+        else:
+            row.set_subtitle(value or tr("не назначено"))
+
+    def set_control(self, kind, name, value):
+        """value: the binding, or None for the default."""
+        self.ini[f"{kind}.{name}"] = value
+        self.show_control(kind, name)
+        self.store()
+
+    def assign_control(self, kind, name):
+        tool = PORT_DIR / ("bin" if PACKAGED else "out") / "bb-gpu-capabilities"
+        try:
+            process = Gio.Subprocess.new([str(tool), "--read-input", kind],
+                                         Gio.SubprocessFlags.STDOUT_PIPE)
+        except GLib.Error as error:
+            self.toasts.add_toast(Adw.Toast(title=tr("Не удалось запустить: {}").format(error.message)))
+            return
+        row, _default = self.control_rows[(kind, name)]
+        row.set_subtitle(tr("Нажмите клавишу или кнопку… (Esc — отмена)"))
+
+        def done(proc, result):
+            try:
+                _ok, out, _err = proc.communicate_utf8_finish(result)
+            except GLib.Error:
+                out = ""
+            words = (out or "").strip().split(" ", 1)
+            if len(words) == 2 and words[0] == kind:
+                self.set_control(kind, name, words[1])
+            else:
+                self.show_control(kind, name)
+        process.communicate_utf8_async(None, None, done)
+
+    def fill_gamepads(self):
+        """The controller choices: the first connected one, the connected ones, and the saved
+        choice while it is not connected."""
+        current = self.settings.get("gamepad", "")
+        choices = [(tr("Авто"), "", tr("Первый подключённый"))]
+        choices += [(name, guid, name) for guid, name in connected_gamepads()]
+        if current and current not in [guid for _, guid, _ in choices]:
+            name = self.settings.get("gamepad_name") or current
+            choices.append((tr("{} (не подключён)").format(name), current, name))
+        self.gamepad_row.set_model(Gtk.StringList.new([label for label, _, _ in choices]))
+        self.gamepad_row.values = [guid for _, guid, _ in choices]
+        self.gamepad_row.names = [name for _, _, name in choices]
+        self.gamepad_row.set_selected(self.gamepad_row.values.index(current) if current in self.gamepad_row.values else 0)
+        self.show_gamepad()
+
+    def show_gamepad(self):
+        names = getattr(self.gamepad_row, "names", None)
+        selected = names[self.gamepad_row.get_selected()] if names else ""
+        self.gamepad_row.set_subtitle("\n".join(
+            line for line in (selected, tr("Выбранный берётся, как только подключится")) if line))
+
     def store(self):
         s = self.settings
+        s["gamepad"] = combo_value(self.gamepad_row)
+        s["gamepad_name"] = self.gamepad_row.names[self.gamepad_row.get_selected()]
         s["language"] = combo_value(self.language_row)
         s["fullscreen"] = self.fullscreen_row.get_active()
         s["present_mode"] = combo_value(self.present_row)
@@ -578,8 +791,12 @@ class LauncherWindow(Adw.ApplicationWindow):
         s["fps_limit"] = int(self.limit_row.get_value())
         s["draw_pipe"] = combo_value(self.pipe_row)
         s["readbacks"] = combo_value(self.readbacks_row)
+        s["preupload"] = combo_value(self.preupload_row)
         s["mangohud"] = self.mangohud_row.get_active()
         s["frame_stats"] = self.stats_row.get_active()
+        s["save_log"] = self.save_log_row.get_active()
+        s["crash_diag"] = self.crash_diag_row.get_active()
+        s["new_memory_model"] = self.new_memory_row.get_active()
         s["gpu_profile"] = self.profile_row.get_active()
         s["vk_validation"] = self.validation_row.get_active()
         s["extra_env"] = self.extra_row.get_text().strip()

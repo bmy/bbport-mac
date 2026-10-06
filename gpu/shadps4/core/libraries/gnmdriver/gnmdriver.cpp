@@ -21,8 +21,12 @@
 #include "core/memory.h"
 #include "core/platform.h"
 #include "video_core/amdgpu/liverpool.h"
+#include "bbport_toggles.h"
+#include "bbport_timeline.h"
+#include "bbport_heap_sites.h"
 #include "video_core/amdgpu/pm4_cmds.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
+#include "video_core/renderer_vulkan/vk_rasterizer.h"
 
 extern Frontend::WindowSDL* g_window;
 std::unique_ptr<Vulkan::Presenter> presenter;
@@ -84,10 +88,126 @@ static void ResetSubmissionLock(Platform::InterruptId irq) {
     cv_lock.notify_all();
 }
 
+bool SubmitLockOnDecode() {
+    // Only with honest labels: without them the GPU idle interrupt comes at decode anyway, and
+    // IsGpuIdle keeps waiting for the deferred fences (BB_WORK_RETIRED, Steam Deck crashes).
+    static const bool on = [] {
+        const char* env = std::getenv("BB_SUBMIT_LOCK");
+        return !(env && std::string_view{env} == "gpu");
+    }();
+    return on && Vulkan::Rasterizer::HonestLabels();
+}
+
+void ReleaseSubmissionLock() {
+    std::unique_lock lock{m_wait_idle};
+    submission_lock = 0;
+    cv_lock.notify_all();
+}
+
+// bbport BB_SUBMIT_LOCK=decode: frames (sceGnmSubmitDone calls) the GPU has finished.
+static u64 frames_retired{};
+
+void NoteFramesRetired(u64 frames) {
+    BbTimeline::Note(BbTimeline::FrameRetired, frames);
+    std::unique_lock lock{m_wait_idle};
+    frames_retired = std::max(frames_retired, frames);
+    cv_lock.notify_all();
+}
+
+// BB_SUBMIT_LOCK=frame: the guest gets what the submission lock gave it - a submission made after
+// sceGnmSubmitDone returns once the GPU has finished the frame before (the game frees that frame's
+// memory then: without it, its heap ran out after ~7 minutes) - but the work is handed over first,
+// so the GPU starts the next frame instead of draining between frames.
+// BB_SUBMIT_LOCK=ahead (an experiment): submissions do not wait, sceGnmSubmitDone(F) waits for
+// frame F-1 (the guest runs up to a frame ahead of the GPU).
+static bool RunAhead() {
+    static const bool on = [] {
+        const char* env = std::getenv("BB_SUBMIT_LOCK");
+        return env && std::string_view{env} == "ahead";
+    }();
+    return on;
+}
+
+static void WaitPreviousFrame();
+
+// BB_SUBMIT_AHEAD=K (default 2): the first K submissions of a frame do not wait for the previous
+// frame, the next ones do. The game keeps two frame contexts and builds the next frame in the one
+// of the frame before the previous: the first submissions are translated while the GPU finishes
+// the previous frame instead of after it (1080p, Yahar'gul: 101 -> 154 FPS). Further on it
+// assumes the previous frame finished: K 8 or more, or no wait at all, and its heap leaked (~2
+// resource objects a frame, out of memory after minutes). Should the heap grow anyway (the game
+// asks for more memory with mmap, which it never does otherwise), K becomes 0 for the session.
+extern "C" std::uint64_t runtime_heap_growths(void);
+static u32 submits_this_frame = 0;
+static bool overlap_off = false;
+static u32 SubmitsAhead() {
+    static const u32 ahead = [] {
+        const char* env = std::getenv("BB_SUBMIT_AHEAD");
+        return env ? u32(std::max(0, std::atoi(env))) : 2u;
+    }();
+    return overlap_off ? 0u : ahead;
+}
+// Once a frame: the game's live heap allocations (malloc minus free, counted by wrappers on its
+// malloc) are watched; the leak added ~1800 a second, so 100000 over the lowest count seen is
+// taken as one (or the heap asking for more memory). Then the frames stop overlapping.
+static void WatchOverlapLeak() {
+    if (SubmitsAhead() == 0) {
+        return;
+    }
+    if (!BbHeapSites::Counting()) {
+        BbHeapSites::InstallCounters();
+        return;
+    }
+    static u64 frames = 0;
+    static long long lowest = 0;
+    const long long live = BbHeapSites::LiveAllocations();
+    if (++frames < 600 || live < lowest) {
+        lowest = live; // warming up: area loads
+        return;
+    }
+    if (live - lowest > 100000 || runtime_heap_growths() != 0) {
+        overlap_off = true;
+        std::printf("Gnm: the game's heap grows (%lld allocations over %lld): frames no longer "
+                    "overlap (BB_SUBMIT_AHEAD 0)\n",
+                    live - lowest, lowest);
+    }
+}
+static void WaitPreviousFrameAtSubmit() {
+    if (RunAhead() || ++submits_this_frame <= SubmitsAhead()) {
+        return;
+    }
+    WaitPreviousFrame();
+}
+
+static void WaitPreviousFrame() {
+    std::unique_lock lock{m_wait_idle};
+    if (frames_retired >= u64(frames_submitted)) {
+        return;
+    }
+    BbTimeline::Note(BbTimeline::GuestWaitBegin, u64(frames_submitted));
+    const auto start = std::chrono::steady_clock::now();
+    cv_lock.wait(lock, [] { return frames_retired >= u64(frames_submitted); });
+    BbStats::gnm_frame_waits.fetch_add(1, std::memory_order_relaxed);
+    BbStats::gnm_frame_wait_ns.fetch_add(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start)
+            .count(),
+        std::memory_order_relaxed);
+    BbTimeline::Note(BbTimeline::GuestWaitEnd, u64(frames_submitted));
+}
+
 static void WaitGpuIdle() {
     HLE_TRACE;
     std::unique_lock lock{m_wait_idle};
+    if (submission_lock == 0) {
+        return;
+    }
+    const auto start = std::chrono::steady_clock::now();
     cv_lock.wait(lock, [] { return submission_lock == 0; });
+    BbStats::gnm_frame_waits.fetch_add(1, std::memory_order_relaxed);
+    BbStats::gnm_frame_wait_ns.fetch_add(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start)
+            .count(),
+        std::memory_order_relaxed);
 }
 
 // Write a special ending NOP packet with N DWs data block
@@ -162,7 +282,13 @@ s32 PS4_SYSV_ABI sceGnmAddEqEvent(OrbisKernelEqueue eq, u64 id, void* udata) {
 
 int PS4_SYSV_ABI sceGnmAreSubmitsAllowed() {
     LOG_TRACE(Lib_GnmDriver, "called");
-    return submission_lock == 0;
+    // bbport (frame stats): how often the guest asks, and how often it hears no.
+    const bool allowed = submission_lock == 0;
+    BbStats::submits_allowed_queries.fetch_add(1, std::memory_order_relaxed);
+    if (!allowed) {
+        BbStats::submits_refused.fetch_add(1, std::memory_order_relaxed);
+    }
+    return allowed;
 }
 
 int PS4_SYSV_ABI sceGnmBeginWorkload(u32 workload_stream, u64* workload) {
@@ -299,7 +425,9 @@ void PS4_SYSV_ABI sceGnmDingDong(u32 gnm_vqid, u32 next_offs_dw) {
     }
 
     std::scoped_lock lk{m_submit_lock};
-    WaitGpuIdle();
+    if (!SubmitLockOnDecode()) {
+        WaitGpuIdle();
+    }
 
     if (DebugState.ShouldPauseInSubmit()) {
         DebugState.PauseGuestThreads();
@@ -311,6 +439,9 @@ void PS4_SYSV_ABI sceGnmDingDong(u32 gnm_vqid, u32 next_offs_dw) {
     auto& offs_dw = asc_next_offs_dw[vqid];
 
     if (next_offs_dw == offs_dw) {
+        if (SubmitLockOnDecode()) {
+            WaitPreviousFrameAtSubmit();
+        }
         return;
     }
 
@@ -361,6 +492,9 @@ void PS4_SYSV_ABI sceGnmDingDong(u32 gnm_vqid, u32 next_offs_dw) {
         });
     }
     liverpool->SubmitAsc(gnm_vqid, acb_span);
+    if (SubmitLockOnDecode()) {
+        WaitPreviousFrameAtSubmit(); // handed over first, as the graphics submissions
+    }
 }
 
 void PS4_SYSV_ABI sceGnmDingDongForWorkload(u32 gnm_vqid, u32 next_offs_dw, u64 workload_id) {
@@ -2296,7 +2430,9 @@ s32 PS4_SYSV_ABI sceGnmSubmitAndFlipCommandBuffersForWorkload(
     const auto size_dw = dcb_sizes_in_bytes[count - 1] / 4;
 
     std::scoped_lock lk{m_submit_lock};
-    WaitGpuIdle();
+    if (!SubmitLockOnDecode()) {
+        WaitGpuIdle();
+    }
 
     const s32 patch_result =
         PatchFlipRequest(cmdbuf, size_dw, vo_handle, buf_idx, flip_mode, flip_arg, nullptr /*unk*/);
@@ -2304,8 +2440,12 @@ s32 PS4_SYSV_ABI sceGnmSubmitAndFlipCommandBuffersForWorkload(
         return patch_result;
     }
 
-    return PerformSubmit(count, const_cast<const u32**>(dcb_gpu_addrs), dcb_sizes_in_bytes,
-                         const_cast<const u32**>(ccb_gpu_addrs), ccb_sizes_in_bytes);
+    const s32 result = PerformSubmit(count, const_cast<const u32**>(dcb_gpu_addrs), dcb_sizes_in_bytes,
+                                     const_cast<const u32**>(ccb_gpu_addrs), ccb_sizes_in_bytes);
+    if (SubmitLockOnDecode()) {
+        WaitPreviousFrameAtSubmit();
+    }
+    return result;
 }
 
 s32 PS4_SYSV_ABI sceGnmSubmitCommandBuffersForWorkload(u32 workload, u32 count,
@@ -2339,10 +2479,16 @@ s32 PS4_SYSV_ABI sceGnmSubmitCommandBuffersForWorkload(u32 workload, u32 count,
     }
 
     std::scoped_lock lk{m_submit_lock};
-    WaitGpuIdle();
+    if (!SubmitLockOnDecode()) {
+        WaitGpuIdle();
+    }
 
-    return PerformSubmit(count, const_cast<const u32**>(dcb_gpu_addrs), dcb_sizes_in_bytes,
-                         const_cast<const u32**>(ccb_gpu_addrs), ccb_sizes_in_bytes);
+    const s32 result = PerformSubmit(count, const_cast<const u32**>(dcb_gpu_addrs), dcb_sizes_in_bytes,
+                                     const_cast<const u32**>(ccb_gpu_addrs), ccb_sizes_in_bytes);
+    if (SubmitLockOnDecode()) {
+        WaitPreviousFrameAtSubmit();
+    }
+    return result;
 }
 
 s32 PS4_SYSV_ABI sceGnmSubmitCommandBuffers(u32 count, const u32* dcb_gpu_addrs[],
@@ -2354,15 +2500,26 @@ s32 PS4_SYSV_ABI sceGnmSubmitCommandBuffers(u32 count, const u32* dcb_gpu_addrs[
 
 s32 PS4_SYSV_ABI sceGnmSubmitDone() {
     HLE_TRACE;
+    BbStats::submit_done_calls.fetch_add(1, std::memory_order_relaxed);
+    BbTimeline::Note(BbTimeline::GuestSubmitDone, u64(frames_submitted) + 1);
     LOG_DEBUG(Lib_GnmDriver, "called");
     std::scoped_lock lk{m_submit_lock};
-    WaitGpuIdle();
-    if (!liverpool->IsGpuIdle()) {
-        submission_lock = true;
+    if (SubmitLockOnDecode()) {
+        // A frame without submissions waits here, as the lock made sceGnmSubmitDone wait.
+        WaitPreviousFrame();
+        submits_this_frame = 0;
+        WatchOverlapLeak();
+        ++frames_submitted;
+        liverpool->SubmitDone(u64(frames_submitted));
+    } else {
+        WaitGpuIdle();
+        if (!liverpool->IsGpuIdle()) {
+            submission_lock = true;
+        }
+        ++frames_submitted;
+        liverpool->SubmitDone();
     }
-    liverpool->SubmitDone();
     send_init_packet = true;
-    ++frames_submitted;
     DebugState.IncGnmFrameNum();
     return ORBIS_OK;
 }
@@ -2925,10 +3082,6 @@ void RegisterLib(Core::Loader::SymbolsResolver* sym) {
     const s32 result = sceKernelGetCompiledSdkVersion(&sdk_version);
     if (result != ORBIS_OK) {
         sdk_version = 0;
-    }
-
-    if (EmulatorSettings.IsCopyGpuBuffers()) {
-        liverpool->ReserveCopyBufferSpace();
     }
 
     Platform::IrqC::Instance()->Register(Platform::InterruptId::GpuIdle, ResetSubmissionLock,

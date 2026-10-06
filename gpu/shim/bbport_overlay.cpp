@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <iterator>
 #include <mutex>
+#include <string>
 
 #include <SDL3/SDL.h>
 #include "bbport_lang.h"
@@ -59,6 +60,12 @@ std::atomic<bool> menu_open{false};
 bool l3_down = false, r3_down = false;
 bool dirty = false; // settings changed while open: saved on close
 float base_scale = 1.0f;
+
+// The game's text dialog (ImeDialog, the character name), typed on the keyboard: drawn while it
+// is open. In fullscreen the window title that showed it is not visible (issues #17, #19).
+std::mutex prompt_mutex;
+std::atomic<bool> prompt_active{false};
+std::string prompt_title, prompt_text;
 
 // Present rate for the FPS counter.
 std::chrono::steady_clock::time_point last_present{};
@@ -533,7 +540,40 @@ void FpsCounter() {
     ImGui::End();
 }
 
+void TextPrompt() {
+    std::string title, text;
+    {
+        std::scoped_lock lock{prompt_mutex};
+        title = prompt_title;
+        text = prompt_text;
+    }
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
+                                   viewport->WorkPos.y + viewport->WorkSize.y * 0.5f),
+                            ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowBgAlpha(0.9f);
+    ImGui::Begin("##textprompt", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                     ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
+                     ImGuiWindowFlags_NoFocusOnAppearing);
+    ImGui::TextUnformatted(title.c_str());
+    ImGui::Separator();
+    ImGui::Text("%s_", text.c_str());
+    ImGui::Separator();
+    ImGui::TextUnformatted("Keyboard: type, Backspace = delete, Enter = OK, Esc = cancel");
+    ImGui::End();
+}
+
 } // namespace
+
+void SetTextPrompt(bool active, const std::string& prompt, const std::string& text) {
+    {
+        std::scoped_lock lock{prompt_mutex};
+        prompt_title = prompt;
+        prompt_text = text;
+    }
+    prompt_active = active;
+}
 
 void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) {
     std::scoped_lock lock{imgui_mutex};
@@ -715,11 +755,12 @@ bool HandleEvent(const SDL_Event& event) {
 }
 
 bool Visible() {
-    return initialized && (menu_open || BbSettings::Get().show_fps);
+    return initialized && (menu_open || prompt_active || BbSettings::Get().show_fps);
 }
 
 bool CapturesInput() {
-    return menu_open;
+    // The text dialog too: keys typed into it (Backspace is the touchpad) stay out of the game.
+    return menu_open || prompt_active;
 }
 
 void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
@@ -753,6 +794,9 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
     }
     if (BbSettings::Get().show_fps && !menu_open) {
         FpsCounter();
+    }
+    if (prompt_active && !menu_open) {
+        TextPrompt();
     }
     ImGui::Render();
 

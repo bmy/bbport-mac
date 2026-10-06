@@ -28,6 +28,7 @@
 #include <fcntl.h>
 #include <dlfcn.h>
 #include <execinfo.h>
+#include <pthread.h>
 #include <sys/uio.h>
 #ifdef __APPLE__
 #include <mach/mach.h>
@@ -146,6 +147,26 @@ static void fault(int sig, siginfo_t *info, void *context) {
         snprintf(line, sizeof(line), "Fault (signal %d) at RIP %p, address %p\n", sig, (void *)rip, info->si_addr);
     { ssize_t written_=write(2, line, strlen(line)); (void)written_; }
     if (gpu_enabled) bbgpu_dump_guest_writes(context);
+    /* Outside the image and any shared object (generated code, a freed mapping): the mapping
+     * from /proc/self/maps, and the thread. */
+    if (rip - (uintptr_t)image >= 0x10000000 && !(dladdr((void *)rip, &where) && where.dli_fname)) {
+        char thread[32] = "?";
+        pthread_getname_np(pthread_self(), thread, sizeof(thread));
+        snprintf(line, sizeof(line), "  thread %s; mapping of RIP: ", thread);
+        { ssize_t written_=write(2, line, strlen(line)); (void)written_; }
+        FILE *maps = fopen("/proc/self/maps", "r");
+        int found = 0;
+        while (maps && fgets(line, sizeof(line), maps)) {
+            unsigned long from, to;
+            if (sscanf(line, "%lx-%lx", &from, &to) == 2 && rip >= from && rip < to) {
+                ssize_t written_=write(2, line, strlen(line)); (void)written_;
+                found = 1;
+                break;
+            }
+        }
+        if (maps) fclose(maps);
+        if (!found) { ssize_t written_=write(2, "none\n", 5); (void)written_; }
+    }
     /* Host call chain (frames with unwind info; guest frames end it). */
     void *frames[32];
     int depth = backtrace(frames, 32);

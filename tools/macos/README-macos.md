@@ -91,8 +91,8 @@ The overlay menu (upscaler, FPS counter, effects) opens with **F1**, **`` ` ``**
 - The app says "not built yet": run `bash tools/macos/build.sh`.
 - `swift build` fails in `build_launcher.sh`: send the whole terminal output.
 - The build fails: `out/gpu-errors.txt` and `out/loader-build.log` hold the errors.
-- If it crashes after switching to full screen: make sure `BB_COPIES_OFF_RECORDER` is not set
-  to 1, since experimental two-thread recording has a known full-screen crash.
+- If it crashes or freezes with recording on several threads, try `BB_VK_RECORD_THREADS=1`
+  (and, separately, `BB_ASYNC_SUBMIT=0`) and say which one helped.
 - If it runs slowly: turn Low Power Mode off and plug the Mac in.
 - The black screen lasts much longer than usual: check whether the log is still moving. The
   pipeline preload reports its count and time there when it finishes.

@@ -7,7 +7,7 @@ cd -- "$(dirname -- "$0")/../.."
 R=$(realpath "$1")
 frames=${2:-8}
 export WINEPREFIX=$R/pfx GAMEID=umu-fsr4cap WINEDEBUG=-all
-export PROTONPATH=${PROTONPATH:-$(ls -d "$HOME"/.local/share/Steam/compatibilitytools.d/GE-Proton* | tail -1)}
+source tools/fsr4cap/proton.sh
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 fail=0

@@ -112,7 +112,7 @@ pkgs.stdenv.mkDerivation {
       --set BB_PREBUILT 1 \
       --set PYTHON ${pkgs.python3}/bin/python3 \
       --set BB_BUNDLED_VK_DRIVER_FILES ${icds} \
-      --prefix PATH : ${lib.makeBinPath [ pkgs.bash pkgs.coreutils pkgs.util-linux ]} \
+      --prefix PATH : ${lib.makeBinPath [ pkgs.bash pkgs.coreutils pkgs.util-linux pkgs.procps ]} \
       --run 'export BB_DATA_DIR=''${BB_DATA_DIR:-''${XDG_DATA_HOME:-$HOME/.local/share}/bbport}; mkdir -p "$BB_DATA_DIR"'
     # The game alone, without the launcher (settings from the data directory's bbport.ini).
     makeShellWrapper ${pkgs.python3}/bin/python3 $out/bin/bbport-game \
@@ -120,7 +120,7 @@ pkgs.stdenv.mkDerivation {
       --set BB_PREBUILT 1 \
       --set PYTHON ${pkgs.python3}/bin/python3 \
       --set BB_BUNDLED_VK_DRIVER_FILES ${icds} \
-      --prefix PATH : ${lib.makeBinPath [ pkgs.bash pkgs.coreutils ]} \
+      --prefix PATH : ${lib.makeBinPath [ pkgs.bash pkgs.coreutils pkgs.procps ]} \
       --run 'export BB_DATA_DIR=''${BB_DATA_DIR:-''${XDG_DATA_HOME:-$HOME/.local/share}/bbport}; mkdir -p "$BB_DATA_DIR"'
   '';
   meta.mainProgram = "bbport";

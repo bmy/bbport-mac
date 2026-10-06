@@ -13,6 +13,7 @@
 #include "video_core/renderdoc.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 #include "bbport_overlay.h"
+#include "bbport_timeline.h"
 #include "video_core/renderer_vulkan/vk_temporal_upscaler.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
@@ -257,6 +258,9 @@ Frame* Presenter::PrepareLastFrame() {
         if (result == vk::Result::eTimeout) {
             continue;
         }
+        if (result == vk::Result::eErrorDeviceLost) {
+            Breadcrumbs::ReportDeviceLost("waiting for a frame");
+        }
         ASSERT_MSG(result != vk::Result::eErrorDeviceLost,
                    "Device lost during waiting for a frame");
     }
@@ -315,6 +319,7 @@ static vk::Format GetFrameViewFormat(const Libraries::VideoOut::PixelFormat form
 
 Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& attribute,
                                VAddr cpu_address) {
+    BbTimeline::Note(BbTimeline::PipeTask, 4, draw_scheduler.CurrentTick());
     // bbport: scaled upscaler presets: the output-size display buffer drawn by the port.
     TemporalUpscaler::Display display{};
     const bool upscaled = rasterizer->GetUpscaler().DisplayOverride(cpu_address, display);
@@ -394,22 +399,31 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     }
     expected_ratio = static_cast<float>(image_size.width) / static_cast<float>(image_size.height);
 
-    image_view = fsr_pass.Render(cmdbuf, image_view, image_size, {frame->width, frame->height},
-                                 fsr_settings, frame->is_hdr);
+    {
+        const Breadcrumbs::Scope crumb{cmdbuf, draw_scheduler.CrumbStream(), "presenter FSR"};
+        image_view = fsr_pass.Render(cmdbuf, image_view, image_size, {frame->width, frame->height},
+                                     fsr_settings, frame->is_hdr);
+    }
 
     // Vulkan has no sRGB variant of the 10-bit format, so an A2R10G10B10Srgb buffer reaches
     // the post process pass still sRGB encoded and has to be decoded there instead.
     pp_settings.srgb_input =
         attribute.attrib.pixel_format == Libraries::VideoOut::PixelFormat::A2R10G10B10Srgb;
-    pp_pass.Render(cmdbuf, image_view, image_size, *frame, pp_settings);
+    {
+        const Breadcrumbs::Scope crumb{cmdbuf, draw_scheduler.CrumbStream(),
+                                       "presenter post process"};
+        pp_pass.Render(cmdbuf, image_view, image_size, *frame, pp_settings);
+    }
 
 
 
     // Flush frame creation commands.
+    BbStats::frame_number.fetch_add(1, std::memory_order_relaxed); // bbport: game frames shown
     frame->ready_semaphore = draw_scheduler.GetWorkSemaphore()->Handle();
     frame->ready_tick = draw_scheduler.CurrentTick();
     SubmitInfo info{};
     draw_scheduler.Flush(info);
+    BbTimeline::Note(BbTimeline::PipeTask, 5, frame->ready_tick);
 
     // bbport: the GPU command thread runs at most BB_FRAMES_AHEAD (default 1) guest frames
     // ahead of the GPU: it waits here for the frame that many flips back. When the GPU is the
@@ -426,6 +440,7 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
             const u64 tick = recent_frame_ticks.front();
             recent_frame_ticks.pop_front();
             if (recent_frame_ticks.size() == frames_ahead) {
+                BbStats::WaitTimer timer{BbStats::present_wait_ns};
                 draw_scheduler.Wait(tick);
             }
         }
@@ -694,6 +709,9 @@ Frame* Presenter::GetRenderFrame() {
 
     // Wait for the presentation to be finished so all frame resources are free
     while (wait() != vk::Result::eSuccess) {
+        if (result == vk::Result::eErrorDeviceLost) {
+            Breadcrumbs::ReportDeviceLost("waiting for a frame");
+        }
         ASSERT_MSG(result != vk::Result::eErrorDeviceLost,
                    "Device lost during waiting for a frame");
         // Retry if the waiting times out

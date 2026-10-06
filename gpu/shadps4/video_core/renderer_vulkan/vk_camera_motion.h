@@ -63,11 +63,13 @@ public:
     [[nodiscard]] float Near() const noexcept;
     // Current projection, previous projection, and row Z of previous-view * inverse-view.
     [[nodiscard]] std::array<std::array<float, 4>, 3> TaaDepthParameters() const noexcept;
+    /// bbport: the matrices and jitter of the motion of this frame, printed with an upscaler dump
+    /// (BB_DUMP_TRIGGER) for offline checks of the vectors.
+    void PrintState(int frame) const;
 
-    /// Records the motion vector pass: `depth_view` (depth aspect, General layout) into
-    /// `motion_view` (RG16F storage, General), pixels, previous minus current.
-    void RecordMotion(vk::CommandBuffer cmdbuf, vk::ImageView depth_view, vk::ImageView motion_view,
-                      u32 width, u32 height);
+    /// Records the motion vector pass (Scheduler::Record): `depth_view` (depth aspect, General
+    /// layout) into `motion_view` (RG16F storage, General), pixels, previous minus current.
+    void RecordMotion(vk::ImageView depth_view, vk::ImageView motion_view, u32 width, u32 height);
 
     /// A bound constant buffer of 864 bytes: checks the scene constant signature.
     void OnConstants(const float* data);

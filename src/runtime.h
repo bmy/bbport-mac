@@ -1,5 +1,6 @@
 #ifndef BB_RUNTIME_H
 #define BB_RUNTIME_H
+#include <time.h>
 #include <stdint.h>
 #include <stddef.h>
 #include "low_heap.h"
@@ -21,6 +22,16 @@ void runtime_mutex_report(void);
 uintptr_t runtime_memory_resolve(const char *name);
 void runtime_memory_report(void);
 int runtime_memory_is_mapped(uintptr_t address, uint64_t size);
+/* The CPU is about to write the range outside guest code (a file read): tells the GPU side. */
+void runtime_memory_note_write(uintptr_t address, uint64_t size);
+void runtime_memory_note_cpu_write(uintptr_t address, uint64_t size);
+/* bbport (frame stats): a guest thread was blocked `ns` in the runtime (0 cond, 1 mutex, 2 sema, 3 sleep). */
+void runtime_wait_note(int kind, uint64_t ns);
+void runtime_wait_report(double frames);
+void runtime_guest_call_sites(uint64_t out[3]);
+/* bbport: times the game's heap asked for more memory (posix_mmap): a sign it leaks. */
+uint64_t runtime_heap_growths(void);
+static inline uint64_t runtime_wait_clock(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return (uint64_t)t.tv_sec*1000000000+(uint64_t)t.tv_nsec; }
 const char *runtime_import_name(const char *name);
 uintptr_t runtime_rwlock_resolve(const char *name);
 void runtime_rwlock_report(void);

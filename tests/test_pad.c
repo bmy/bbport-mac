@@ -24,6 +24,15 @@ int main(void) {
     assert(fd>=0);
     close(fd);
     setenv("BB_PAD_FILE",path,1);
+    /* bbport.ini controls: buttons moved, a trigger as a button and a button as a trigger. */
+    char config[]="/tmp/bbport-pad-config-XXXXXX";
+    int config_fd=mkstemp(config);
+    assert(config_fd>=0);
+    const char controls[]="upscaler=fsr3\npad.cross=b\npad.circle=a\npad.r2=rightshoulder\n"
+                          "pad.r1=righttrigger\nkey.cross=X, Space\npad.bogus=a\n";
+    assert(write(config_fd,controls,sizeof(controls)-1)==(ssize_t)(sizeof(controls)-1));
+    close(config_fd);
+    setenv("BB_CONFIG",config,1);
     setenv("SDL_VIDEODRIVER","dummy",1);
     /* Only the virtual test controller is a gamepad, whatever is plugged in. */
     SDL_SetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT,"0x1d50/0x6189");
@@ -73,11 +82,22 @@ int main(void) {
     SDL_UpdateJoysticks();
     SDL_UpdateGamepads();
     assert(pad_read_state(1,&data)==0 && data.touch_count==1 && data.touches[0].x==480);
+    assert(SDL_SetJoystickVirtualButton(joystick,SDL_GAMEPAD_BUTTON_TOUCHPAD,false));
+    assert(SDL_SetJoystickVirtualButton(joystick,SDL_GAMEPAD_BUTTON_EAST,true));
+    assert(SDL_SetJoystickVirtualButton(joystick,SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER,true));
+    assert(SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_RIGHT_TRIGGER,32767));
+    SDL_UpdateJoysticks();
+    SDL_UpdateGamepads();
+    assert(pad_read_state(1,&data)==0);
+    assert(data.buttons==(BTN_CROSS|BTN_R2|BTN_R1) && data.r2==255);
+    assert(bindings[IN_CROSS].key_count==2 && bindings[IN_CROSS].keys[0]==SDL_SCANCODE_X &&
+           bindings[IN_CROSS].keys[1]==SDL_SCANCODE_SPACE);
     SDL_CloseJoystick(joystick);
     if (gamepad) SDL_CloseGamepad(gamepad);
     gamepad=NULL;
     assert(SDL_DetachVirtualJoystick(id));
     SDL_Quit();
     unlink(path);
-    puts("PASS: pad ABI, debug camera chord, left/right clicks, SDL touch coordinates, overlay capture");
+    unlink(config);
+    puts("PASS: pad ABI, debug camera chord, left/right clicks, SDL touch coordinates, overlay capture, controls");
 }

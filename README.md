@@ -1,7 +1,7 @@
 # bbport-mac — Bloodborne on Apple Silicon Macs
 
-A macOS port of [bbport](https://github.com/deadinside28/bloodborne_pc), deadinside28's
-native port of *Bloodborne* (PS4, CUSA03173, game version 1.09). It runs the game's original
+A macOS port of [bbport](https://github.com/deadinside28/bloodborne_pc) (release 0.3),
+deadinside28's native port of *Bloodborne* (PS4, CUSA03173, game version 1.09). It runs the game's original
 executable on an Apple Silicon Mac and renders it through Vulkan on Metal, with temporal
 upscaling (AMD FSR 3.1) up to 4K.
 
@@ -108,6 +108,11 @@ can:
 
 Settings are saved to `bbport.ini`.
 
+**Remapping controls:** add lines to `bbport.ini`, one per PS4 input, with SDL names for keys and
+gamepad buttons, for example `key.cross=Space` or `pad.circle=b` (several bindings separated by
+commas). Inputs without a line keep the defaults below. To pick one of several controllers, set
+`BB_GAMEPAD` to part of its name or its GUID.
+
 | Keyboard | PS4 |
 |---|---|
 | W A S D | left stick |
@@ -133,6 +138,8 @@ For Terminal runs; in the app, most are regular settings and the rest go in
 | `BB_UPSCALER` | `fsr3` (recommended), `taa`, `metalfx`, `off`. If unset, the in-game menu's choice applies. |
 | `BB_FRAME_STATS=1` | Prints frame rate and timing breakdowns to `out/last-run.log` every 5 s |
 | `BB_OBJECT_MOTION=0` | Turns off character motion vectors (on by default; without them FSR smears animated characters) |
+| `BB_VK_RECORD_THREADS` | Threads recording Vulkan commands (default: 3 on this class of Mac; `1` records on one thread) |
+| `BB_GAMEPAD` | Which controller to use: part of its name or its GUID |
 | `BB_PRELOAD_THREADS` | Threads for the startup shader warm-up (default: all cores) |
 
 ## Upscalers on the Mac
@@ -154,15 +161,13 @@ For Terminal runs; in the app, most are regular settings and the rest go in
   for now.
 - **Dense scenes.** These drop below 60 FPS. The cause is CPU cost under Rosetta (see
   *Performance*), not the GPU.
-- **Experimental two-thread recording** (`BB_COPIES_OFF_RECORDER=1`). It records Vulkan
-  commands on two threads, but it can crash after switching to full screen and currently makes
-  CPU and GPU wait on each other. It's off by default.
 - **Single test machine.** Everything so far has been tested on one Mac.
 
 ## Roadmap
 
-1. **Fix two-thread recording,** so dense scenes get closer to 60: rotating command pools per
-   thread, and the full-screen crash.
+1. **Tune multi-thread recording on the Mac,** so dense scenes get closer to 60. bbport 0.3
+   records Vulkan commands on several threads and submits from them; how many threads suit
+   KosmicKrisp under Rosetta is still to be measured.
 2. **Geometry shaders:** find what makes the newer KosmicKrisp slower, report it upstream, and
    move to it once it's as fast.
 3. **Move the renderer into a separate native arm64 process.** The renderer is the shadPS4-based

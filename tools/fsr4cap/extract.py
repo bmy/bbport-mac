@@ -22,9 +22,12 @@ SEQUENCE = ['spd', 'prepass', 'pass0_post'] + [f'pass{k}{s}' for k in range(1, 1
 LEVEL = {1: 1, 2: 1, 3: 2, 4: 2, 5: 2, 6: 3, 7: 3, 8: 3, 9: 3, 10: 2, 11: 2, 12: 1}
 errors = 0
 
+mismatches = []
+
 def fail(msg):
     global errors
     errors += 1
+    mismatches.append(msg)
     print('MISMATCH', msg)
 
 def shader_name(path):
@@ -64,9 +67,15 @@ for cap in sorted(glob.glob(os.path.join(root, 'capture_*'))):
     rw, rh, ow, oh = map(int, m.groups())
     tier = 't1080' if ow <= 1920 and oh <= 1080 else 't2160'
     model = 'm1' if ow / rw > 2.5 else 'm0'
-    trace = open(os.path.join(cap, 'trace.txt')).read()
+    trace_path = os.path.join(cap, 'trace.txt')
+    trace = open(trace_path).read() if os.path.isfile(trace_path) else ''
     # Frame 1 (pipelines exist), or frame 0 of a one-frame run.
     mark = 'MARK frame 1\n' if 'MARK frame 1\n' in trace else 'MARK frame 0\n'
+    if mark not in trace:
+        # The upscaler never ran: an older Proton (vkd3d-proton) loads the DLL's FSR 2/3 providers
+        # only (issue #4), or the DLL is not 4.1.x. capture_all.sh stops on it first.
+        fail(f'{cap}: no frame recorded (see fsr4cap.log: the 4.1.1 upscaler did not run)')
+        continue
     frame = re.split(r'MARK (?:frame \d+|end)\n', trace.split(mark)[1])[0]
     disp = re.findall(r'DISPATCH #\d+ cs=(\w+) root=\w+ groups=(\d+),(\d+),(\d+)\n((?:  .*\n)*)', frame)
     names = [shader_name(os.path.join(cap, f'cs_{h}.dxil')) for h, *_ in disp]
@@ -103,10 +112,24 @@ for cap in sorted(glob.glob(os.path.join(root, 'capture_*'))):
             if (u[0], u[1], u[3], u[4]) != (ow, oh, rw, rh):
                 fail(f'{cap} prepass sizes {u[:5]}')
     init = re.search(r'COPYBUFFER r\d+\+0 <- r\d+\+0 size 131072 data=(data_\w+\.bin)', trace)
+    if not init:
+        fail(f'{cap}: no model initializer upload recorded')
+        continue
     blob = open(os.path.join(cap, init[1]), 'rb').read()
     if entry['init'] and entry['init'] != blob:
         fail(f'{cap}: initializer differs within {key}')
     entry['init'] = blob
+
+# Nothing is written from captures that break the rules: vk_fsr411.cpp would replay them wrongly,
+# and postpass_lds.py only knows the postpass of the expected variant (issue #12).
+if errors:
+    print(f'{errors} mismatches: no assets written.')
+    if any('groups' in line for line in mismatches):
+        print('The DLL dispatched another shader variant than the one bbport replays (other group '
+              'counts). On RDNA4 it picks its FP8 matrix variant when vkd3d-proton offers FP8 '
+              'cooperative matrices: capture_all.sh hides them (VKD3D_DISABLE_EXTENSIONS). If '
+              'this still appears, report the GPU, the DLL version and this output.')
+    sys.exit(1)
 
 for key, entry in sorted(sets.items()):
     d = os.path.join(out, key)
@@ -119,8 +142,11 @@ for key, entry in sorted(sets.items()):
             os.replace(spv, os.path.join(d, 'postpass_orig.spv'))
             asm = subprocess.run(['spirv-dis', os.path.join(d, 'postpass_orig.spv')], check=True,
                                  capture_output=True, text=True).stdout
-            lds = subprocess.run([sys.executable, os.path.join(os.path.dirname(__file__), 'postpass_lds.py')],
-                                 input=asm, check=True, capture_output=True, text=True).stdout
+            run = subprocess.run([sys.executable, os.path.join(os.path.dirname(__file__), 'postpass_lds.py')],
+                                 input=asm, capture_output=True, text=True)
+            if run.returncode != 0:
+                sys.exit(f'postpass_lds.py failed on {key}/postpass:\n{run.stderr}')
+            lds = run.stdout
             subprocess.run(['spirv-as', '--target-env', 'spv1.3', '-', '-o', spv], input=lds, check=True,
                            text=True)
     open(os.path.join(d, 'initializer.bin'), 'wb').write(entry['init'])

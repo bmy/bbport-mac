@@ -9,9 +9,9 @@
 #      ratio, recording the D3D12 frames (capture_all.sh);
 #   3. extract.py translates them, checks the replay rules and writes fsr4_411/;
 #   4. with VERIFY=1, verify.sh compares the replay with the DLL byte by byte.
-# Needs nix-shell (or the tools on PATH: x86_64-w64-mingw32-gcc, cmake, ninja, python3,
-# spirv-dis/spirv-as, umu-run), network for the two git repositories, and a Proton build
-# (PROTONPATH, default: newest GE-Proton in Steam's compatibilitytools.d).
+# Needs the tools on PATH (x86_64-w64-mingw32-gcc, cmake, ninja, python3, spirv-dis/spirv-as,
+# umu-run, git) or nix-shell, network for the two git repositories, and a Proton build
+# (PROTONPATH, default: newest GE-Proton in Steam's compatibilitytools.d, proton.sh).
 set -euo pipefail
 cd -- "$(dirname -- "$0")/../.."
 upscaler=$(realpath "${1:?upscaler DLL}")
@@ -19,9 +19,27 @@ loader=$(realpath "${2:?loader DLL}")
 work=$PWD/out/fsr4cap
 mkdir -p "$work"
 
-if [[ -z ${BB_FSR4CAP_SHELL:-} ]] && command -v nix-shell >/dev/null; then
-    exec env BB_FSR4CAP_SHELL=1 nix-shell -p pkgsCross.mingwW64.buildPackages.gcc cmake ninja gcc \
-        python3 spirv-tools umu-launcher git --run "bash $(printf %q "$0") $(printf %q "$upscaler") $(printf %q "$loader")"
+# The tools from PATH when all are there; else from nix-shell. Nix installed on another
+# distribution often has no nixpkgs channel ("file 'nixpkgs' was not found", issue #22): then
+# nixpkgs comes from the nixos-unstable channel URL.
+missing=()
+for tool in x86_64-w64-mingw32-gcc cmake ninja gcc python3 spirv-dis spirv-as umu-run git; do
+    command -v "$tool" >/dev/null || missing+=("$tool")
+done
+if [[ ${#missing[@]} -ne 0 && -z ${BB_FSR4CAP_SHELL:-} ]] && command -v nix-shell >/dev/null; then
+    nixpkgs=()
+    nix-instantiate --find-file nixpkgs >/dev/null 2>&1 || nixpkgs=(-I nixpkgs=channel:nixos-unstable)
+    exec env BB_FSR4CAP_SHELL=1 nix-shell "${nixpkgs[@]}" -p pkgsCross.mingwW64.buildPackages.gcc cmake \
+        ninja gcc python3 spirv-tools umu-launcher git \
+        --run "bash $(printf %q "$0") $(printf %q "$upscaler") $(printf %q "$loader")"
+fi
+if [[ ${#missing[@]} -ne 0 ]]; then
+    echo "Missing tools: ${missing[*]}. Install them (or Nix), then run this again:" >&2
+    echo "  Arch, CachyOS: sudo pacman -S mingw-w64-gcc cmake ninja python spirv-tools git umu-launcher" >&2
+    echo "  Fedora, Bazzite: sudo dnf install mingw64-gcc cmake ninja-build python3 spirv-tools git umu-launcher" >&2
+    echo "  Debian, Ubuntu: sudo apt install gcc-mingw-w64-x86-64 cmake ninja-build python3 spirv-tools git" >&2
+    echo "    (umu-launcher: https://github.com/Open-Wine-Components/umu-launcher/releases)" >&2
+    exit 1
 fi
 
 # dxil-spirv: DXIL -> SPIR-V as vkd3d-proton translates it.

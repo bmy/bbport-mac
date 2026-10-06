@@ -89,6 +89,20 @@ public:
         return present_queue;
     }
 
+    /// bbport: a compute/transfer queue beside the graphics one (null when the device has none
+    /// or BB_READBACK_QUEUE=0), for reading back finished GPU writes.
+    static constexpr u32 NoFamily = ~0u;
+    vk::Queue GetReadbackQueue() const {
+        return readback_queue;
+    }
+    u32 GetReadbackQueueFamilyIndex() const {
+        return readback_family_index;
+    }
+    /// bbport: memory can be exported as a dma-buf (guest memory, BbGuestMemory).
+    bool IsGuestMemoryExportSupported() const {
+        return guest_memory_export;
+    }
+
     TracyVkCtx GetProfilerContext() const {
         return profiler_context;
     }
@@ -131,6 +145,11 @@ public:
     /// Returns true if VK_KHR_maintenance8 is supported
     bool IsMaintenance8Supported() const {
         return maintenance_8;
+    }
+
+    /// bbport: VK_AMD_buffer_marker (GPU breadcrumbs).
+    bool IsBufferMarkerSupported() const {
+        return buffer_marker;
     }
 
     /// Returns true if VK_EXT_attachment_feedback_loop_layout is supported
@@ -537,6 +556,9 @@ private:
     VmaAllocator allocator{};
     vk::Queue present_queue;
     vk::Queue graphics_queue;
+    vk::Queue readback_queue;
+    bool guest_memory_export{};
+    u32 readback_family_index = NoFamily;
     std::vector<vk::PhysicalDevice> physical_devices;
     std::vector<std::string> available_extensions;
     std::unordered_map<vk::Format, vk::FormatProperties3> format_properties;
@@ -563,6 +585,7 @@ private:
     bool workgroup_memory_explicit_layout{};
     bool maintenance_5{};
     bool maintenance_8{};
+    bool buffer_marker{};
     bool attachment_feedback_loop{};
     bool image_2d_view_of_3d{};
     bool image_view_min_lod{};
@@ -575,5 +598,9 @@ private:
     u64 total_memory_budget{};
     std::vector<size_t> valid_heaps;
 };
+
+/// bbport memory statistics: device-local VMA memory blocks and the allocations in them (the
+/// difference is free space VMA keeps).
+void VmaDeviceUsage(u64& block_bytes, u64& allocation_bytes);
 
 } // namespace Vulkan

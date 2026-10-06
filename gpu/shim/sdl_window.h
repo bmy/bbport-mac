@@ -46,6 +46,9 @@ private:
 #ifdef __APPLE__
     void AppendTypedKey(int scancode, unsigned mod); // text from key presses (SDL values)
 #endif
+    void UpdateCursor();
+    u64 last_mouse_motion_ms{}; ///< SDL_GetTicks of the last mouse motion (UpdateCursor)
+    bool cursor_hidden{};
     SDL_Window* window{};
     WindowSystemInfo window_info{};
 };

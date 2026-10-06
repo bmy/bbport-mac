@@ -64,6 +64,10 @@ public:
     // Current projection, previous projection, and row Z of previous-view * inverse-view.
     [[nodiscard]] std::array<std::array<float, 4>, 3> TaaDepthParameters() const noexcept;
 
+    /// bbport BB_CAMERA_Y: whether view +y points up the screen (0.2, default on macOS) or down
+    /// it (0.3); used by the motion vectors and the TAA depth check.
+    static bool ViewYUp();
+
     /// Records the motion vector pass: `depth_view` (depth aspect, General layout) into
     /// `motion_view` (RG16F storage, General), pixels, previous minus current.
     void RecordMotion(vk::CommandBuffer cmdbuf, vk::ImageView depth_view, vk::ImageView motion_view,

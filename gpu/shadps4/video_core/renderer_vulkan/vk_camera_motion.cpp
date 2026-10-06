@@ -46,7 +46,30 @@ std::array<float, 12> Multiply(const std::array<float, 12>& a, const std::array<
     return out;
 }
 
+u32 CameraYFlag() {
+    return CameraMotion::ViewYUp() ? 8u : 0u;
+}
+
 } // namespace
+
+bool CameraMotion::ViewYUp() {
+    // bbport: which way view +y points on the screen. bbport 0.3 changed it to down the screen
+    // (pixel rows); on macOS that made FSR 3.1 shimmer badly on floors at Native AA, and 0.2's
+    // convention (up) removed it (2026-10-06, M5 Max, Cathedral Ward). BB_CAMERA_Y=up|down
+    // chooses; the default is up on macOS and down elsewhere, as upstream 0.3.
+    static const bool up = [] {
+        const char* env = std::getenv("BB_CAMERA_Y");
+#ifdef __APPLE__
+        const bool value = !env || std::strcmp(env, "down") != 0;
+#else
+        const bool value = env && std::strcmp(env, "up") == 0;
+#endif
+        std::printf("Camera motion: view +y %s the screen%s\n", value ? "up" : "down",
+                    env ? " (BB_CAMERA_Y)" : "");
+        return value;
+    }();
+    return up;
+}
 
 CameraMotion::CameraMotion(const Instance& instance_, Scheduler& scheduler_,
                            VideoCore::TextureCache& texture_cache_, Runtime& runtime_)
@@ -188,7 +211,7 @@ void CameraMotion::RecordMotion(vk::CommandBuffer cmdbuf, vk::ImageView depth_vi
         .size = {float(width), float(height)},
         .jitter = jitter,
         .previous_jitter = previous_jitter,
-        .mode = object_valid ? 1u : 0u,
+        .mode = (object_valid ? 1u : 0u) | CameraYFlag(),
     };
     const vk::DescriptorImageInfo depth_info{.imageView = depth_view,
                                              .imageLayout = vk::ImageLayout::eGeneral};
@@ -300,11 +323,12 @@ void CameraMotion::Overlay(VideoCore::ImageId frame) {
         .size = {float(color.info.size.width), float(color.info.size.height)},
         .jitter = jitter,
         .previous_jitter = previous_jitter,
-        .mode = BbToggle::Disabled(1u << 20)   ? 1u
-                : BbToggle::Disabled(1u << 21) ? 2u
-                : BbToggle::Disabled(1u << 22) ? 3u
-                : BbToggle::Disabled(1u << 23) ? 4u
-                                               : 0u,
+        .mode = (BbToggle::Disabled(1u << 20)   ? 1u
+                 : BbToggle::Disabled(1u << 21) ? 2u
+                 : BbToggle::Disabled(1u << 22) ? 3u
+                 : BbToggle::Disabled(1u << 23) ? 4u
+                                                : 0u) |
+                CameraYFlag(),
     };
     static u32 log_counter = 0;
     if (++log_counter % 200 == 0) {

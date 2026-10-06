@@ -724,7 +724,8 @@ void TemporalUpscaler::RecordTaa(vk::CommandBuffer cmdbuf, vk::ImageView color,
                   (BbToggle::Disabled(BbToggle::TaaClip) ? 2u << 8 : 0u) |
                   (BbToggle::Disabled(BbToggle::TaaVariance) ? 4u << 8 : 0u) |
                   (BbToggle::Disabled(BbToggle::TaaFilter) ? 8u << 8 : 0u) |
-                  (BbToggle::Disabled(BbToggle::TaaKeepNearerHistory) ? 16u << 8 : 0u);
+                  (BbToggle::Disabled(BbToggle::TaaKeepNearerHistory) ? 16u << 8 : 0u) |
+                  (CameraMotion::ViewYUp() ? 32u << 8 : 0u);
     cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, *taa_pipeline);
     if (params.pad & 0xffu) {
         static u32 diagnostic_frames = 0;

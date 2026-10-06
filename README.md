@@ -16,12 +16,8 @@ macOS 27.
 
 ## Performance
 
-On the M5 Max, at 4K output with FSR 3.1 (Balanced) or 1440p with FSR 3.1 (Native AA):
-
-- **60 FPS** in most areas.
-- **Mid-50s** in busier scenes.
-- **Lower in the densest scenes,** roughly 35–45.
-- **A 30 FPS lock is rock solid everywhere.**
+On the M5 Max, at 1440p output with FSR 3.1 (Native AA): **45–60 FPS**, depending on how busy
+the scene is. A 30 FPS lock holds everywhere.
 
 The limit is not the GPU: resolution and upscaling are nearly free. The limit is the CPU cost
 of each Vulkan call. The game's code is x86-64, so the whole process, including the Vulkan

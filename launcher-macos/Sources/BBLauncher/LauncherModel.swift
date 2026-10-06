@@ -365,9 +365,11 @@ final class LauncherModel: ObservableObject {
         if limit > 0 { env["BB_FPS_LIMIT"] = String(limit) } else { env.removeValue(forKey: "BB_FPS_LIMIT") }
         if p.drawPipe.isEmpty { env.removeValue(forKey: "BB_DRAW_PIPE") } else { env["BB_DRAW_PIPE"] = p.drawPipe }
         if p.readbacks.isEmpty { env.removeValue(forKey: "BB_READBACKS") } else { env["BB_READBACKS"] = p.readbacks }
-        env["BB_FRAME_STATS"] = p.frameStats ? "1" : "0"
-        env["BB_GPU_PROFILE"] = p.gpuProfile ? "1" : "0"
-        env["BB_VK_VALIDATION"] = p.vkValidation ? "1" : "0"
+        // Set only when on: parts of the port test these for presence, not value ("0" is on).
+        for (key, on) in [("BB_FRAME_STATS", p.frameStats), ("BB_GPU_PROFILE", p.gpuProfile),
+                          ("BB_VK_VALIDATION", p.vkValidation)] {
+            if on { env[key] = "1" } else { env.removeValue(forKey: key) }
+        }
         for item in p.extraEnv.split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\n" }) {
             guard let eq = item.firstIndex(of: "="), eq != item.startIndex else { continue }
             env[String(item[..<eq])] = String(item[item.index(after: eq)...])

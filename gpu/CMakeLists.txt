@@ -151,7 +151,10 @@ target_compile_definitions(bbgpu PRIVATE BOOST_ASIO_STANDALONE NDEBUG)
 target_compile_options(bbgpu PRIVATE -Wno-deprecated-declarations -Wno-missing-field-initializers)
 # Loaded with bb-probe at startup (DT_NEEDED, never dlopen): thread_local access without a
 # TLS descriptor call (_dl_tlsdesc_return was ~2% of the draw recording thread).
-target_compile_options(bbgpu PRIVATE -ftls-model=initial-exec)
+# bbport (macOS): Mach-O has one TLS model (TLV); Linux only.
+if (NOT APPLE)
+    target_compile_options(bbgpu PRIVATE -ftls-model=initial-exec)
+endif()
 # Runtime symbols (runtime_memory_*, runtime_process_*) resolve against bb-probe.
 if (APPLE)
     target_link_options(bbgpu PRIVATE -undefined dynamic_lookup)

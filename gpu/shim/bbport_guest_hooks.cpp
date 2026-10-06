@@ -12,7 +12,9 @@
 #include <cstring>
 #include <sys/mman.h>
 #include <sys/uio.h>
+#ifndef __APPLE__ // Linux-only body below (macOS: stubs)
 #include <ucontext.h>
+#endif
 #include <unistd.h>
 
 #ifdef __APPLE__

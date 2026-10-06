@@ -16,7 +16,9 @@
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <csignal>
+#ifndef __APPLE__ // Linux-only body below (macOS: stubs)
 #include <ucontext.h>
+#endif
 #include <unordered_set>
 #include <sys/uio.h>
 #include <unistd.h>

@@ -232,7 +232,7 @@ struct GameSettings: Equatable {
     var showFPS = true
     var outputRes = "1920x1080"
     var modelLOD = "0"
-    var liveResolution = "0"
+    var liveResolution = "1"
     var effects: [EffectSetting] = Catalog.effects.map {
         EffectSetting(key: $0.key, title: $0.title, note: $0.note, isOn: $0.defaultOn)
     }

@@ -24,6 +24,9 @@ grep -q '^upscaler=' "$ini" 2>/dev/null || echo "upscaler=off" >> "$ini"
 # Character motion vectors, as the Linux launcher defaults: without them temporal upscalers
 # (FSR 3.1, MetalFX, TAA) smear animated characters. BB_OBJECT_MOTION=0 turns them off.
 grep -q '^object_motion=' "$ini" 2>/dev/null || echo "object_motion=1" >> "$ini"
+# Live resolution changes: output size, preset and upscaler change in the menu without a restart.
+# The Mac's GPU has the headroom for the copies this costs (the frame rate is CPU-bound).
+grep -q '^live_resolution=' "$ini" 2>/dev/null || echo "live_resolution=1" >> "$ini"
 # Keep a copy of everything the port prints for diagnosis.
 # Keep the previous run's log: a quick relaunch would otherwise overwrite the one to report.
 [[ -f out/last-run.log ]] && mv -f out/last-run.log out/previous-run.log

@@ -25,8 +25,10 @@ bash tools/macos/build.sh            # the port: out/bb-probe and out/gpu/libbbg
 bash tools/macos/build_launcher.sh   # the launcher app: out/bbport.app
 ```
 
-Run `build.sh` again after every `git pull`. You only need to rebuild the launcher when
-`launcher-macos/` changes. The app remembers the checkout it was built from, and you can change
+To update later, press **Update** in the app, or run `bash tools/macos/update.sh`: it fetches
+the latest version from GitHub and rebuilds only what changed (dependencies, the port, the app).
+`bash tools/macos/update.sh <branch>` switches to another branch; in the app, set the branch in
+bbport > Settings. If the app itself was rebuilt, quit and reopen it. The app remembers the checkout it was built from, and you can change
 it in bbport > Settings (⌘,). If you have already picked the game folder in the app,
 `build_launcher.sh` also uses the game's icon for the app.
 
@@ -81,8 +83,11 @@ The overlay menu (upscaler, FPS counter, effects) opens with **F1**, **`` ` ``**
 
 ## Troubleshooting
 
-- Every run's full output is saved to **`out/last-run.log`**. Send it when you report a problem.
-  The Game Log window has a button that opens it.
+- Every run's full output is saved to **`out/last-run.log`**, and the run before it to
+  `out/previous-run.log`. Send it when you report a problem. The Game Log window has a button
+  that opens it.
+- "expected a decrypted PS4 SELF or ELF": the game dump is encrypted or the folder isn't the
+  merged 1.09 one. The message shows the file and its first bytes.
 - The app says "not built yet": run `bash tools/macos/build.sh`.
 - `swift build` fails in `build_launcher.sh`: send the whole terminal output.
 - The build fails: `out/gpu-errors.txt` and `out/loader-build.log` hold the errors.

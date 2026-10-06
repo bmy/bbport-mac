@@ -16,7 +16,7 @@ macOS 27.
 
 ## Performance
 
-On the M5 Max, at 4K output with FSR 3.1 (Balanced):
+On the M5 Max, at 4K output with FSR 3.1 (Balanced) or 1440p with FSR 3.1 (Native AA):
 
 - **60 FPS** in most areas.
 - **Mid-50s** in busier scenes.
@@ -58,6 +58,7 @@ Mac plugged in for consistent results.
 - **Your game folder:** Bloodborne CUSA03173 *with the 1.09 update merged in*, meaning the
   update's files have replaced the base game's files. The folder with `eboot.bin` in it is the
   one you point bbport at. An unmerged 1.00 `eboot.bin` won't work with the 60 FPS patches.
+  The dump must be decrypted; `eboot.bin` can be either a decrypted SELF or a plain ELF.
 
 ## Setup and build
 
@@ -66,24 +67,35 @@ git clone --recursive -b macos-port https://github.com/bmy/bbport-mac.git ~/Proj
 cd ~/Projects/bbport-mac/src
 bash tools/macos/setup_deps.sh       # one-time: x86-64 dependencies and KosmicKrisp (~20-40 min)
 bash tools/macos/build.sh            # the port: out/bb-probe and out/gpu/libbbgpu.dylib
-bash tools/macos/build_launcher.sh   # optional: the Mac app, out/bbport.app
+bash tools/macos/build_launcher.sh   # the Mac app: out/bbport.app
+open out/bbport.app
 ```
 
-Run `build.sh` again after every `git pull`. Run `setup_deps.sh` again when it changes; it
-skips what is already built.
+After that, the app's **Update** button keeps everything current: it fetches the latest
+version from GitHub and rebuilds only what changed. From Terminal, the same is
+`bash tools/macos/update.sh`.
 
 ## Playing
 
-**From Terminal** (recommended settings: 60 FPS, FSR 3.1):
+**From the app** (recommended): open `out/bbport.app` (drag it to the Dock to keep it handy),
+choose the game folder, and press **Play**. Recommended settings:
+
+- **Frame rate:** mode 60, no FPS limit, present mode FIFO.
+- **Upscaler:** FSR 3.1, with either 1440p output at Native AA (sharpest) or 4K output at
+  Balanced or Quality.
+- **Live resolution changes:** off. Everything then renders at full resolution, and resolution
+  or preset changes apply after **Apply and restart game** in the in-game menu. On, they apply
+  instantly, but the game's post-processing stays at 1080p.
+
+The app's log window shows the game's output, and every run is also saved to
+`out/last-run.log` (the one before it to `out/previous-run.log`).
+
+**From Terminal:**
 
 ```
 cd ~/Projects/bbport-mac/src
 BB_FPS=60 BB_UPSCALER=fsr3 BB_GAME_DIR=~/path/to/CUSA03173 bash tools/macos/run.sh
 ```
-
-**From the app:** run `open out/bbport.app` (or drag it to the Dock), choose the game folder,
-pick your settings and press **Play**. **Update** fetches the latest version from GitHub and
-rebuilds what changed; the same from Terminal is `bash tools/macos/update.sh`.
 
 **First launch:** the game compiles its shaders, so the first session after a build stutters
 whenever something new appears. From the second launch on, everything seen before is compiled
@@ -116,6 +128,9 @@ More detail, including troubleshooting: [tools/macos/README-macos.md](tools/maco
 
 ### Useful settings
 
+For Terminal runs; in the app, most are regular settings and the rest go in
+**Developer → Extra variables**.
+
 | Variable | Values |
 |---|---|
 | `BB_FPS` | `30`, `60` (recommended), `uncap` |
@@ -137,7 +152,10 @@ More detail, including troubleshooting: [tools/macos/README-macos.md](tools/maco
 ## Known limitations
 
 - **Geometry shaders.** Metal has no geometry shader stage, so draws that need one are skipped
-  and a few effects may be missing.
+  and a few effects may be missing. The newer KosmicKrisp that emulates them (the version
+  upstream shadPS4 moved to in October 2026) ran clearly slower in testing, even with them
+  switched off, and drew blood on characters wrongly. The port stays on the previous version
+  for now.
 - **Dense scenes.** These drop below 60 FPS. The cause is CPU cost under Rosetta (see
   *Performance*), not the GPU.
 - **Experimental two-thread recording** (`BB_COPIES_OFF_RECORDER=1`). It records Vulkan
@@ -149,7 +167,8 @@ More detail, including troubleshooting: [tools/macos/README-macos.md](tools/maco
 
 1. **Fix two-thread recording,** so dense scenes get closer to 60: rotating command pools per
    thread, and the full-screen crash.
-2. **Finish and polish the Mac app.**
+2. **Geometry shaders:** find what makes the newer KosmicKrisp slower, report it upstream, and
+   move to it once it's as fast.
 3. **Move the renderer into a separate native arm64 process.** The renderer is the shadPS4-based
    GPU library plus KosmicKrisp and Metal. It would share guest memory with the game process
    through the existing shared-memory pool. This removes Rosetta from the frame-rate bottleneck,

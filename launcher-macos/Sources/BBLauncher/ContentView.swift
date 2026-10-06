@@ -415,6 +415,12 @@ struct PerformanceSection: View {
                 Text("Two-stage GPU pipeline")
                 Text("20–30% faster; turn off if unstable")
             }
+            Picker(selection: $model.prefs.preupload) {
+                ForEach(Catalog.preupload) { Text($0.label).tag($0.value) }
+            } label: {
+                Text("Background upload of game data")
+                Text("Full can mean fewer hitches when areas load")
+            }
             Picker("GPU data readbacks by the CPU", selection: $model.prefs.readbacks) {
                 ForEach(Catalog.readbacks) { Text($0.label).tag($0.value) }
             }

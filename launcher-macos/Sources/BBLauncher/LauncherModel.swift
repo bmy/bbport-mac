@@ -365,6 +365,7 @@ final class LauncherModel: ObservableObject {
         if limit > 0 { env["BB_FPS_LIMIT"] = String(limit) } else { env.removeValue(forKey: "BB_FPS_LIMIT") }
         if p.drawPipe.isEmpty { env.removeValue(forKey: "BB_DRAW_PIPE") } else { env["BB_DRAW_PIPE"] = p.drawPipe }
         if p.readbacks.isEmpty { env.removeValue(forKey: "BB_READBACKS") } else { env["BB_READBACKS"] = p.readbacks }
+        if p.preupload.isEmpty { env.removeValue(forKey: "BB_PREUPLOAD") } else { env["BB_PREUPLOAD"] = p.preupload }
         // Set only when on: parts of the port test these for presence, not value ("0" is on).
         for (key, on) in [("BB_FRAME_STATS", p.frameStats), ("BB_GPU_PROFILE", p.gpuProfile),
                           ("BB_VK_VALIDATION", p.vkValidation)] {

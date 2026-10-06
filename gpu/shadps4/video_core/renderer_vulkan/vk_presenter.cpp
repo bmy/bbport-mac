@@ -319,17 +319,13 @@ static vk::Format GetFrameViewFormat(const Libraries::VideoOut::PixelFormat form
 
 
 namespace {
-/// bbport BB_DISPLAY_CHECK (on by default on macOS): every 5 s the image the presenter shows
+/// bbport BB_DISPLAY_CHECK=1: every 5 s the image the presenter shows
 /// (before the post pass) and the frame it draws are read back, and the log says how much of
 /// each is not black (finds where a black picture starts).
 bool DisplayCheckDue() {
     static const bool enabled = [] {
         const char* env = std::getenv("BB_DISPLAY_CHECK");
-#ifdef __APPLE__
-        return !env || env[0] != '0';
-#else
         return env && env[0] == '1';
-#endif
     }();
     if (!enabled) {
         return false;

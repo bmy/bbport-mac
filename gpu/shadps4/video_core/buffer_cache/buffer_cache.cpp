@@ -1257,11 +1257,7 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
 void BufferCache::DiagArenaCheck() {
     static const bool enabled = [] {
         const char* env = std::getenv("BB_ARENA_CHECK");
-#ifdef __APPLE__
-        return !env || env[0] != '0';
-#else
         return env && env[0] == '1';
-#endif
     }();
     const u32 now = BbStats::coarse_second.load(std::memory_order_relaxed);
     if (!enabled || now - arena_check_second < 5) {

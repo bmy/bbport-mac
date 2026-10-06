@@ -36,7 +36,10 @@ static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 
 static int init_locked(void) {
     if (base) return 1;
-    base = runtime_low_map_high(CHUNKS * CHUNK, PROT_READ | PROT_WRITE);
+    /* BB_LOW_HEAP_TOP=0: the bottom of the low region again (before 0.3; A/B). */
+    const char *top = getenv("BB_LOW_HEAP_TOP");
+    base = top && top[0] == '0' ? runtime_low_map(CHUNKS * CHUNK, PROT_READ | PROT_WRITE)
+                                : runtime_low_map_high(CHUNKS * CHUNK, PROT_READ | PROT_WRITE);
     if (!base) { fputs("STOP: low heap: cannot reserve 8 GiB below 1 TiB\n", stderr); exit(21); }
     if ((uintptr_t)base + CHUNKS * CHUNK > (UINT64_C(1) << 40)) {
         fprintf(stderr, "STOP: low heap at %p is above 1 TiB\n", (void *)base); exit(21);

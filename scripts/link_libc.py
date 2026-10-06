@@ -23,7 +23,7 @@ def encode_id(value):
 
 def module(path):
     source = path.read_bytes()
-    elf, header, ph, _, missing = parse_self(source)
+    elf, header, ph, _, missing = parse_self(source, path.name)
     dp = next(p for p in ph if p['type'] == 2)
     dynamic = []
     for pos in range(dp['offset'], dp['offset']+dp['filesz'], 16):

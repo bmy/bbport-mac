@@ -23,9 +23,31 @@ def unpack(fmt, data, offset):
     return struct.unpack(fmt, span(data, offset, struct.calcsize(fmt)))
 
 
-def parse_self(data):
-    if span(data, 0, 4) != b'O\x15=\x1d':
-        raise ValueError("expected PS4 SELF")
+def parse_elf(data, name):
+    """A dump already decrypted to a plain ELF: file offsets are the image's offsets."""
+    header = unpack('<16sHHIQQQIHHHHHH', data, 0)
+    if header[0][:7] != b'\x7fELF\x02\x01\x01' or header[2] != 62:
+        raise ValueError(f"{name}: expected little-endian x86-64 ELF")
+    if header[9] != 56 or not 0 < header[10] < 256:
+        raise ValueError(f"{name}: unsupported program headers")
+    ph = [dict(zip(('type', 'flags', 'offset', 'vaddr', 'paddr', 'filesz', 'memsz', 'align'),
+                   unpack('<IIQQQQQQ', data, header[5] + i * 56)))
+          for i in range(header[10])]
+    end = max(p['offset'] + p['filesz'] for p in ph)
+    if end > 512 * 1024 * 1024:
+        raise ValueError("probe image exceeds 512 MiB limit")
+    if end > len(data):
+        raise ValueError(f"{name}: truncated ELF ({len(data):,} of {end:,} bytes)")
+    return bytearray(data[:end]), header, ph, [], []
+
+
+def parse_self(data, name='file'):
+    magic = span(data, 0, 4)
+    if magic == b'\x7fELF':
+        return parse_elf(data, name)
+    if magic != b'O\x15=\x1d':
+        raise ValueError(f"{name}: expected a decrypted PS4 SELF or ELF, but it starts with "
+                         f"{magic.hex(' ')} (a SELF starts with 4f 15 3d 1d, an ELF with 7f 45 4c 46)")
     count, = unpack('<H', data, 24)
     base = 32 + count * 32
     header = unpack('<16sHHIQQQIHHHHHH', data, base)
@@ -50,7 +72,7 @@ def parse_self(data):
         if not flags & 0x800:
             continue
         if flags & 10:
-            raise ValueError("encrypted/compressed SELF segment is unsupported")
+            raise ValueError(f"{name}: encrypted/compressed SELF segment is unsupported (an undecrypted dump?)")
         index = (flags >> 20) & 4095
         if index >= len(ph):
             raise ValueError("invalid segment index")
@@ -91,7 +113,7 @@ def nid(name):
 def inspect_libc(path):
     """Prove that this dump's _init_env is exactly RET; never assume it."""
     source = path.read_bytes()
-    elf, header, ph, _, missing = parse_self(source)
+    elf, header, ph, _, missing = parse_self(source, path.name)
     dynamic = next(p for p in ph if p['type'] == 2)
     tags = dict(unpack('<QQ', elf, pos) for pos in
                 range(dynamic['offset'], dynamic['offset'] + dynamic['filesz'], 16))
@@ -122,7 +144,7 @@ def inspect_libc(path):
 
 def prepare(game, out):
     source = (game / 'eboot.bin').read_bytes()
-    elf, header, ph, segments, missing = parse_self(source)
+    elf, header, ph, segments, missing = parse_self(source, 'eboot.bin')
     loads = [p for p in ph if p['type'] in (1, 0x61000010)]
     def mapped(addr, size=8):
         return any(p['vaddr'] <= addr and addr + size <= p['vaddr'] + p['memsz'] for p in loads)

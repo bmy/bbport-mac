@@ -64,6 +64,15 @@ struct PlayBar: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
+            Button {
+                model.update()
+                if model.isRunning { showLog() }
+            } label: {
+                Label("Update", systemImage: "arrow.down.circle")
+            }
+            .controlSize(.large)
+            .disabled(!model.canUpdate)
+            .help("Get the latest version from GitHub and rebuild what changed")
             Button(action: showLog) {
                 Label("Log", systemImage: "text.alignleft")
             }
@@ -101,6 +110,14 @@ struct PlayBar: View {
 
     private var detail: String {
         switch model.state {
+        case .running where model.job == .update, .stopping where model.job == .update:
+            return "Fetching from GitHub and rebuilding. A new graphics driver takes 15–25 minutes; "
+                + "otherwise a minute or two."
+        case let .exited(status, bySignal) where model.job == .update:
+            if status == 0 && !bySignal {
+                return "Up to date. If the log says the Mac app was rebuilt, quit and reopen it."
+            }
+            return model.lastProblem ?? "Details are in the log."
         case .running, .stopping:
             return "The first launch after a build or a shader-cache reset compiles shaders: "
                 + "a black window for a few minutes is expected."

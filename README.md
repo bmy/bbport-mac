@@ -81,8 +81,9 @@ cd ~/Projects/bbport-mac/src
 BB_FPS=60 BB_UPSCALER=fsr3 BB_GAME_DIR=~/path/to/CUSA03173 bash tools/macos/run.sh
 ```
 
-**From the app** (work in progress): run `open out/bbport.app`, choose the game folder, pick
-your settings and press **Play**.
+**From the app:** run `open out/bbport.app` (or drag it to the Dock), choose the game folder,
+pick your settings and press **Play**. **Update** fetches the latest version from GitHub and
+rebuilds what changed; the same from Terminal is `bash tools/macos/update.sh`.
 
 **First launch:** the game compiles its shaders, so the first session after a build stutters
 whenever something new appears. From the second launch on, everything seen before is compiled

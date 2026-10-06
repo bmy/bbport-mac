@@ -24,6 +24,12 @@ struct LogLine: Identifiable {
     let text: String
 }
 
+/// What the started process is: the game (run.sh) or an update (tools/macos/update.sh).
+enum Job: Equatable {
+    case game
+    case update
+}
+
 enum RunState: Equatable {
     case idle
     case running
@@ -49,6 +55,7 @@ final class LauncherModel: ObservableObject {
     @Published private(set) var repoCheck = Check(level: .error, message: "")
     @Published private(set) var gameCheck = Check(level: .error, message: "")
     @Published private(set) var state: RunState = .idle
+    @Published private(set) var job: Job = .game
     @Published private(set) var logLines: [LogLine] = []
     /// Log window: keep scrolled to the newest line.
     @Published var followLog = true
@@ -118,6 +125,10 @@ final class LauncherModel: ObservableObject {
         !isRunning && repoCheck.allowsPlay && gameCheck.allowsPlay
     }
 
+    var canUpdate: Bool {
+        !isRunning && hasRepository
+    }
+
     var statusText: String {
         switch state {
         case .idle:
@@ -125,11 +136,14 @@ final class LauncherModel: ObservableObject {
             if !gameCheck.allowsPlay { return "Choose the game folder" }
             return "Ready"
         case .running:
-            return "Running"
+            return job == .update ? "Updating…" : "Running"
         case .stopping:
             return "Stopping…"
         case let .exited(status, bySignal):
             if bySignal { return "Stopped (signal \(status))" }
+            if job == .update {
+                return status == 0 ? "Updated" : "The update failed: see the log"
+            }
             return status == 0 ? "The game exited" : "The game exited with code \(status): see the log"
         case let .failed(message):
             return "Could not start: \(message)"
@@ -376,18 +390,35 @@ final class LauncherModel: ObservableObject {
             return
         }
 
-        logLines = []
-        lastProblem = nil
-        exitSeen = nil
         let env = environment()
         let summary = ["BB_GAME_DIR", "BB_FPS", "BB_UPSCALER", "BB_FULLSCREEN", "BB_PRESENT_MODE"]
             .map { "\($0)=\(env[$0] ?? "")" }.joined(separator: " ")
-        appendLines(["$ cd \(repo.path)", "$ \(summary) bash tools/macos/run.sh"])
+        start(.game, arguments: ["tools/macos/run.sh"], in: repo, env: env,
+              echo: "$ \(summary) bash tools/macos/run.sh")
+    }
+
+    /// Fetches the branch from GitHub and rebuilds what changed (tools/macos/update.sh). An empty
+    /// branch preference keeps the current one.
+    func update() {
+        guard process == nil, let repo = repoURL, hasRepository else { return }
+        let branch = prefs.branch.trimmingCharacters(in: .whitespaces)
+        var arguments = ["tools/macos/update.sh"]
+        if !branch.isEmpty { arguments.append(branch) }
+        start(.update, arguments: arguments, in: repo, env: environment(),
+              echo: "$ bash " + arguments.joined(separator: " "))
+    }
+
+    private func start(_ job: Job, arguments: [String], in repo: URL, env: [String: String], echo: String) {
+        logLines = []
+        lastProblem = nil
+        exitSeen = nil
+        self.job = job
+        appendLines(["$ cd \(repo.path)", echo])
 
         let pipe = Pipe()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
-        process.arguments = ["tools/macos/run.sh"]
+        process.arguments = arguments
         process.currentDirectoryURL = repo
         process.environment = env
         process.standardInput = FileHandle.nullDevice
@@ -465,6 +496,13 @@ final class LauncherModel: ObservableObject {
         self.collector = nil
         pollTask = nil
         state = .exited(status: status, bySignal: bySignal)
+        if job == .update {
+            appendLines(["", status == 0 && !bySignal ? "— update finished —" : "— the update stopped (code \(status)) —"])
+            // New code may bring new checks, mods or patches.
+            refreshChecks()
+            reloadRepositoryFiles()
+            return true
+        }
         appendLines(["", bySignal ? "— the game was stopped (signal \(status)) —" : "— the game exited (code \(status)) —"])
         // Pick up changes made in the in-game menu (it saves bbport.ini).
         reloadIni()

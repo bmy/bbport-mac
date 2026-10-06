@@ -72,8 +72,18 @@ struct LauncherSettingsView: View {
                 Text("The folder with tools/macos/run.sh. tools/macos/build_launcher.sh embeds the checkout it was run from.")
                     .foregroundStyle(.secondary)
             }
+            Section {
+                TextField(text: $model.prefs.branch, prompt: Text("Keep the current branch")) {
+                    Text("Branch")
+                }
+            } header: {
+                Text("Update")
+            } footer: {
+                Text("Update fetches this branch from GitHub and rebuilds. macos-port is the main branch; others are for testing. Empty keeps the current one.")
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
-        .frame(width: 560, height: 320)
+        .frame(width: 560, height: 440)
     }
 }

@@ -70,7 +70,17 @@ std::array<float, 12> InverseAffine(const std::array<float, 12>& m) {
 }
 
 u32 CameraYFlag() {
-    return CameraMotion::ViewYUp() ? 8u : 0u;
+    // bbport BB_OBJECT_Y=flip: object motion vectors with their vertical component negated
+    // (A/B for NPC shimmer under FSR on macOS).
+    static const u32 object_flip = [] {
+        const char* env = std::getenv("BB_OBJECT_Y");
+        const bool flip = env && std::strcmp(env, "flip") == 0;
+        if (flip) {
+            std::printf("Object motion: vertical component negated (BB_OBJECT_Y=flip)\n");
+        }
+        return flip ? 16u : 0u;
+    }();
+    return (CameraMotion::ViewYUp() ? 8u : 0u) | object_flip;
 }
 
 } // namespace

@@ -26,7 +26,8 @@ layout(push_constant) uniform Constants {
     vec2 previous_jitter;
     uint mode;         // motion: 1 = object motion vectors available; debug: 0 motion, 1 raw
                        // depth, 2 view z / 50, 3 reprojected previous frame, 4 |difference|;
-                       // + 8: view +y up the screen (0.2's convention, BB_CAMERA_Y=up)
+                       // + 8: view +y up the screen (0.2's convention, BB_CAMERA_Y=up);
+                       // + 16: object vectors with y negated (BB_OBJECT_Y=flip, A/B)
 };
 
 void main() {
@@ -103,7 +104,8 @@ void main() {
         if (object_motion.b > 0.99 && abs(object_motion.a - depth) < depth_threshold &&
             !any(isnan(object_motion.rg)) &&
             !any(isinf(object_motion.rg))) {
-            result = object_motion.rg;
+            result = (mode & 16u) != 0u ? vec2(object_motion.r, -object_motion.g)
+                                        : object_motion.rg;
         }
     }
     imageStore(motion_img, pixel, vec4(result, 0.0, 0.0));

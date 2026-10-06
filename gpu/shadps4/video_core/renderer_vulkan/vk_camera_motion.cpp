@@ -69,7 +69,7 @@ std::array<float, 12> InverseAffine(const std::array<float, 12>& m) {
     return out;
 }
 
-u32 CameraYFlag() {
+u32 CameraYFlag(bool y_up) {
     // bbport BB_OBJECT_Y=flip: object motion vectors with their vertical component negated
     // (A/B for NPC shimmer under FSR on macOS).
     static const u32 object_flip = [] {
@@ -80,27 +80,31 @@ u32 CameraYFlag() {
         }
         return flip ? 16u : 0u;
     }();
-    return (CameraMotion::ViewYUp() ? 8u : 0u) | object_flip;
+    return (y_up ? 8u : 0u) | object_flip;
 }
 
 } // namespace
 
-bool CameraMotion::ViewYUp() {
-    // bbport: which way view +y points on the screen. 0.3 changed it to down the screen (pixel
-    // rows); on macOS that made FSR 3.1 shimmer badly on floors at Native AA, and 0.2's
-    // convention (up) removed it (2026-10-06, M5 Max, Cathedral Ward). BB_CAMERA_Y=up|down
-    // chooses; the default is up on macOS and down elsewhere, as upstream 0.3.
-    static const bool up = [] {
+bool CameraMotion::PassViewYUp(float viewport_yscale) {
+    // bbport: which way view +y points on the screen follows the G-buffer pass's viewport: a
+    // negative y scale maps NDC +y up the screen (0.2's convention), a positive one down (0.3's).
+    // A fixed choice was right in some areas and wrong in others (FSR 3.1 floor shimmer on
+    // macOS with 0.3's; upstream found Yahar'gul needs 0.2's). BB_CAMERA_Y=up|down forces one.
+    static const int forced = [] {
         const char* env = std::getenv("BB_CAMERA_Y");
-#ifdef __APPLE__
-        const bool value = !env || std::strcmp(env, "down") != 0;
-#else
-        const bool value = env && std::strcmp(env, "up") == 0;
-#endif
-        std::printf("Camera motion: view +y %s the screen%s\n", value ? "up" : "down",
-                    env ? " (BB_CAMERA_Y)" : "");
-        return value;
+        if (env && std::strcmp(env, "up") == 0) return 1;
+        if (env && std::strcmp(env, "down") == 0) return 0;
+        return -1;
     }();
+    const bool up = forced >= 0 ? forced == 1 : viewport_yscale < 0.0f;
+    static int last = -1, reports = 0;
+    if (int(up) != last && reports < 16) {
+        ++reports;
+        std::printf("Camera motion: view +y %s the screen (%s, G-buffer viewport y scale %g)\n",
+                    up ? "up" : "down", forced >= 0 ? "BB_CAMERA_Y" : "from the viewport",
+                    viewport_yscale);
+    }
+    last = int(up);
     return up;
 }
 
@@ -261,7 +265,7 @@ void CameraMotion::RecordMotion(vk::ImageView depth_view, vk::ImageView motion_v
         .size = {float(width), float(height)},
         .jitter = jitter,
         .previous_jitter = previous_jitter,
-        .mode = (object_valid ? 1u : 0u) | CameraYFlag(),
+        .mode = (object_valid ? 1u : 0u) | CameraYFlag(current.y_up),
     };
     // bbport: everything the pass reads is captured: it may be recorded on a recording thread
     // while this thread goes on with the next frame's camera.
@@ -301,10 +305,16 @@ void CameraMotion::OnConstants(const float* data) {
         std::abs(data[1] * data[0] - 1.0f) > 1e-3f) {
         return;
     }
-    if (frame_has_camera) {
-        return; // the first one of a frame is the main camera
+    // bbport: the camera of the G-buffer pass whose depth the vectors use (a frame can have two
+    // G-buffer passes with different cameras; the first camera with the last pass's depth gave
+    // wrong vectors). The first constants of that pass; a later pass with another depth
+    // replaces this frame's camera, not the previous frame's.
+    if (frame_has_camera && camera_depth == depth_id) {
+        return;
     }
-    previous = current;
+    if (!frame_has_camera) {
+        previous = current;
+    }
     std::memcpy(current.view.data(), data + 8, 12 * sizeof(float));
     std::memcpy(current.inv_view.data(), data + 180, 12 * sizeof(float));
     // bbport: BB_CAMERA_INVERSE=own: the inverse of the view matrix itself instead of the one the
@@ -340,6 +350,8 @@ void CameraMotion::OnConstants(const float* data) {
     }
     current.proj = {data[52], data[57], data[62], data[63]};
     current.valid = current.proj[0] != 0.0f && current.proj[1] != 0.0f;
+    current.y_up = pass_y_up;
+    camera_depth = depth_id;
     const std::array<u32, 2> size{u32(data[4]), u32(data[5])};
     if (size != render_size) {
         std::printf("Camera motion: scene render size %ux%u\n", size[0], size[1]);
@@ -348,7 +360,10 @@ void CameraMotion::OnConstants(const float* data) {
     frame_has_camera = true;
 }
 
-void CameraMotion::OnGBufferPass(VideoCore::ImageId depth) {
+void CameraMotion::OnGBufferPass(VideoCore::ImageId depth, float viewport_yscale) {
+    if (depth != depth_id) {
+        pass_y_up = PassViewYUp(viewport_yscale);
+    }
     depth_id = depth;
 }
 
@@ -359,6 +374,7 @@ void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
     if (!frame_has_camera) InvalidateHistory();
     frame_has_camera = false;
     depth_id = {};
+    camera_depth = {};
 }
 
 void CameraMotion::Overlay(VideoCore::ImageId frame) {
@@ -413,7 +429,7 @@ void CameraMotion::Overlay(VideoCore::ImageId frame) {
                  : BbToggle::Disabled(1u << 22) ? 3u
                  : BbToggle::Disabled(1u << 23) ? 4u
                                                 : 0u) |
-                CameraYFlag(),
+                CameraYFlag(current.y_up),
     };
     static u32 log_counter = 0;
     if (++log_counter % 200 == 0) {

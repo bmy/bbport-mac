@@ -140,7 +140,7 @@ For Terminal runs; in the app, most are regular settings and the rest go in
 | `BB_OBJECT_MOTION=0` | Turns off character motion vectors (on by default; without them FSR smears animated characters) |
 | `BB_VK_RECORD_THREADS` | Threads recording Vulkan commands (default: 3 on this class of Mac; `1` records on one thread) |
 | `BB_GAMEPAD` | Which controller to use: part of its name or its GUID |
-| `BB_CAMERA_Y` | `up` (default on the Mac) or `down` (bbport 0.3's convention): which way the camera motion vectors treat vertical. `down` makes FSR 3.1 shimmer on floors here |
+| `BB_CAMERA_Y` | `up` or `down` forces which way the camera motion vectors treat vertical. By default it follows each frame's G-buffer viewport (the wrong one makes FSR shimmer on floors) |
 | `BB_BREADCRUMBS=1` | Turns on bbport 0.3's GPU crash breadcrumbs (off on the Mac: with KosmicKrisp they blank the picture) |
 | `BB_PRELOAD_THREADS` | Threads for the startup shader warm-up (default: all cores) |
 

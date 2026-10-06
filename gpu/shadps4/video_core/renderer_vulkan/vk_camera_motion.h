@@ -66,9 +66,12 @@ public:
     /// bbport: the matrices and jitter of the motion of this frame, printed with an upscaler dump
     /// (BB_DUMP_TRIGGER) for offline checks of the vectors.
     void PrintState(int frame) const;
-    /// bbport BB_CAMERA_Y: whether view +y points up the screen (0.2, default on macOS) or down
-    /// it (0.3); used by the motion vectors and the TAA depth check.
-    static bool ViewYUp();
+    /// bbport: whether view +y points up the screen (0.2's convention) or down it (0.3's) for
+    /// this frame's camera: from its G-buffer pass's viewport (BB_CAMERA_Y=up|down forces one).
+    /// Used by the motion vectors and the TAA depth check.
+    [[nodiscard]] bool ViewYUp() const noexcept {
+        return current.y_up;
+    }
 
     /// Records the motion vector pass (Scheduler::Record): `depth_view` (depth aspect, General
     /// layout) into `motion_view` (RG16F storage, General), pixels, previous minus current.
@@ -78,7 +81,7 @@ public:
     void OnConstants(const float* data);
 
     /// The G-buffer pass (5+ color targets): its depth is the scene depth.
-    void OnGBufferPass(VideoCore::ImageId depth);
+    void OnGBufferPass(VideoCore::ImageId depth, float viewport_yscale);
 
     /// The pass copying the finished frame (`frame`, the last target drawn) to the display: the
     /// frame's depth and camera are complete. Records the debug overlay, starts a new frame.
@@ -90,6 +93,7 @@ private:
         std::array<float, 12> inv_view{}; ///< view to world, 3x4 rows
         std::array<float, 4> proj{};      ///< x scale, y scale, z scale, z offset
         bool valid = false;
+        bool y_up = true; ///< view +y up the screen (G-buffer viewport y scale < 0)
     };
 
     void Overlay(VideoCore::ImageId frame);
@@ -110,6 +114,9 @@ private:
     std::array<float, 2> jitter{}, previous_jitter{};
     std::array<u32, 2> render_size{};
     VideoCore::ImageId depth_id{};
+    VideoCore::ImageId camera_depth{}; ///< the G-buffer depth this frame's camera came with
+    bool pass_y_up = true;             ///< the current G-buffer pass's y convention
+    static bool PassViewYUp(float viewport_yscale);
 
     vk::UniqueDescriptorSetLayout desc_layout;
     vk::UniquePipelineLayout pipeline_layout;

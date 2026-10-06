@@ -46,6 +46,8 @@ FfxFsr4ModelPreset ModelPreset(int preset) {
         return FFX_FSR4_MODEL_PRESET_BALANCED;
     case 3:
         return FFX_FSR4_MODEL_PRESET_PERFORMANCE;
+    case 5: // bbport: Ultra Quality (x1.25)
+        return FFX_FSR4_MODEL_PRESET_QUALITY;
     default:
         return FFX_FSR4_MODEL_PRESET_ULTRA_PERFORMANCE;
     }
@@ -248,7 +250,7 @@ struct Fsr4Upscaler::Impl {
         g.output = {f.output.image, f.output.view, f.output.width, f.output.height};
         g.render_width = f.render_width;
         g.render_height = f.render_height;
-        g.ultra_performance = f.preset >= 4;
+        g.ultra_performance = f.preset == 4;
         g.jitter[0] = f.jitter[0];
         g.jitter[1] = f.jitter[1];
         g.sharpness = f.sharpness;
@@ -280,7 +282,8 @@ struct Fsr4Upscaler::Impl {
             Fail("the GPU lacks INT8 dot product / compute derivative support", true);
             return false;
         }
-        const int preset = std::clamp(f.preset, 0, 4);
+        // bbport: Ultra Quality (5) uses the Quality model.
+        const int preset = f.preset == 5 ? 1 : std::clamp(f.preset, 0, 4);
         if (!context_ok || preset != model || f.output.width != out_width ||
             f.output.height != out_height) {
             Destroy();

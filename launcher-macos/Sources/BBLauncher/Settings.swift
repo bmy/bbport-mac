@@ -32,6 +32,7 @@ enum Catalog {
 
     static let presets: [Choice<Int>] = [
         Choice(value: 0, label: "Native AA"),
+        Choice(value: 5, label: "Ultra Quality (x1.25)"),
         Choice(value: 1, label: "Quality (x1.5)"),
         Choice(value: 2, label: "Balanced (x1.7)"),
         Choice(value: 3, label: "Performance (x2)"),

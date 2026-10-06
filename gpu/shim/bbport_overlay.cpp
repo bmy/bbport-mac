@@ -293,15 +293,15 @@ void Menu() {
     ImGui::BeginDisabled(taa);
     int preset = taa ? BbSettings::NativeAA : s.preset.load();
     char preset_label[64];
-    std::snprintf(preset_label, sizeof(preset_label), "%s (x%.1f)", BbSettings::PresetName(preset),
+    std::snprintf(preset_label, sizeof(preset_label), "%s (x%.3g)", BbSettings::PresetName(preset),
                   BbSettings::PresetScale(preset));
     if (ImGui::BeginCombo(Tr("Пресет", "Preset"), preset_label)) {
-        for (int i = 0; i < BbSettings::PresetCount; ++i) {
+        for (const int i : BbSettings::PresetOrder) {
             char label[64];
             const float scale = BbSettings::PresetScale(i);
             const int output = s.output_res;
-            std::snprintf(label, sizeof(label), Tr("%s (x%.1f, рендер %dx%d)",
-                                                   "%s (x%.1f, render %dx%d)"),
+            std::snprintf(label, sizeof(label), Tr("%s (x%.3g, рендер %dx%d)",
+                                                   "%s (x%.3g, render %dx%d)"),
                           BbSettings::PresetName(i), scale,
                           int(std::lround(BbSettings::OutputWidths[output] / scale / 2) * 2),
                           int(std::lround(BbSettings::OutputHeights[output] / scale / 2) * 2));

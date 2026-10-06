@@ -12,8 +12,9 @@ struct Size {
 };
 inline Size ForPreset(int preset, Size output = {}) {
     // Even dimensions for half-resolution effects; match the preset labels exactly.
-    constexpr std::array<double, 5> scales{1.0, 1.5, 1.7, 2.0, 3.0};
-    const double scale = scales[std::clamp(preset, 0, 4)];
+    // bbport: index 5 is Ultra Quality (x1.25), added after the original presets.
+    constexpr std::array<double, 6> scales{1.0, 1.5, 1.7, 2.0, 3.0, 1.25};
+    const double scale = scales[std::clamp(preset, 0, 5)];
     return {uint32_t(std::max(1l, std::lround(output.width / scale / 2)) * 2),
             uint32_t(std::max(1l, std::lround(output.height / scale / 2)) * 2)};
 }

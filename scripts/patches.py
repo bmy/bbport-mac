@@ -21,7 +21,7 @@ FPS_PRESETS={'30':[],'60':['60 FPS++'],'90':['90 FPS++','Sprint Fix (High FPS)']
 # Upscaler presets (bbport.ini "preset", the in-game menu): output / render size ratio. The game
 # then renders at 1920x1080 / ratio and the port's temporal upscaler restores the output size.
 OUTPUT_SIZE=(1920,1080)
-PRESET_SCALES=[1.0,1.5,1.7,2.0,3.0]
+PRESET_SCALES=[1.0,1.5,1.7,2.0,3.0,1.25]  # 5: Ultra Quality (bbport-mac)
 # The community patch changes two independent consumers: the game render/window setup
 # and the UI movie viewport. Keep the latter at native size so glyph rasterisation and
 # vector tessellation do not inherit the scene's FSR resolution.

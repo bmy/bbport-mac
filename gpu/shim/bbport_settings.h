@@ -15,7 +15,13 @@ enum Upscaler : int { UpscalerOff = 0, UpscalerFsr3 = 1, UpscalerFsr4 = 2, Upsca
 inline bool IsFsr4(int upscaler) {
     return upscaler == UpscalerFsr4 || upscaler == UpscalerFsr411;
 }
-enum Preset : int { NativeAA = 0, Quality, Balanced, Performance, UltraPerformance, PresetCount };
+// bbport: UltraQuality (x1.25) comes last so the stored numbers of the others stay.
+enum Preset : int {
+    NativeAA = 0, Quality, Balanced, Performance, UltraPerformance, UltraQuality, PresetCount
+};
+/// The presets in menu order (finest first).
+inline constexpr int PresetOrder[PresetCount] = {NativeAA,     UltraQuality, Quality,
+                                                 Balanced,     Performance,  UltraPerformance};
 enum DebugView : int { DebugNone = 0, DebugReactive = 1, DebugMotion = 2, DebugViewCount };
 
 /// Game effects switched by the community patches at start (patches.py EFFECTS): ini key,

@@ -623,6 +623,22 @@ void *runtime_low_map(size_t size, int prot) {
     write_unlock();
     return p==MAP_FAILED ? NULL : p;
 }
+/* bbport (macOS): like runtime_low_map, from the top of the low region down. The low heap
+ * (low_heap.c, reserved before main) takes its 8 GiB there, so the game image is still the
+ * first mapping at LOW_MIN, as on Linux: upstream code uses image base 0x800000000. */
+void *runtime_low_map_high(size_t size, int prot) {
+    static uintptr_t high_next=BB_LOW_MAX;
+    size=align_up(size,PAGE);
+    write_lock();
+    void *p=MAP_FAILED;
+    while (high_next>=low_next+size+PAGE) {
+        high_next-=size+PAGE; /* unmapped gap above catches overruns */
+        p=bb_map_noreplace((void *)high_next,size,prot);
+        if (p!=MAP_FAILED) break;
+    }
+    write_unlock();
+    return p==MAP_FAILED ? NULL : p;
+}
 /* ---- GPU library interface (gpu/shim/bbgpu.cpp) ---- */
 /* Optimizations switched off at run time (diagnostics): the number in the file named by
  * BB_TOGGLE_FILE, re-read every 250 ms. Bits: 1 region cache, 2 fetch shader cache,

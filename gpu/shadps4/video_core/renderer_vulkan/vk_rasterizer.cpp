@@ -1391,7 +1391,8 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
                 break;
             }
             const VAddr address = buffer.base_address;
-            if (role == Motion::BufferRole::SmallSkeleton &&
+            if ((role == Motion::BufferRole::SmallSkeleton ||
+                 role == Motion::BufferRole::LargeSkeleton) &&
                 memory->IsValidGpuMapping(address, 0) &&
                 memory->ClampRangeSize(address, size) == size) {
                 palette = XXH3_64bits_withSeed(reinterpret_cast<const void*>(address), size,

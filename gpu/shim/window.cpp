@@ -1,4 +1,5 @@
 // bbport: SDL3 window for the Vulkan swapchain (X11, Wayland, or Metal on macOS).
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <SDL3/SDL.h>
@@ -25,6 +26,14 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, height_);
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_RESIZABLE_BOOLEAN, true);
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_VULKAN_BOOLEAN, true);
+#ifdef __APPLE__
+    // bbport (macOS): a Retina-resolution drawable. Without it the CAMetalLayer is sized in
+    // points (half the panel's pixels), so the frame was drawn at e.g. 1512x850 and macOS
+    // stretched it 2x. BB_RETINA=0 restores that (diagnostics).
+    const char* retina = std::getenv("BB_RETINA");
+    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_HIGH_PIXEL_DENSITY_BOOLEAN,
+                           !retina || retina[0] != '0');
+#endif
     const char* fullscreen = std::getenv("BB_FULLSCREEN");
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN, fullscreen && fullscreen[0] == '1');
     base_title = title;
@@ -56,6 +65,10 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     width = w;
     height = h;
     LOG_INFO(Frontend, "Window {}x{} on {}", w, h, driver);
+#ifdef __APPLE__
+    std::printf("Window: %dx%d pixels (pixel density %.2f)\n", w, h,
+                SDL_GetWindowPixelDensity(window));
+#endif
 }
 
 WindowSDL::~WindowSDL() {

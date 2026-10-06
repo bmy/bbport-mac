@@ -69,6 +69,19 @@ std::array<float, 12> InverseAffine(const std::array<float, 12>& m) {
     return out;
 }
 
+/// bbport BB_CAMERA_Y=up: camera vectors with view +y up the screen, as before 0.3 (A/B).
+u32 CameraYFlag() {
+    static const u32 flag = [] {
+        const char* env = std::getenv("BB_CAMERA_Y");
+        const bool up = env && std::strcmp(env, "up") == 0;
+        if (up) {
+            std::printf("Camera motion: view +y up the screen (BB_CAMERA_Y=up)\n");
+        }
+        return up ? 8u : 0u;
+    }();
+    return flag;
+}
+
 } // namespace
 
 CameraMotion::CameraMotion(const Instance& instance_, Scheduler& scheduler_,
@@ -228,7 +241,7 @@ void CameraMotion::RecordMotion(vk::ImageView depth_view, vk::ImageView motion_v
         .size = {float(width), float(height)},
         .jitter = jitter,
         .previous_jitter = previous_jitter,
-        .mode = object_valid ? 1u : 0u,
+        .mode = (object_valid ? 1u : 0u) | CameraYFlag(),
     };
     // bbport: everything the pass reads is captured: it may be recorded on a recording thread
     // while this thread goes on with the next frame's camera.
@@ -375,11 +388,12 @@ void CameraMotion::Overlay(VideoCore::ImageId frame) {
         .size = {float(color.info.size.width), float(color.info.size.height)},
         .jitter = jitter,
         .previous_jitter = previous_jitter,
-        .mode = BbToggle::Disabled(1u << 20)   ? 1u
-                : BbToggle::Disabled(1u << 21) ? 2u
-                : BbToggle::Disabled(1u << 22) ? 3u
-                : BbToggle::Disabled(1u << 23) ? 4u
-                                               : 0u,
+        .mode = (BbToggle::Disabled(1u << 20)   ? 1u
+                 : BbToggle::Disabled(1u << 21) ? 2u
+                 : BbToggle::Disabled(1u << 22) ? 3u
+                 : BbToggle::Disabled(1u << 23) ? 4u
+                                                : 0u) |
+                CameraYFlag(),
     };
     static u32 log_counter = 0;
     if (++log_counter % 200 == 0) {

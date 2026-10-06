@@ -25,7 +25,8 @@ layout(push_constant) uniform Constants {
     vec2 jitter;       // current viewport shift in render pixels (x right, y down)
     vec2 previous_jitter;
     uint mode;         // motion: 1 = object motion vectors available; debug: 0 motion, 1 raw
-                       // depth, 2 view z / 50, 3 reprojected previous frame, 4 |difference|
+                       // depth, 2 view z / 50, 3 reprojected previous frame, 4 |difference|;
+                       // + 8: view +y up the screen (0.2's convention, BB_CAMERA_Y=up)
 };
 
 void main() {
@@ -42,7 +43,10 @@ void main() {
     // vectors on static meshes (2026-10-06, 13 frames running up the Cathedral Ward stairs):
     // this convention matches them within 0.05 px, y up was 1.3-3.7 px off. The error is in
     // pitch and vertical movement, so it showed on stairs (FSR 4 streaks, FSR 3 blur).
-    const vec2 ndc = vec2(scene_uv.x * 2.0 - 1.0, scene_uv.y * 2.0 - 1.0);
+    const uint m = mode & 7u;
+    const bool y_up = (mode & 8u) != 0u;
+    const vec2 ndc = vec2(scene_uv.x * 2.0 - 1.0,
+                          y_up ? 1.0 - scene_uv.y * 2.0 : scene_uv.y * 2.0 - 1.0);
 
     // Clip z = zs * z + zo, w = z; depth = zs + zo / z (zo < 0, depth < zs in front).
     const bool sky = depth >= 1.0;
@@ -55,27 +59,28 @@ void main() {
         vec3(dot(reproject[0], view), dot(reproject[1], view), dot(reproject[2], view));
     const vec2 prev_ndc =
         vec2(prev_view.x * prev_proj.x, prev_view.y * prev_proj.y) / max(prev_view.z, 1e-4);
-    const vec2 prev_uv = prev_ndc * 0.5 + 0.5;
+    const vec2 prev_uv = y_up ? vec2(prev_ndc.x * 0.5 + 0.5, 0.5 - prev_ndc.y * 0.5)
+                              : prev_ndc * 0.5 + 0.5;
     const vec2 motion = (prev_uv - scene_uv) * size;
 
 #ifdef DEBUG_OVERLAY
     const vec4 current = imageLoad(color_img, pixel);
     next_frame[pixel.y * int(size.x) + pixel.x] = packUnorm4x8(current);
-    if (mode == 3 || mode == 4) {
+    if (m == 3 || m == 4) {
         const ivec2 prev_pixel = ivec2(floor(uv * size + motion + previous_jitter - jitter));
         vec4 prev = vec4(0.0, 0.0, 0.0, 1.0);
         if (all(greaterThanEqual(prev_pixel, ivec2(0))) && all(lessThan(prev_pixel, ivec2(size)))) {
             prev = unpackUnorm4x8(prev_frame[prev_pixel.y * int(size.x) + prev_pixel.x]);
         }
-        const vec3 out_color = mode == 3 ? prev.rgb : abs(prev.rgb - current.rgb) * 4.0;
+        const vec3 out_color = m == 3 ? prev.rgb : abs(prev.rgb - current.rgb) * 4.0;
         imageStore(color_img, pixel, vec4(out_color, current.a));
         return;
     }
-    if (mode == 1) {
+    if (m == 1) {
         // Raw depth visualization
         imageStore(color_img, pixel, vec4(fract(depth * 4.0), depth, depth < 0.0 ? 1.0 : 0.0, 1.0));
         return;
-    } else if (mode == 2) {
+    } else if (m == 2) {
         // View-space depth visualization (z / 50)
         const float v = z / 50.0;
         imageStore(color_img, pixel, vec4(fract(v * 4.0), v, v < 0.0 ? 1.0 : 0.0, 1.0));
@@ -88,7 +93,7 @@ void main() {
     imageStore(color_img, pixel, vec4(mix(current.rgb, mv_color, 0.75), current.a));
 #else
     vec2 result = motion;
-    if (mode == 1) {
+    if (m == 1) {
         const vec4 object_motion = texelFetch(object_tex, pixel, 0);
         // A later ordinary draw may have covered this pixel without touching the motion
         // target. Its final depth then differs from the depth stored with the vector.

@@ -69,20 +69,30 @@ std::array<float, 12> InverseAffine(const std::array<float, 12>& m) {
     return out;
 }
 
-/// bbport BB_CAMERA_Y=up: camera vectors with view +y up the screen, as before 0.3 (A/B).
 u32 CameraYFlag() {
-    static const u32 flag = [] {
-        const char* env = std::getenv("BB_CAMERA_Y");
-        const bool up = env && std::strcmp(env, "up") == 0;
-        if (up) {
-            std::printf("Camera motion: view +y up the screen (BB_CAMERA_Y=up)\n");
-        }
-        return up ? 8u : 0u;
-    }();
-    return flag;
+    return CameraMotion::ViewYUp() ? 8u : 0u;
 }
 
 } // namespace
+
+bool CameraMotion::ViewYUp() {
+    // bbport: which way view +y points on the screen. 0.3 changed it to down the screen (pixel
+    // rows); on macOS that made FSR 3.1 shimmer badly on floors at Native AA, and 0.2's
+    // convention (up) removed it (2026-10-06, M5 Max, Cathedral Ward). BB_CAMERA_Y=up|down
+    // chooses; the default is up on macOS and down elsewhere, as upstream 0.3.
+    static const bool up = [] {
+        const char* env = std::getenv("BB_CAMERA_Y");
+#ifdef __APPLE__
+        const bool value = !env || std::strcmp(env, "down") != 0;
+#else
+        const bool value = env && std::strcmp(env, "up") == 0;
+#endif
+        std::printf("Camera motion: view +y %s the screen%s\n", value ? "up" : "down",
+                    env ? " (BB_CAMERA_Y)" : "");
+        return value;
+    }();
+    return up;
+}
 
 CameraMotion::CameraMotion(const Instance& instance_, Scheduler& scheduler_,
                            VideoCore::TextureCache& texture_cache_, Runtime& runtime_)

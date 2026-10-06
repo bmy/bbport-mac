@@ -66,6 +66,9 @@ public:
     /// bbport: the matrices and jitter of the motion of this frame, printed with an upscaler dump
     /// (BB_DUMP_TRIGGER) for offline checks of the vectors.
     void PrintState(int frame) const;
+    /// bbport BB_CAMERA_Y: whether view +y points up the screen (0.2, default on macOS) or down
+    /// it (0.3); used by the motion vectors and the TAA depth check.
+    static bool ViewYUp();
 
     /// Records the motion vector pass (Scheduler::Record): `depth_view` (depth aspect, General
     /// layout) into `motion_view` (RG16F storage, General), pixels, previous minus current.

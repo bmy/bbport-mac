@@ -140,6 +140,8 @@ For Terminal runs; in the app, most are regular settings and the rest go in
 | `BB_OBJECT_MOTION=0` | Turns off character motion vectors (on by default; without them FSR smears animated characters) |
 | `BB_VK_RECORD_THREADS` | Threads recording Vulkan commands (default: 3 on this class of Mac; `1` records on one thread) |
 | `BB_GAMEPAD` | Which controller to use: part of its name or its GUID |
+| `BB_CAMERA_Y` | `up` (default on the Mac) or `down` (bbport 0.3's convention): which way the camera motion vectors treat vertical. `down` makes FSR 3.1 shimmer on floors here |
+| `BB_BREADCRUMBS=1` | Turns on bbport 0.3's GPU crash breadcrumbs (off on the Mac: with KosmicKrisp they blank the picture) |
 | `BB_PRELOAD_THREADS` | Threads for the startup shader warm-up (default: all cores) |
 
 ## Upscalers on the Mac
@@ -159,6 +161,9 @@ For Terminal runs; in the app, most are regular settings and the rest go in
   upstream shadPS4 moved to in October 2026) ran clearly slower in testing, even with them
   switched off, and drew blood on characters wrongly. The port stays on the previous version
   for now.
+- **Depth of field (bbport 0.3).** With DOF on, the top of the frame shows an upside-down copy of
+  the scene and horizontal streaks. It happens on Linux too and the upstream developer knows;
+  until it's fixed, turn **Depth of field** off in the app's Game effects.
 - **Dense scenes.** These drop below 60 FPS. The cause is CPU cost under Rosetta (see
   *Performance*), not the GPU.
 - **Single test machine.** Everything so far has been tested on one Mac.

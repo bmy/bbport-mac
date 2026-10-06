@@ -454,7 +454,6 @@ void VideoOutDriver::Flip(const Request& req) {
                         BbStats::tick_wait_ns.exchange(0) / (window * 1e7),
                         frames ? double(BbStats::reduced_draws.exchange(0)) / frames : 0.0,
                         frames ? double(BbStats::scene_draws.exchange(0)) / frames : 0.0);
-            Vulkan::Scheduler::PrintRecordingStats(window, frames);
             // Frame pacing: spread of the guest flip intervals (judder that the mean hides).
             if (intervals.size() > 2) {
                 std::vector<double> sorted = intervals;

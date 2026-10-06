@@ -986,10 +986,6 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
         return;
     }
     const auto state = BeginRendering(pipeline);
-    // bbport: parallel recording may continue in a new command buffer here. Nothing of this
-    // draw that the new buffer would lack is recorded yet: vertex/index buffers, push data,
-    // descriptors, dynamic state and the pipeline follow (Scheduler::CutPoint).
-    scheduler.CutPoint(scheduler.WillBeginRendering(state));
 
     if (!inputs_resolved) {
         ResolveVertexBuffers(pipeline, draw_prepared);
@@ -1197,7 +1193,6 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
         return;
     }
     const auto state = BeginRendering(pipeline);
-    scheduler.CutPoint(scheduler.WillBeginRendering(state)); // bbport: as in DrawRecord
 
     BindVertexBuffers(pipeline);
     if (is_indexed) {
@@ -1314,7 +1309,6 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
     }
 
     scheduler.EndRendering();
-    scheduler.CutPoint(true); // bbport: the pipeline and resources follow (as in DrawRecord)
     mark();
     pipeline->BindResources(set_writes, push_data);
 
@@ -1369,7 +1363,6 @@ void Rasterizer::DispatchIndirectRecord(const ComputePipeline* pipeline, VAddr a
     }
 
     scheduler.EndRendering();
-    scheduler.CutPoint(true); // bbport: the pipeline and resources follow (as in DrawRecord)
     pipeline->BindResources(set_writes, push_data);
 
     const vk::Pipeline handle = pipeline->Handle();
@@ -3464,7 +3457,6 @@ void Rasterizer::ScopeMarkerBegin(const std::string_view& str, bool from_guest) 
     cmdbuf.beginDebugUtilsLabelEXT(vk::DebugUtilsLabelEXT{
         .pLabelName = str.data(),
     });
-    scheduler.NoteDebugLabel(1); // bbport: no recording segment cut inside the region
 }
 
 void Rasterizer::ScopeMarkerEnd(bool from_guest) {
@@ -3475,7 +3467,6 @@ void Rasterizer::ScopeMarkerEnd(bool from_guest) {
     }
     const auto cmdbuf = scheduler.CommandBuffer();
     cmdbuf.endDebugUtilsLabelEXT();
-    scheduler.NoteDebugLabel(-1);
 }
 
 void Rasterizer::ScopedMarkerInsert(const std::string_view& str, bool from_guest) {

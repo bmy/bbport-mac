@@ -18,7 +18,6 @@
 #include <thread>
 #include <queue>
 
-#include "bbport_copy.h"
 #include "bbport_toggles.h"
 #include "common/assert.h"
 #include "common/interval_set.h"
@@ -578,19 +577,6 @@ struct DynamicState {
 
 using SubmitFunc = Common::UniqueFunction<void, SubmitInfo&>;
 
-/// bbport: a contiguous part of one submission's commands, recorded into its own primary
-/// command buffer by one recording worker (parallel recording,
-/// docs/macos-parallel-recording.md). The submission's segments are submitted in order.
-struct RecordSegment {
-    vk::CommandBuffer cmdbuf{}; ///< valid once begun
-    u32 worker = 0;             ///< the worker that records it (round robin)
-    // Written by whoever begins/ends the buffer (its worker; the producer only while that
-    // worker is idle, in direct mode); read by the producer after waiting for the worker.
-    bool begun = false;
-    bool ended = false;
-    bool sent = false; ///< producer only: chunks were handed to the worker
-};
-
 /// bbport: a block of deferred Vulkan commands. Commands are closures placed in
 /// fixed storage (no allocation per command) and run in order on the recording thread.
 class RecordChunk {
@@ -647,11 +633,6 @@ public:
     [[nodiscard]] size_t Size() const noexcept {
         return used;
     }
-
-    /// Parallel recording: the segment the commands belong to, and whether its command buffer
-    /// ends after them. Set when the chunk is handed to a worker.
-    RecordSegment* segment{};
-    bool ends_segment = false;
 
 private:
     /// The recording thread last read these cache lines: the first write to each has to take
@@ -735,7 +716,8 @@ public:
     /// KickRecording() or submission.
     [[gnu::noinline]] vk::CommandBuffer CommandBuffer() {
         if (recorder_thread.joinable() && !direct_mode) {
-            EnterDirectMode();
+            SyncRecording();
+            direct_mode = true;
             direct_recordings.fetch_add(1, std::memory_order_relaxed);
             TraceDirectRecording(__builtin_return_address(0));
         }
@@ -754,7 +736,9 @@ public:
             return;
         }
         if (BbToggle::Disabled(BbToggle::ThreadedRecording)) {
-            func(EnterDirectMode());
+            SyncRecording();
+            direct_mode = true;
+            func(current_cmdbuf);
             return;
         }
         if (!record_chunk->Push(std::forward<Func>(func))) {
@@ -806,24 +790,6 @@ public:
     /// Waits until every recorded command is in the command buffer.
     void SyncRecording();
 
-    /// bbport (parallel recording): a point between two draws or dispatches where the rest of
-    /// the submission may continue in a new command buffer on the next worker. Called by the
-    /// rasterizer before any of the draw's bindings are recorded (they are re-recorded per draw
-    /// anyway); `pass_ends`: the draw does not continue the open render pass. Cuts only:
-    /// - outside a render pass, or where the draw would end the pass anyway (it ends here, in
-    ///   the old buffer, instead of in BeginRendering: no extra pass break);
-    /// - outside direct mode (a raw command buffer user may rely on its state) and outside debug
-    ///   label regions;
-    /// and then invalidates the dynamic state, the only state carried between draws, so the next
-    /// draw sets all of it in the new buffer.
-    void CutPoint(bool pass_ends, std::source_location where = std::source_location::current());
-
-    /// bbport: debug label regions opened (+1) and closed (-1) by raw command buffer users; no
-    /// cut while one is open.
-    void NoteDebugLabel(int delta) {
-        label_depth += delta;
-    }
-
     /// bbport: guest memory copies on the recording thread (small ones, RecordHostCopy) or the
     /// copy threads (BbCopy::Async) must be done before the guest learns the GPU is past them
     /// (it may then rewrite the memory, e.g. UI vertices: flickering) and before the
@@ -831,11 +797,9 @@ public:
     void WaitHostCopies();
 
     /// Runs `copy` on the recording thread in order with the commands (the thread spins for
-    /// work anyway, so small copies cost no wakeup); WaitHostCopies() covers it. Not with
-    /// HostCopiesOffRecorder(): copies then use QueueHostCopy().
+    /// work anyway, so small copies cost no wakeup); WaitHostCopies() covers it.
     template <typename Func>
     void RecordHostCopy(Func&& copy) {
-        ASSERT_MSG(!copies_off_recorder, "host copy recorded while copies bypass the recorder");
         Record([copy = std::forward<Func>(copy), this,
                 seq = ++host_copies_issued](vk::CommandBuffer) {
             copy();
@@ -845,29 +809,8 @@ public:
 
     /// bbport: runs `signal` once the guest memory copies issued so far are done, without
     /// waiting here: the recording thread reaches it after the copies queued before it and hands
-    /// it to the copy threads' completion (BbCopy::AfterCopies). With HostCopiesOffRecorder()
-    /// the signal goes to BbCopy::AfterCopies directly (see the invariants in the .cpp).
+    /// it to the copy threads' completion (BbCopy::AfterCopies).
     void SignalAfterHostCopies(std::function<void()> signal);
-
-    /// bbport (BB_COPIES_OFF_RECORDER, default on macOS): small guest copies are batched for
-    /// the copy threads (QueueHostCopy) and deferred fence signals go straight to
-    /// BbCopy::AfterCopies, so nothing with a side effect outside Vulkan is recorded: EOS and
-    /// WriteData then wait for the copy threads only, not for the recording thread to catch up.
-    /// Latched per submission (LatchRecordingMode); toggle bit RecorderHostCopies turns it off.
-    [[nodiscard]] bool HostCopiesOffRecorder() const noexcept {
-        return copies_off_recorder;
-    }
-
-    /// bbport: queues a small guest copy (HostCopiesOffRecorder()) in a batch for the copy
-    /// threads. The batch belongs to the scheduler, not to the calling thread, so a fence
-    /// signalled from any thread covers copies queued from any other.
-    void QueueHostCopy(const BbCopy::Item& item);
-
-    /// bbport: starts the batched guest copies on the copy threads.
-    void FlushHostCopies();
-
-    /// bbport (BB_FRAME_STATS): prints the "Recording:" line for the last `seconds`.
-    static void PrintRecordingStats(double seconds, double frames);
 
     /// bbport: before a guest-visible write that is not deferred (WriteData, end-of-shader
     /// fences, flip): waits until every signal handed to SignalAfterHostCopies ran, so that
@@ -936,31 +879,6 @@ private:
 
     void SubmitExecution(SubmitInfo& info);
 
-    /// Waits for the recording, then records on the calling thread: the whole command buffer
-    /// (single recorder), or the current segment's once its worker is idle (parallel).
-    vk::CommandBuffer EnterDirectMode();
-
-    // bbport: parallel recording (segments, BB_VK_RECORD_WORKERS).
-    struct RecordWorker;
-    void RecordWorkerThread(std::stop_token stoken, RecordWorker& worker);
-    void CreateRecordWorkers();
-    /// Hands the pending chunks to the current segment's worker; `end_segment`: its buffer
-    /// ends after them (sends an empty chunk if needed; nothing if the segment is unused).
-    void HandOff(bool end_segment);
-    void CutSegment();
-    void NewSegment();
-    /// First segment of a submission.
-    void StartSegments();
-    void BeginSegment(RecordSegment& segment, CommandPool& pool);
-    static void WaitWorkerIdle(RecordWorker& worker);
-
-    /// bbport: decides HostCopiesOffRecorder() for the next submission. Only called where no
-    /// copy or signal from the stream is pending (construction, after a submission's sync).
-    void LatchRecordingMode();
-
-    /// Takes the batch of QueueHostCopy() (under host_batch_mutex).
-    std::vector<BbCopy::Item> TakeHostCopies();
-
     void PriorityPendingOpsThread(std::stop_token stoken);
 
 private:
@@ -1002,19 +920,6 @@ private:
     bool recorder_sleeping = false; ///< waiting on recorder_cv (guarded by recorder_mutex)
     bool direct_mode = false; ///< the command buffer is recorded on the caller's thread
     u64 host_copies_issued = 0;
-    bool copies_off_recorder = false; ///< latched per submission (LatchRecordingMode)
-    bool segmented = false;           ///< parallel recording, latched per submission
-    std::vector<std::unique_ptr<RecordWorker>> workers; ///< empty: segments not wanted
-    std::deque<RecordSegment> segments; ///< this submission's, in order (stable addresses)
-    RecordSegment* cur_segment{};
-    u32 next_worker = 0;
-    u32 segment_units = 0; ///< recording work in the current segment (passes weigh 8)
-    u32 cut_units = 250;   ///< BB_VK_SEGMENT_UNITS
-    int label_depth = 0;
-    std::vector<vk::CommandBuffer> submit_cmdbufs;
-    std::mutex host_batch_mutex;
-    std::vector<BbCopy::Item> host_batch; ///< QueueHostCopy(), guarded by host_batch_mutex
-    u64 host_batch_bytes = 0;
     std::atomic<u64> host_copies_done{0};
     std::atomic<u64> deferred_signals_issued{0}; ///< by the thread recording (A or B)
     std::shared_ptr<std::atomic<u64>> deferred_signals_done =

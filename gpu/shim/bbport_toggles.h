@@ -52,13 +52,6 @@ enum : std::uint64_t {
     SampleSceneProxies = 1ull << 48,
     OrderedGuestWrites = 1ull << 49,
     SceneHalfRes = 1ull << 50, ///< live scaling also reduces the 960x540 post targets
-    // Bit set: small guest copies and deferred fence signals go through the Vulkan recording
-    // thread again (the behaviour before BB_COPIES_OFF_RECORDER). Takes effect at the next
-    // submission (Scheduler::LatchRecordingMode).
-    RecorderHostCopies = 1ull << 59,
-    // Bit set: one Vulkan recording thread and one command buffer per submission instead of
-    // segments on BB_VK_RECORD_WORKERS workers. Takes effect at the next submission.
-    ParallelRecording = 1ull << 60,
     UpdateImageFastPath = 1u << 30,
     // TAA A/B in one run: optional techniques, off by default (no measured gain, 2026-10-02).
     TaaTonemapBlend = 1ull << 51,
@@ -119,11 +112,6 @@ inline std::atomic<std::uint64_t> reduced_draws{0}, scene_draws{0};
 /// for host copies before a submission or fence, and for GPU ticks.
 inline std::atomic<std::uint64_t> sync_recording_ns{0}, host_copies_wait_ns{0}, tick_wait_ns{0},
     copy_threads_wait_ns{0}, host_copy_waits{0};
-/// bbport (BB_FRAME_STATS "Recording:" line): Vulkan recording threads' time executing
-/// recorded commands, small guest copies batched off the recorder and the batches started for
-/// them, and fences signalled through the copy threads instead of the recording thread.
-inline std::atomic<std::uint64_t> recorder_busy_ns{0}, host_batch_copies{0}, host_batches{0},
-    copy_thread_fences{0};
 struct WaitTimer {
     std::atomic<std::uint64_t>& total;
     std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();

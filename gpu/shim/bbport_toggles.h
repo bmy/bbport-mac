@@ -59,9 +59,6 @@ enum : std::uint64_t {
     // Bit set: one Vulkan recording thread and one command buffer per submission instead of
     // segments on BB_VK_RECORD_WORKERS workers. Takes effect at the next submission.
     ParallelRecording = 1ull << 60,
-    /// Scene textures use BB_ANISO (16) times anisotropic filtering instead of the game's
-    /// ratio; bit set: the game's own samplers (A/B while the game runs).
-    ForcedAniso = 1ull << 61,
     UpdateImageFastPath = 1u << 30,
     // TAA A/B in one run: optional techniques, off by default (no measured gain, 2026-10-02).
     TaaTonemapBlend = 1ull << 51,

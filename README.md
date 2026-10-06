@@ -133,7 +133,6 @@ For Terminal runs; in the app, most are regular settings and the rest go in
 | `BB_UPSCALER` | `fsr3` (recommended), `taa`, `metalfx`, `off`. If unset, the in-game menu's choice applies. |
 | `BB_FRAME_STATS=1` | Prints frame rate and timing breakdowns to `out/last-run.log` every 5 s |
 | `BB_OBJECT_MOTION=0` | Turns off character motion vectors (on by default; without them FSR smears animated characters) |
-| `BB_ANISO` | Anisotropic filtering of scene textures: `16` (default), `8`, `4`, `2`, or `0` for the game's own |
 | `BB_PRELOAD_THREADS` | Threads for the startup shader warm-up (default: all cores) |
 
 ## Upscalers on the Mac

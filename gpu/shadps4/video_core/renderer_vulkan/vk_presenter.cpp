@@ -317,6 +317,142 @@ static vk::Format GetFrameViewFormat(const Libraries::VideoOut::PixelFormat form
     return {};
 }
 
+
+namespace {
+/// bbport BB_DISPLAY_CHECK (on by default on macOS): every 5 s the image the presenter shows
+/// (before the post pass) and the frame it draws are read back, and the log says how much of
+/// each is not black (finds where a black picture starts).
+bool DisplayCheckDue() {
+    static const bool enabled = [] {
+        const char* env = std::getenv("BB_DISPLAY_CHECK");
+#ifdef __APPLE__
+        return !env || env[0] != '0';
+#else
+        return env && env[0] == '1';
+#endif
+    }();
+    if (!enabled) {
+        return false;
+    }
+    static auto last = std::chrono::steady_clock::now();
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last < std::chrono::seconds(5)) {
+        return false;
+    }
+    last = now;
+    return true;
+}
+
+u32 CheckBytesPerPixel(vk::Format format) {
+    switch (format) {
+    case vk::Format::eR16G16B16A16Sfloat:
+    case vk::Format::eR16G16B16A16Unorm:
+        return 8;
+    case vk::Format::eB8G8R8A8Unorm:
+    case vk::Format::eB8G8R8A8Srgb:
+    case vk::Format::eR8G8B8A8Unorm:
+    case vk::Format::eR8G8B8A8Srgb:
+    case vk::Format::eA2R10G10B10UnormPack32:
+    case vk::Format::eA2B10G10R10UnormPack32:
+    case vk::Format::eB10G11R11UfloatPack32:
+        return 4;
+    default:
+        return 0;
+    }
+}
+
+void CheckImage(const Instance& instance, Scheduler& scheduler, vk::CommandBuffer cmdbuf,
+                vk::Image image, vk::ImageLayout layout, vk::Format format, u32 width, u32 height,
+                const char* name) {
+    const u32 bpp = CheckBytesPerPixel(format);
+    if (!image || bpp == 0 || width == 0 || height == 0) {
+        std::printf("Display check: %s %ux%u format %s not checked\n", name, width, height,
+                    vk::to_string(format).c_str());
+        return;
+    }
+    const VkDeviceSize size = VkDeviceSize(width) * height * bpp;
+    const VkBufferCreateInfo buffer_ci{
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = size,
+        .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+    };
+    const VmaAllocationCreateInfo alloc_ci{
+        .flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT,
+        .usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+    };
+    VkBuffer buffer{};
+    VmaAllocation allocation{};
+    VmaAllocationInfo info{};
+    if (vmaCreateBuffer(instance.GetAllocator(), &buffer_ci, &alloc_ci, &buffer, &allocation,
+                        &info) != VK_SUCCESS) {
+        return;
+    }
+    const vk::ImageLayout copy_layout =
+        layout == vk::ImageLayout::eGeneral ? layout : vk::ImageLayout::eTransferSrcOptimal;
+    const auto transition = [&](vk::ImageLayout from, vk::ImageLayout to) {
+        if (from == to) {
+            return;
+        }
+        const vk::ImageMemoryBarrier2 b{
+            .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+            .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+            .dstAccessMask = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
+            .oldLayout = from,
+            .newLayout = to,
+            .image = image,
+            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+        };
+        cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &b});
+    };
+    const vk::MemoryBarrier2 before{
+        .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+        .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+        .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
+    };
+    cmdbuf.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &before});
+    transition(layout, copy_layout);
+    const vk::BufferImageCopy region{
+        .imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+        .imageExtent = {width, height, 1},
+    };
+    cmdbuf.copyImageToBuffer(image, copy_layout, vk::Buffer{buffer}, region);
+    transition(copy_layout, layout);
+    const bool ten_bit = format == vk::Format::eA2R10G10B10UnormPack32 ||
+                         format == vk::Format::eA2B10G10R10UnormPack32;
+    const bool float11 = format == vk::Format::eB10G11R11UfloatPack32;
+    scheduler.DeferPriorityOperation([allocator = instance.GetAllocator(), buffer, allocation,
+                                      info, width, height, bpp, ten_bit, float11, name,
+                                      format_name = vk::to_string(format)] {
+        vmaInvalidateAllocation(allocator, allocation, 0, VK_WHOLE_SIZE);
+        const auto* data = static_cast<const u8*>(info.pMappedData);
+        const u64 pixels = u64(width) * height;
+        u64 lit = 0, sum = 0;
+        for (u64 i = 0; i < pixels; ++i) {
+            const u8* px = data + i * bpp;
+            bool on;
+            if (bpp == 8) {
+                u64 v;
+                std::memcpy(&v, px, 8);
+                on = (v & 0x0000ffffffffffffull) != 0;
+            } else {
+                u32 v;
+                std::memcpy(&v, px, 4);
+                on = (v & (float11 ? 0xffffffffu : ten_bit ? 0x3fffffffu : 0x00ffffffu)) != 0;
+            }
+            lit += on;
+            sum += px[bpp == 8 ? 1 : 1];
+        }
+        std::printf("Display check: %s %ux%u %s: %.1f%% of pixels not black, mean of byte 1 "
+                    "%.1f\n",
+                    name, width, height, format_name.c_str(), 100.0 * double(lit) / double(pixels),
+                    double(sum) / double(pixels));
+        vmaDestroyBuffer(allocator, buffer, allocation);
+    });
+}
+} // namespace
+
 Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& attribute,
                                VAddr cpu_address) {
     BbTimeline::Note(BbTimeline::PipeTask, 4, draw_scheduler.CurrentTick());
@@ -398,6 +534,19 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
         runtime.FlushBarriers();
     }
     expected_ratio = static_cast<float>(image_size.width) / static_cast<float>(image_size.height);
+    const bool display_check = DisplayCheckDue();
+    if (display_check) {
+        if (upscaled) {
+            CheckImage(instance, draw_scheduler, cmdbuf, display.image,
+                       vk::ImageLayout::eShaderReadOnlyOptimal, display.format, display.width,
+                       display.height, "display (port-drawn)");
+        } else {
+            auto& image = texture_cache.GetImage(image_id);
+            CheckImage(instance, draw_scheduler, cmdbuf, image.GetImage(),
+                       vk::ImageLayout::eShaderReadOnlyOptimal, image.info.pixel_format,
+                       image.info.size.width, image.info.size.height, "display (guest buffer)");
+        }
+    }
 
     {
         const Breadcrumbs::Scope crumb{cmdbuf, draw_scheduler.CrumbStream(), "presenter FSR"};
@@ -413,6 +562,11 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
         const Breadcrumbs::Scope crumb{cmdbuf, draw_scheduler.CrumbStream(),
                                        "presenter post process"};
         pp_pass.Render(cmdbuf, image_view, image_size, *frame, pp_settings);
+    }
+    if (display_check) {
+        CheckImage(instance, draw_scheduler, cmdbuf, frame->image, vk::ImageLayout::eGeneral,
+                   swapchain.GetSurfaceFormat().format, frame->width, frame->height,
+                   "frame after post pass");
     }
 
 

@@ -57,6 +57,14 @@ std::array<ArgsNote, ArgSlots> args_notes{};
 
 void Init(const Instance& instance) {
     const char* env = std::getenv("BB_BREADCRUMBS");
+#ifdef __APPLE__
+    // bbport (macOS): off unless BB_BREADCRUMBS=1. KosmicKrisp writes each marker with a
+    // compute dispatch of its own (hundreds of thousands a minute), queued to the end of every
+    // render pass.
+    if (!env || env[0] != '1') {
+        return;
+    }
+#endif
     if (env && env[0] == '0') {
         return;
     }

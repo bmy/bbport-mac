@@ -8,6 +8,9 @@
 #include <algorithm>
 #include <bit>
 #include <cstdlib>
+#include <cstdio>
+#include <cstring>
+#include <string>
 #include <magic_enum/magic_enum.hpp>
 #include "bbport_copy.h"
 #include "bbport_toggles.h"
@@ -1160,6 +1163,7 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
     ProcessDemotions();
     ProcessPendingAssets();
     ProcessLateWrites();
+    DiagArenaCheck();
     IntervalList bind_ranges;
     resident_ranges.ForEachGap(first_block, last_block + 1,
                                [&](u64 start, u64 end) { bind_ranges.Add({start, end}); });
@@ -1250,6 +1254,109 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
     runtime.CopyBuffer(staging.buffer, bda_pagetable_buffer.get(), copies);
 }
 
+void BufferCache::DiagArenaCheck() {
+    static const bool enabled = [] {
+        const char* env = std::getenv("BB_ARENA_CHECK");
+#ifdef __APPLE__
+        return !env || env[0] != '0';
+#else
+        return env && env[0] == '1';
+#endif
+    }();
+    const u32 now = BbStats::coarse_second.load(std::memory_order_relaxed);
+    if (!enabled || now - arena_check_second < 5) {
+        return;
+    }
+    arena_check_second = now;
+    // Pages of blocks in VRAM whose contents both sides agree on: neither CPU- nor GPU-modified.
+    constexpr u64 Page = 4096;
+    constexpr u32 MaxPages = 16;
+    struct Sample {
+        VAddr address;
+        const Buffer* arena;
+    };
+    std::vector<Sample> samples;
+    u64 ranges = 0;
+    for (const auto& range : resident_ranges) {
+        ++ranges;
+    }
+    const u64 stride = std::max<u64>(1, ranges / MaxPages);
+    u64 index = 0;
+    for (const auto& range : resident_ranges) {
+        if (samples.size() >= MaxPages) {
+            break;
+        }
+        if (index++ % stride != 0 || in_place_blocks.Contains(range.start)) {
+            continue;
+        }
+        const VAddr first = range.start << block_shift;
+        const VAddr last = range.end << block_shift;
+        for (VAddr address = first; address < last && address < first + 64 * Page;
+             address += Page) {
+            if (memory_tracker->IsRegionCpuModified(address, Page) ||
+                memory_tracker->IsRegionGpuModified(address, Page)) {
+                continue;
+            }
+            const Buffer* arena = nullptr;
+            for (const auto& candidate : arenas) {
+                if (candidate.cpu_addr <= address &&
+                    address + Page <= candidate.cpu_addr + candidate.size_bytes) {
+                    arena = &candidate;
+                    break;
+                }
+            }
+            if (arena) {
+                samples.push_back({address, arena});
+            }
+            break;
+        }
+    }
+    if (samples.empty()) {
+        std::printf("Arena check: no synchronized pages in VRAM to compare (%llu ranges)\n",
+                    (unsigned long long)ranges);
+        return;
+    }
+    const auto download = staging_pool.Request(samples.size() * Page, MemoryType::HostCached, 16,
+                                               true);
+    for (u64 i = 0; i < samples.size(); ++i) {
+        const vk::BufferCopy copy{samples[i].address - samples[i].arena->cpu_addr,
+                                  download.offset + i * Page, Page};
+        runtime.CopyBuffer(samples[i].arena, download.buffer, std::span{&copy, 1});
+    }
+    scheduler.DeferPriorityOperation([this, download, samples, ranges] {
+        download.Invalidate();
+        u32 equal = 0, gpu_zero = 0, guest_zero = 0;
+        std::vector<u8> guest(Page);
+        std::string first_mismatch;
+        for (u64 i = 0; i < samples.size(); ++i) {
+            const u8* gpu = download.mapped + i * Page;
+            memory->CopySparseMemory(samples[i].address, guest.data(), Page);
+            const bool same = std::memcmp(gpu, guest.data(), Page) == 0;
+            const bool gz = std::all_of(gpu, gpu + Page, [](u8 b) { return b == 0; });
+            const bool cz = std::all_of(guest.begin(), guest.end(), [](u8 b) { return b == 0; });
+            equal += same;
+            gpu_zero += gz;
+            guest_zero += cz;
+            if (!same && first_mismatch.empty()) {
+                u32 differ = 0;
+                for (u64 b = 0; b < Page; ++b) {
+                    differ += gpu[b] != guest[b];
+                }
+                char line[160];
+                std::snprintf(line, sizeof(line), "; first mismatch %#llx: %u bytes differ, GPU %s",
+                              (unsigned long long)samples[i].address, differ,
+                              gz ? "all zero" : "has data");
+                first_mismatch = line;
+            }
+        }
+        std::printf("Arena check: %zu pages of %llu VRAM ranges: %u equal to guest memory, "
+                    "%u all zero on the GPU, %u all zero in guest memory%s\n",
+                    samples.size(), (unsigned long long)ranges, equal, gpu_zero, guest_zero,
+                    first_mismatch.c_str());
+        staging_pool.FreeDeferred(download);
+    });
+}
+
 std::pair<vk::DeviceMemory, u64> BufferCache::AllocateResidency(u64 bytes) {
     if (bytes == block_size && free_slot_count != 0) {
         // bbport: a slot of the fullest chunk: the emptier ones drain and go back to the driver.
@@ -1284,6 +1391,22 @@ std::pair<vk::DeviceMemory, u64> BufferCache::AllocateResidency(u64 bytes) {
         BbStats::residency_alloc_bytes.fetch_add(size, std::memory_order_relaxed);
         return memory;
     };
+    // bbport: BB_RESIDENCY_CHUNKS=0: each request gets device memory of its own at offset 0, as
+    // in 0.2 (diagnostics: sparse binds into shared chunks on drivers that may mishandle them).
+    static const bool chunks = [] {
+        const char* env = std::getenv("BB_RESIDENCY_CHUNKS");
+        const bool on = !env || env[0] != '0';
+        if (!on) {
+            std::printf("Buffer cache: residency without 64 MiB chunks (BB_RESIDENCY_CHUNKS=0)\n");
+        }
+        return on;
+    }();
+    if (!chunks) {
+        const auto memory = allocate(bytes);
+        residency_chunks[static_cast<VkDeviceMemory>(memory)] = {bytes, bytes, 0, 0};
+        NoteResidencyUnused();
+        return {memory, 0};
+    }
     if (residency_used + bytes > residency_size) {
         const u64 size = std::max(bytes, ResidencyBlock);
         residency_memory = size == ResidencyBlock && spare_residency.valid() ? spare_residency.get()

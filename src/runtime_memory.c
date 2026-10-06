@@ -666,7 +666,10 @@ static void *toggle_watcher(void *path) {
         unsigned long long value=0;
         if (f) { if (fscanf(f,"%llu",&value)!=1) value=0; fclose(f); }
         if (value!=last) {
-            __atomic_store_n(&runtime_disabled_optimizations,(uint64_t)value,__ATOMIC_RELEASE);
+            /* bbport: BB_TOGGLES (set at start) stays disabled. */
+            const char *fixed=getenv("BB_TOGGLES");
+            __atomic_store_n(&runtime_disabled_optimizations,
+                             (uint64_t)value|(fixed ? strtoull(fixed,NULL,0) : 0),__ATOMIC_RELEASE);
             printf("Runtime: disabled optimizations mask=%llu\n",value);
             last=value;
         }
@@ -682,6 +685,12 @@ void runtime_memory_set_guest_chunk_allocator(int (*alloc)(uint64_t phys, uint64
 }
 void runtime_memory_set_gpu_hooks(GpuRange map, GpuRange unmap, GpuRange invalidate) {
     const char *toggles=getenv("BB_TOGGLE_FILE");
+    /* bbport: BB_TOGGLES=<mask>: the same bits from the start, without a file (launcher). */
+    if (getenv("BB_TOGGLES")) {
+        runtime_disabled_optimizations=strtoull(getenv("BB_TOGGLES"),NULL,0);
+        printf("Runtime: disabled optimizations mask=%llu (BB_TOGGLES)\n",
+               (unsigned long long)runtime_disabled_optimizations);
+    }
     static pthread_t watcher;
     if (toggles && !watcher) pthread_create(&watcher,NULL,toggle_watcher,(void *)toggles);
     write_lock();

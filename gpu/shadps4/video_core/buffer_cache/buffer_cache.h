@@ -248,6 +248,11 @@ private:
     void QueuePromotions(u64 submitted);
     /// Arena residency memory from the 64 MiB blocks: the memory and the byte offset in it.
     std::pair<vk::DeviceMemory, u64> AllocateResidency(u64 bytes);
+    /// bbport BB_ARENA_CHECK (on by default on macOS): every 5 s, a few synchronized pages of
+    /// guest blocks in VRAM are read back and compared with the game's memory (the log says
+    /// whether the GPU sees the guest's data through the sparse arena).
+    void DiagArenaCheck();
+    u32 arena_check_second = 0;
     /// bbport: BbStats::residency_unused_bytes after the free list or the current block changed.
     void NoteResidencyUnused();
     /// bbport: idle VRAM blocks (see group_use).

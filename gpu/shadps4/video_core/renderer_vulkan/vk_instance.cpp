@@ -402,6 +402,9 @@ bool Instance::CreateDevice() {
     // bbport: MetalFX upscaler (vk_metalfx): KosmicKrisp exports memory as MTLHeaps. The name
     // macro lives in vulkan_metal.h, outside this file's platform defines.
     external_memory_metal = add_extension("VK_EXT_external_memory_metal");
+    // bbport: MetalFX without CPU waits: the MTLSharedEvents of timeline semaphores (this port's
+    // KosmicKrisp patch 0002; an unpatched driver lacks it and MetalFX stays synchronous).
+    metal_objects = add_extension("VK_EXT_metal_objects");
 #endif
     shader_clock = add_extension(VK_KHR_SHADER_CLOCK_EXTENSION_NAME);
     if (shader_clock) {

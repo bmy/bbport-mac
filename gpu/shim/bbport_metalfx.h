@@ -38,6 +38,14 @@ struct Frame {
     float motion_scale_x, motion_scale_y; ///< 1: pixels, previous minus current position
     bool reset;
     bool depth_reversed;
+    /// Asynchronous (both set): the GPU waits until `wait_event` (an id<MTLSharedEvent>, a
+    /// Vulkan timeline) reaches `wait_value` before reading the inputs, and sets `signal_event`
+    /// to `signal_value` when the output is written; nothing waits on the CPU. A failed command
+    /// buffer still sets it (from its completion handler), and TakeError() reports it later.
+    void* wait_event = nullptr;
+    uint64_t wait_value = 0;
+    void* signal_event = nullptr;
+    uint64_t signal_value = 0;
 };
 
 class Scaler {
@@ -45,9 +53,11 @@ public:
     ~Scaler();
     static std::unique_ptr<Scaler> Create(const Config& config, const Heaps& heaps,
                                           std::string& error);
-    /// Copies the input buffers into textures, upscales, copies the output into its buffer, and
-    /// waits until the GPU is done (the first version is synchronous).
+    /// Copies the input buffers into textures, upscales and copies the output into its buffer.
+    /// Without events in `frame`, waits until the GPU is done.
     bool Encode(const Frame& frame, std::string& error);
+    /// The failure of an earlier asynchronous frame, once.
+    bool TakeError(std::string& error);
 
     struct Impl;
 

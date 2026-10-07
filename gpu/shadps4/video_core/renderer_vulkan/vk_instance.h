@@ -312,6 +312,10 @@ public:
     bool IsExternalMemoryMetalEnabled() const {
         return external_memory_metal;
     }
+    /// bbport: VK_EXT_metal_objects is enabled (shared events of semaphores; MetalFX, macOS).
+    bool IsMetalObjectsEnabled() const {
+        return metal_objects;
+    }
 
     /// VK_KHR_shader_clock is supported.
     bool IsShaderSubgroupClockSupported() const {
@@ -593,6 +597,7 @@ private:
     bool compute_shader_derivatives{};
     bool mixed_float_dot_product{}; // bbport: VK_VALVE_shader_mixed_float_dot_product (FSR 4.1.1)
     bool external_memory_metal{};   // bbport: VK_EXT_external_memory_metal (MetalFX, macOS)
+    bool metal_objects{};           // bbport: VK_EXT_metal_objects (MetalFX events, macOS)
     bool supports_memory_budget{};
     bool supports_block_texel_view{};
     u64 total_memory_budget{};

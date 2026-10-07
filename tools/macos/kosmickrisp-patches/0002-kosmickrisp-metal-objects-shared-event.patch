@@ -1,0 +1,54 @@
+--- a/src/kosmickrisp/vulkan/kk_physical_device.c
++++ b/src/kosmickrisp/vulkan/kk_physical_device.c
+@@ -180,6 +180,8 @@
+       .EXT_depth_clip_enable = true,
+       .EXT_extended_dynamic_state3 = true,
+       .EXT_external_memory_metal = true,
++      /* bbport: shared events of timeline semaphores only (kk_ExportMetalObjectsEXT). */
++      .EXT_metal_objects = true,
+       .EXT_external_memory_host = true,
+       .EXT_hdr_metadata = true,
+       .EXT_image_2d_view_of_3d = true,
+--- a/src/kosmickrisp/vulkan/kk_sync.c
++++ b/src/kosmickrisp/vulkan/kk_sync.c
+@@ -8,6 +8,8 @@
+ 
+ #include "kk_device.h"
+ 
++#include "vk_semaphore.h"
++
+ #include "kosmickrisp/bridge/mtl_bridge.h"
+ 
+ static VkResult
+@@ -104,3 +106,31 @@
+    .export_win32_handle = NULL,
+    .set_win32_export_params = NULL,
+ };
++
++#ifdef VK_USE_PLATFORM_METAL_EXT
++/* bbport: VK_EXT_metal_objects, limited to the MTLSharedEvent of a timeline semaphore (every
++ * KosmicKrisp semaphore is one). Lets Metal work outside the driver (MetalFX) wait for and
++ * signal Vulkan timelines on the GPU. Other export requests are left unfilled (null). */
++VKAPI_ATTR void VKAPI_CALL
++kk_ExportMetalObjectsEXT(UNUSED VkDevice device,
++                         VkExportMetalObjectsInfoEXT *pMetalObjectsInfo)
++{
++   for (VkBaseOutStructure *ext = (VkBaseOutStructure *)pMetalObjectsInfo->pNext;
++        ext != NULL; ext = ext->pNext) {
++      if (ext->sType != VK_STRUCTURE_TYPE_EXPORT_METAL_SHARED_EVENT_INFO_EXT)
++         continue;
++      VkExportMetalSharedEventInfoEXT *info =
++         (VkExportMetalSharedEventInfoEXT *)ext;
++      info->mtlSharedEvent = NULL;
++      if (info->semaphore == VK_NULL_HANDLE)
++         continue;
++      VK_FROM_HANDLE(vk_semaphore, semaphore, info->semaphore);
++      struct vk_sync *sync = vk_semaphore_get_active_sync(semaphore);
++      if (sync->type != &kk_sync_type)
++         continue;
++      info->mtlSharedEvent =
++         (MTLSharedEvent_id)container_of(sync, struct kk_sync_timeline, base)
++            ->mtl_handle;
++   }
++}
++#endif /* VK_USE_PLATFORM_METAL_EXT */

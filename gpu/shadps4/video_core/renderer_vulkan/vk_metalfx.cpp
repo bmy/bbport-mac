@@ -72,6 +72,58 @@ MetalFxUpscaler::MetalFxUpscaler(const Instance& instance_, Scheduler& scheduler
         return;
     }
     std::printf("Upscaler: MetalFX available (temporal scaler on KosmicKrisp's MTLDevice)\n");
+    SetUpEvents();
+}
+
+void MetalFxUpscaler::SetUpEvents() {
+    if (EnvOn("BB_METALFX_SYNC")) {
+        std::printf("Upscaler: MetalFX synchronous (BB_METALFX_SYNC=1)\n");
+        return;
+    }
+    if (!instance.IsMetalObjectsEnabled()) {
+        std::printf("Upscaler: MetalFX synchronous (the driver lacks VK_EXT_metal_objects: "
+                    "rebuild KosmicKrisp with the port's patches)\n");
+        return;
+    }
+    const auto device = instance.GetDevice();
+    const auto export_objects = reinterpret_cast<PFN_vkExportMetalObjectsEXT>(
+        device.getProcAddr("vkExportMetalObjectsEXT"));
+    if (!export_objects) {
+        std::printf("Upscaler: MetalFX synchronous (vkExportMetalObjectsEXT is missing)\n");
+        return;
+    }
+    const vk::SemaphoreTypeCreateInfo timeline{
+        .semaphoreType = vk::SemaphoreType::eTimeline,
+        .initialValue = 0,
+    };
+    const auto created = device.createSemaphore({.pNext = &timeline});
+    if (created.result != vk::Result::eSuccess) {
+        return;
+    }
+    done_semaphore = created.value;
+    const auto event_of = [&](vk::Semaphore semaphore) -> void* {
+        VkExportMetalSharedEventInfoEXT event_info{
+            .sType = VK_STRUCTURE_TYPE_EXPORT_METAL_SHARED_EVENT_INFO_EXT,
+            .semaphore = static_cast<VkSemaphore>(semaphore),
+        };
+        VkExportMetalObjectsInfoEXT info{
+            .sType = VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECTS_INFO_EXT,
+            .pNext = &event_info,
+        };
+        export_objects(static_cast<VkDevice>(device), &info);
+        return reinterpret_cast<void*>(event_info.mtlSharedEvent);
+    };
+    done_event = event_of(done_semaphore);
+    work_event = event_of(scheduler.GetWorkSemaphore()->Handle());
+    if (!done_event || !work_event) {
+        std::printf("Upscaler: MetalFX synchronous (no shared events from the driver)\n");
+        device.destroySemaphore(done_semaphore);
+        done_semaphore = vk::Semaphore{};
+        done_event = work_event = nullptr;
+        return;
+    }
+    async = true;
+    std::printf("Upscaler: MetalFX without CPU waits (Vulkan timelines as Metal shared events)\n");
 }
 
 MetalFxUpscaler::~MetalFxUpscaler() {
@@ -81,6 +133,9 @@ MetalFxUpscaler::~MetalFxUpscaler() {
     scaler.reset();
     for (auto& s : staging) {
         DestroyStaging(s);
+    }
+    if (done_semaphore) {
+        instance.GetDevice().destroySemaphore(done_semaphore);
     }
 }
 
@@ -267,9 +322,19 @@ bool MetalFxUpscaler::Run(const Frame& frame) {
         .dstAccessMask = vk::AccessFlagBits2::eHostRead,
     };
     cmd.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &to_metal});
-    // bbport: synchronous first version. Later: KosmicKrisp's timeline semaphores are
-    // MTLSharedEvents; waiting and signalling those would keep CPU and GPU overlapped.
-    scheduler.Finish();
+    // An earlier asynchronous frame that failed: its event was still set, so nothing hangs.
+    if (std::string error; async && scaler->TakeError(error)) {
+        Fail(error, true);
+        return false;
+    }
+    // Asynchronous: this submission's timeline value is what Metal waits for. Synchronous: the
+    // GPU finishes everything first.
+    const u64 copies_tick = scheduler.CurrentTick();
+    if (async) {
+        scheduler.Flush();
+    } else {
+        scheduler.Finish();
+    }
 
     // Diagnostics for the conventions (A/B on the Mac): jitter sign, motion sign, reversed Z.
     static const bool invert_jitter = EnvOn("BB_METALFX_INVERT_JITTER");
@@ -283,7 +348,11 @@ bool MetalFxUpscaler::Run(const Frame& frame) {
                          .motion_scale_x = motion_sign,
                          .motion_scale_y = motion_sign,
                          .reset = frame.reset,
-                         .depth_reversed = depth_reversed},
+                         .depth_reversed = depth_reversed,
+                         .wait_event = async ? work_event : nullptr,
+                         .wait_value = copies_tick,
+                         .signal_event = async ? done_event : nullptr,
+                         .signal_value = async ? done_value + 1 : 0},
                         error)) {
         Fail(error, true);
         return false;
@@ -317,6 +386,13 @@ bool MetalFxUpscaler::Run(const Frame& frame) {
     output_barrier(vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eTransfer,
                    vk::AccessFlagBits2::eTransferWrite, vk::PipelineStageFlagBits2::eAllCommands,
                    rw);
+    if (async) {
+        // The copy back (and, in queue order, everything after it) waits for MetalFX on the GPU.
+        ++done_value;
+        SubmitInfo info{};
+        info.AddWait(done_semaphore, done_value);
+        scheduler.Flush(info);
+    }
     return true;
 }
 

@@ -149,8 +149,9 @@ For Terminal runs; in the app, most are regular settings and the rest go in
 - **FSR 3.1** works and is recommended. Use Native AA for anti-aliasing only, or
   Quality/Balanced to render below the output resolution and upscale.
 - **TAA** works: cheaper than FSR 3.1, but softer.
-- **MetalFX** (Apple) is experimental. The current version waits for the GPU every frame, so it
-  costs frame rate, and it doesn't support the Native AA preset.
+- **MetalFX** (Apple) is experimental, and it doesn't support the Native AA preset. With the
+  port's KosmicKrisp patch it hands work to and from Vulkan on the GPU, without waiting on the
+  CPU; `BB_METALFX_SYNC=1` brings back the older, slower synchronous version.
 - **FSR 4 / 4.1.1** need GPU features that KosmicKrisp doesn't expose. They're hidden on the Mac.
 - **DLSS** requires NVIDIA hardware and isn't possible on a Mac.
 

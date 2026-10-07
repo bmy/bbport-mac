@@ -11,6 +11,7 @@
 
 #include <cstdio>
 #include <dlfcn.h>
+#include <mutex>
 
 namespace BbMetalFx {
 
@@ -68,11 +69,24 @@ struct Scaler::Impl {
     // MetalFX's own textures: it requires a private output, and these have the usage it asks for.
     id<MTLTexture> color, depth, motion, output;
     NSUInteger color_bytes = 8;
+    // An asynchronous frame's failure, reported by the next Encode's caller (TakeError). Shared
+    // with the completion handlers, which may run after the scaler is gone.
+    struct Errors {
+        std::mutex mutex;
+        std::string text;
+    };
+    std::shared_ptr<Errors> errors = std::make_shared<Errors>();
+    // The last command buffer: waited for before the scaler goes (its handler uses this state).
+    id<MTLCommandBuffer> last;
 };
 
 Scaler::Scaler(std::unique_ptr<Impl> impl_) : impl{std::move(impl_)} {}
 
-Scaler::~Scaler() = default;
+Scaler::~Scaler() {
+    if (impl && impl->last) {
+        [impl->last waitUntilCompleted];
+    }
+}
 
 std::unique_ptr<Scaler> Scaler::Create(const Config& config, const Heaps& heaps,
                                        std::string& error) {
@@ -183,6 +197,13 @@ bool Scaler::Encode(const Frame& frame, std::string& error) {
             error = "commandBuffer failed";
             return false;
         }
+        const bool async = frame.wait_event && frame.signal_event;
+        id<MTLSharedEvent> wait_event = (__bridge id<MTLSharedEvent>)frame.wait_event;
+        id<MTLSharedEvent> signal_event = (__bridge id<MTLSharedEvent>)frame.signal_event;
+        if (async) {
+            // The Vulkan copies of this frame's inputs (their submission's timeline value).
+            [cmd encodeWaitForEvent:wait_event value:frame.wait_value];
+        }
         const MTLOrigin zero = MTLOriginMake(0, 0, 0);
         id<MTLBlitCommandEncoder> uploads = [cmd blitCommandEncoder];
         const auto upload = [&](id<MTLBuffer> source, id<MTLTexture> target, NSUInteger bytes) {
@@ -224,8 +245,25 @@ bool Scaler::Encode(const Frame& frame, std::string& error) {
               destinationBytesPerRow:ow * 8
             destinationBytesPerImage:ow * oh * 8];
         [downloads endEncoding];
-        // bbport: synchronous for now. Later: wait on and signal KosmicKrisp's timeline
-        // semaphores (MTLSharedEvent) instead of the CPU waits on both sides.
+        if (async) {
+            // Vulkan's next submission waits for this value on the GPU. A failed command buffer
+            // may not reach the signal: the handler sets it, so Vulkan never waits forever.
+            const uint64_t value = frame.signal_value;
+            [cmd encodeSignalEvent:signal_event value:value];
+            std::shared_ptr<Impl::Errors> errors = m.errors;
+            [cmd addCompletedHandler:^(id<MTLCommandBuffer> done) {
+              if (done.status != MTLCommandBufferStatusCompleted) {
+                  if (signal_event.signaledValue < value) {
+                      signal_event.signaledValue = value;
+                  }
+                  std::scoped_lock lock{errors->mutex};
+                  errors->text = "command buffer failed: " + Describe(done.error);
+              }
+            }];
+            m.last = cmd;
+            [cmd commit];
+            return true;
+        }
         [cmd commit];
         [cmd waitUntilCompleted];
         if (cmd.status != MTLCommandBufferStatusCompleted) {
@@ -234,6 +272,16 @@ bool Scaler::Encode(const Frame& frame, std::string& error) {
         }
         return true;
     }
+}
+
+bool Scaler::TakeError(std::string& error) {
+    std::scoped_lock lock{impl->errors->mutex};
+    if (impl->errors->text.empty()) {
+        return false;
+    }
+    error = std::move(impl->errors->text);
+    impl->errors->text.clear();
+    return true;
 }
 
 } // namespace BbMetalFx

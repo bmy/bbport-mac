@@ -2,9 +2,12 @@
 // bbport: MetalFX temporal upscaler (BB_UPSCALER=metalfx; macOS with KosmicKrisp only). The
 // scene's color, depth and motion vectors are copied into buffers on exportable memory whose
 // MTLHeaps (VK_EXT_external_memory_metal) MetalFX reads on KosmicKrisp's own MTLDevice
-// (gpu/shim/bbport_metalfx.mm); its output comes back the same way. First version: synchronous
-// (the scheduler finishes the frame so far, MetalFX runs and is waited for, Vulkan continues).
-// Elsewhere it reports itself unsupported.
+// (gpu/shim/bbport_metalfx.mm); its output comes back the same way. With VK_EXT_metal_objects
+// (this port's KosmicKrisp patch 0002) nothing waits on the CPU: Metal waits for the submission
+// holding the input copies on the scheduler's timeline (its MTLSharedEvent) and signals a timeline
+// of its own that the submission copying the output back waits for. Without it (or with
+// BB_METALFX_SYNC=1): synchronous, the scheduler finishes the frame so far, MetalFX runs and is
+// waited for, Vulkan continues. Elsewhere it reports itself unsupported.
 
 #pragma once
 
@@ -65,8 +68,9 @@ public:
         std::array<float, 2> jitter; ///< render pixels, the FSR 3 convention
         bool reset;
     };
-    /// Submits and waits for the frame so far, upscales, and records the copy of the result into
-    /// `output` in the scheduler's new command buffer: callers must fetch CommandBuffer() again.
+    /// Submits the frame so far (and waits for it when synchronous), upscales, and records the
+    /// copy of the result into `output` in a new command buffer, submitted when asynchronous:
+    /// callers must fetch CommandBuffer() again.
     bool Run(const Frame& frame);
 
 private:
@@ -87,6 +91,13 @@ private:
     bool fatal = false;
     std::string problem;
     void* get_metal_handle = nullptr; ///< PFN_vkGetMemoryMetalHandleEXT
+    void SetUpEvents();
+    /// Asynchronous: the scheduler's timeline and MetalFX's own, as id<MTLSharedEvent>.
+    bool async = false;
+    vk::Semaphore done_semaphore{}; ///< timeline signalled by Metal (via `done_event`)
+    void* done_event = nullptr;
+    void* work_event = nullptr;
+    u64 done_value = 0;
     std::array<Staging, 4> staging{}; ///< color, depth, motion, output
     std::unique_ptr<BbMetalFx::Scaler> scaler;
     u32 width = 0, height = 0, out_width = 0, out_height = 0;

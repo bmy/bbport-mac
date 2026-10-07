@@ -1,0 +1,13 @@
+--- a/src/kosmickrisp/vulkan/kk_sync.c
++++ b/src/kosmickrisp/vulkan/kk_sync.c
+@@ -7,8 +7,10 @@
+ #include "kk_sync.h"
+ 
+ #include "kk_device.h"
++#include "kk_entrypoints.h"
+ 
+ #include "vk_semaphore.h"
++#include "vulkan/vulkan_metal.h"
+ 
+ #include "kosmickrisp/bridge/mtl_bridge.h"
+ 

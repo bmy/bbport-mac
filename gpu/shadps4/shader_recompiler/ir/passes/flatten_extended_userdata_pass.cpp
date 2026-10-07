@@ -1240,9 +1240,21 @@ void RunSrtWalker(const PersistentSrtInfo& srt, const u32* user_data, u32* flat)
     std::vector<u32> expected(flat, flat + size);
     InterpretSrt(srt.check_code, user_data, expected.data());
     srt.walker_func(user_data, flat);
-    static std::atomic<u64> walks{0}, mismatches{0};
+    static std::atomic<u64> walks{0}, mismatches{0}, raced{0};
     const u64 walk = walks.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (std::memcmp(expected.data(), flat, size * sizeof(u32)) != 0) {
+    bool differs = std::memcmp(expected.data(), flat, size * sizeof(u32)) != 0;
+    if (differs) {
+        // The game may have rewritten the table between the two walks: a second bytecode walk
+        // that now agrees means that, not a difference between the walkers.
+        std::vector<u32> again(flat, flat + size);
+        std::memcpy(again.data(), expected.data(), NUM_USER_DATA_REGS * sizeof(u32));
+        InterpretSrt(srt.check_code, user_data, again.data());
+        if (std::memcmp(again.data(), flat, size * sizeof(u32)) == 0) {
+            raced.fetch_add(1, std::memory_order_relaxed);
+            differs = false;
+        }
+    }
+    if (differs) {
         const u64 count = mismatches.fetch_add(1, std::memory_order_relaxed) + 1;
         if (count <= 16) {
             u32 first = 0;
@@ -1256,9 +1268,11 @@ void RunSrtWalker(const PersistentSrtInfo& srt, const u32* user_data, u32* flat)
     }
     // Always in the log (LOG_INFO is filtered): a run with no line at all walked no table.
     if ((walk & (walk - 1)) == 0 && (walk == 1 || walk >= 1024)) {
-        std::printf("SRT check: %llu walks compared with the x86 walker, %llu differed\n",
+        std::printf("SRT check: %llu walks compared with the x86 walker, %llu differed "
+                    "(%llu more changed by the game during the check)\n",
                     static_cast<unsigned long long>(walk),
-                    static_cast<unsigned long long>(mismatches.load(std::memory_order_relaxed)));
+                    static_cast<unsigned long long>(mismatches.load(std::memory_order_relaxed)),
+                    static_cast<unsigned long long>(raced.load(std::memory_order_relaxed)));
         std::fflush(stdout);
     }
 #else

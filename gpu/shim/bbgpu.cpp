@@ -31,6 +31,7 @@
 #include "core/memory.h"
 #include "core/signals.h"
 #include "sdl_window.h"
+#include "bbport_portable.h"
 #include "shader_recompiler/ir/passes/srt.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 
@@ -295,9 +296,15 @@ extern "C" int bbgpu_init(const BbGpuConfig* config) {
     StartProfileWriter();
 #endif
     g_sdk_version = config->sdk_version;
-    // The portable SRT walker (arm64, BB_SRT_CHECK) checks the guest pointers it follows.
+    // The portable SRT walker (arm64, BB_SRT_CHECK) checks the guest pointers it follows. Tables
+    // can also sit in the game image's own data (not a runtime mapping): probed directly then.
     Shader::srt_guest_readable = [](u64 address, u64 size) {
-        return Core::CachedMapped(address, size);
+        if (Core::CachedMapped(address, size)) {
+            return true;
+        }
+        u8 probe[8];
+        return size <= sizeof(probe) &&
+               BbPortable::ReadSelf(probe, reinterpret_cast<const void*>(address), size);
     };
     if (config->user_dir) setenv("BB_GPU_USER_DIR", config->user_dir, 0);
     Core::Emulator::FillElfInfo(*config);

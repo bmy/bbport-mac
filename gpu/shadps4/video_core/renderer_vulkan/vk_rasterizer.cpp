@@ -1115,13 +1115,13 @@ void Rasterizer::RunDrawPacket(void* context, const u8* data, u32 size) {
         self.buffer_cache.NewPacket();
         const auto& task = *reinterpret_cast<const TaskPacket*>(data);
         if (BbSections::Enabled()) {
-            const u64 t0 = __rdtsc();
+            const u64 t0 = BbCpu::Ticks();
             task.task(self, data + sizeof(TaskPacket));
             void* fn = reinterpret_cast<void*>(task.task);
             for (std::size_t k = 0; k < TaskKinds; ++k) {
                 if (task_kinds[k] == fn || !task_kinds[k]) {
                     task_kinds[k] = fn;
-                    task_cycles[k] += __rdtsc() - t0;
+                    task_cycles[k] += BbCpu::Ticks() - t0;
                     ++task_counts[k];
                     break;
                 }

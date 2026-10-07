@@ -6,6 +6,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <condition_variable>
 #include <deque>
@@ -880,6 +881,18 @@ public:
             copy();
             host_copies_done.store(seq, std::memory_order_release);
         });
+    }
+
+    /// bbport BB_FAST_FENCES=1 (experiment): small guest copies go to the copy threads instead
+    /// of the recording thread, and a deferred fence is signalled as soon as the copies issued
+    /// before it are done, instead of after the recording thread reaches it (it waited for all
+    /// the commands recorded before it: 20-30% of the GPU thread's time on the Mac).
+    [[nodiscard]] static bool FastFences() {
+        static const bool on = [] {
+            const char* env = std::getenv("BB_FAST_FENCES");
+            return env && env[0] == '1';
+        }();
+        return on;
     }
 
     /// bbport: runs `signal` once the guest memory copies issued so far are done, without

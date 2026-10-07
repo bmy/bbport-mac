@@ -28,6 +28,7 @@
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
+#include "video_core/renderer_vulkan/vk_draw_pipe.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/texture_cache/texture_cache.h"
 
@@ -556,7 +557,16 @@ void BufferCache::RunGuestCopy(const BbCopy::Item& item) {
 // Small guest copies run on the recording thread (it spins for work: no wakeup, and it is
 // idle most of the time); PoolSmallCopies (toggle 524288) batches them for the copy threads.
 void BufferCache::SmallGuestCopy(const BbCopy::Item& item) {
-    if (scheduler.IsRecordingDeferred() && !BbToggle::Disabled(BbToggle::PoolSmallCopies)) {
+    if (Vulkan::Scheduler::FastFences()) {
+        // Deferred fences follow only the copy threads (Scheduler::SignalAfterHostCopies). Stage
+        // B's batch goes out when its pipe runs dry (DrawPipe); another thread's at once, as a
+        // fence on stage B flushes only its own.
+        BbCopy::QueueCopy(item);
+        if (!Vulkan::DrawPipe::OnStageB()) {
+            BbCopy::FlushBatch();
+        }
+    } else if (scheduler.IsRecordingDeferred() &&
+               !BbToggle::Disabled(BbToggle::PoolSmallCopies)) {
         scheduler.RecordHostCopy([item] { item.run(item); });
     } else {
         BbCopy::QueueCopy(item);

@@ -386,6 +386,15 @@ void Scheduler::SignalAfterHostCopies(std::function<void()> signal) {
     }
     BbCopy::FlushBatch();
     deferred_signals_issued.fetch_add(1, std::memory_order_relaxed);
+    if (FastFences()) {
+        // The copies are all on the copy threads (BufferCache::SmallGuestCopy): signalled once
+        // those issued so far are done, in order with the earlier signals (AfterCopies epochs).
+        BbCopy::AfterCopies([signal = std::move(signal), done = deferred_signals_done] {
+            signal();
+            done->fetch_add(1, std::memory_order_release);
+        });
+        return;
+    }
     RecordOrdered([signal = std::move(signal), done = deferred_signals_done]() mutable {
         BbCopy::AfterCopies([signal = std::move(signal), done = std::move(done)] {
             signal();

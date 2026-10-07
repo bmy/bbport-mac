@@ -6,6 +6,7 @@
 #include "video_core/renderer_vulkan/ui_composition.h"
 #include "bbport_timeline.h"
 #include "bbport_sections.h"
+#include "bbport_copy.h"
 #include "bbport_toggles.h"
 #include "bbport_write_log.h"
 #include "bbport_free_check.h"
@@ -73,6 +74,10 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
     GpuProfiler::Init(instance, scheduler);
     if (DrawPipeWanted()) {
         constant_ring = std::make_unique<ConstantRing>(instance, scheduler);
+        if (Scheduler::FastFences()) {
+            DrawPipe::flush_when_idle = [] { BbCopy::FlushBatch(); };
+            std::printf("GPU: fast fences (BB_FAST_FENCES): fences follow the copy threads\n");
+        }
         draw_pipe = std::make_unique<DrawPipe>(&RunDrawPacket, this);
     }
     // bbport: this thread joins the texture binding helper before it changes image state.

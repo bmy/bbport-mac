@@ -410,7 +410,58 @@ void Scheduler::WaitDeferredSignals() {
     }
 }
 
+namespace {
+u32 CopySourceSlot(u64 page) {
+    return u32((page * 0x9e3779b97f4a7c15ull) >> 52); // 12 bits: CopySourceSlots
+}
+} // namespace
+
+void Scheduler::NoteHostCopySource(u64 address, u64 size) {
+    if (size == 0) {
+        return;
+    }
+    const u64 first = address >> CopySourcePageShift;
+    const u64 last = (address + size - 1) >> CopySourcePageShift;
+    std::scoped_lock lock{sources_mutex};
+    const u64 seq = ++sources_seq;
+    if (last - first >= CopySourceMaxPages) {
+        sources_untracked = seq;
+        return;
+    }
+    for (u64 page = first; page <= last; ++page) {
+        CopySource& slot = copy_sources[CopySourceSlot(page)];
+        // A pending note of another page keeps the slot ambiguous until a full wait.
+        const bool pending = slot.seq > sources_done;
+        slot.page = !pending || slot.page == page ? page : ~0ull;
+        slot.seq = seq;
+    }
+}
+
+void Scheduler::WaitHostCopiesFor(u64 address, u64 size) {
+    {
+        std::scoped_lock lock{sources_mutex};
+        const u64 first = address >> CopySourcePageShift;
+        const u64 last = (address + (size ? size - 1 : 0)) >> CopySourcePageShift;
+        bool needed = sources_untracked > sources_done || last - first >= CopySourceMaxPages;
+        for (u64 page = first; !needed && page <= last; ++page) {
+            const CopySource& slot = copy_sources[CopySourceSlot(page)];
+            needed = slot.seq > sources_done && (slot.page == page || slot.page == ~0ull);
+        }
+        if (!needed) {
+            BbStats::host_copy_waits_skipped.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+    }
+    WaitHostCopies();
+}
+
 void Scheduler::WaitHostCopies() {
+    // Sources noted so far were issued before this wait reads what it waits for: done after it.
+    u64 noted;
+    {
+        std::scoped_lock lock{sources_mutex};
+        noted = sources_seq;
+    }
     if (host_copies_done.load(std::memory_order_acquire) < host_copies_issued) {
         BbStats::WaitTimer timer{BbStats::host_copies_wait_ns};
         BbStats::host_copy_waits.fetch_add(1, std::memory_order_relaxed);
@@ -419,8 +470,12 @@ void Scheduler::WaitHostCopies() {
             std::this_thread::yield();
         }
     }
-    BbStats::WaitTimer timer{BbStats::copy_threads_wait_ns};
-    BbCopy::WaitAsync();
+    {
+        BbStats::WaitTimer timer{BbStats::copy_threads_wait_ns};
+        BbCopy::WaitAsync();
+    }
+    std::scoped_lock lock{sources_mutex};
+    sources_done = std::max(sources_done, noted);
 }
 
 void Scheduler::KickRecording(bool force) {

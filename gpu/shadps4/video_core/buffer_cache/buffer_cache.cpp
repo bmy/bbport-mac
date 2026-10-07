@@ -558,9 +558,10 @@ void BufferCache::RunGuestCopy(const BbCopy::Item& item) {
 void BufferCache::SmallGuestCopy(const BbCopy::Item& item) {
     if (scheduler.IsRecordingDeferred() && !BbToggle::Disabled(BbToggle::PoolSmallCopies)) {
         scheduler.RecordHostCopy([item] { item.run(item); });
-        return;
+    } else {
+        BbCopy::QueueCopy(item);
     }
-    BbCopy::QueueCopy(item);
+    scheduler.NoteHostCopySource(item.source, item.size);
 }
 
 void BufferCache::ExtendWriteFault(VAddr device_addr, u64 guest_rip) {
@@ -1054,6 +1055,7 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBufferForImage(VAddr device_add
                 SmallGuestCopy(item);
             } else {
                 BbCopy::Async([item] { item.run(item); });
+                scheduler.NoteHostCopySource(item.source, item.size);
             }
         }
         return {staging.buffer, staging.offset};
@@ -2490,6 +2492,10 @@ const Buffer* BufferCache::UploadCopies(const Buffer* arena, std::span<vk::Buffe
         }
         if (!group->empty()) {
             launch();
+        }
+        // After the launches: a note means its copy was issued (Scheduler::WaitHostCopies).
+        for (const auto& copy : copies) {
+            scheduler.NoteHostCopySource(copy.dstOffset + arena->cpu_addr, copy.size);
         }
         return staging.buffer;
     }

@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstring>
@@ -860,6 +861,16 @@ public:
     /// submission that reads them. Waits for all.
     void WaitHostCopies();
 
+    /// bbport: notes the guest memory a host copy just issued reads (after issuing it), so that
+    /// WaitHostCopiesFor can tell whether a guest-visible write needs that copy finished first.
+    void NoteHostCopySource(u64 address, u64 size);
+
+    /// bbport: WaitHostCopies only if a host copy not known to be done reads guest memory in
+    /// [address, address + size): a WRITE_DATA or DMA into memory no pending copy reads cannot
+    /// change what the copies see (the 0.3+ upstream rule; BB_HOST_COPY_WAITS=all: always wait).
+    /// Pages of 64 KiB in a direct-mapped table: a collision or a long source waits as before.
+    void WaitHostCopiesFor(u64 address, u64 size);
+
     /// Runs `copy` on a recording thread in order with the commands, the other host copies and
     /// the signals of SignalAfterHostCopies (the threads spin for work anyway, so small copies cost no wakeup);
     /// WaitHostCopies() covers it.
@@ -1075,6 +1086,21 @@ private:
     bool direct_mode = false; ///< the command buffer is recorded on the caller's thread
     u64 host_copies_issued = 0;
     std::atomic<u64> host_copies_done{0};
+    /// NoteHostCopySource: the 64 KiB guest pages pending copies read (page ~0: two pages
+    /// share the slot), each with the number of the note; notes up to `sources_done` are done
+    /// (a full WaitHostCopies), and any before `sources_untracked` was too long to record.
+    struct CopySource {
+        u64 page = ~0ull;
+        u64 seq = 0;
+    };
+    static constexpr u32 CopySourceSlots = 4096;
+    static constexpr u32 CopySourcePageShift = 16;
+    static constexpr u64 CopySourceMaxPages = 64;
+    std::mutex sources_mutex;
+    std::array<CopySource, CopySourceSlots> copy_sources{};
+    u64 sources_seq = 0;
+    u64 sources_done = 0;
+    u64 sources_untracked = 0;
     std::atomic<u64> deferred_signals_issued{0}; ///< by the thread recording (A or B)
     std::atomic<u32> producer_tid{0};                 ///< ProducerScope: the thread inside
     std::atomic<const char*> producer_where{nullptr}; ///< and where

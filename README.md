@@ -141,6 +141,7 @@ For Terminal runs; in the app, most are regular settings and the rest go in
 | `BB_VK_RECORD_THREADS` | Threads recording Vulkan commands (default: 3 on this class of Mac; `1` records on one thread) |
 | `BB_GAMEPAD` | Which controller to use: part of its name or its GUID |
 | `BB_CAMERA_Y` | `up` or `down` forces which way the camera motion vectors treat vertical. By default it follows each frame's G-buffer viewport (the wrong one makes FSR shimmer on floors) |
+| `BB_HOST_COPY_WAITS=all` | Waits for every pending guest memory copy before each WRITE_DATA/DMA packet, as before. By default only copies reading the memory written are waited for (faster) |
 | `BB_BREADCRUMBS=1` | Turns on bbport 0.3's GPU crash breadcrumbs (off on the Mac: with KosmicKrisp they blank the picture) |
 | `BB_PRELOAD_THREADS` | Threads for the startup shader warm-up (default: all cores) |
 

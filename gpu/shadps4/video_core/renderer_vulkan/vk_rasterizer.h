@@ -4,6 +4,8 @@
 #pragma once
 
 #include <chrono>
+#include <cstdlib>
+#include <string_view>
 #include <condition_variable>
 #include <deque>
 #include <functional>
@@ -122,6 +124,20 @@ public:
     void WaitHostCopies() {
         DrainDrawPipe();
         scheduler.WaitHostCopies();
+    }
+    /// The same before a WRITE_DATA or DMA into [addr, addr + size), only if a pending host copy
+    /// reads that memory (Scheduler::WaitHostCopiesFor). BB_HOST_COPY_WAITS=all: always.
+    void WaitHostCopiesFor(VAddr addr, u64 size) {
+        static const bool all = [] {
+            const char* env = std::getenv("BB_HOST_COPY_WAITS");
+            return env && std::string_view{env} == "all";
+        }();
+        DrainDrawPipe();
+        if (all) {
+            scheduler.WaitHostCopies();
+        } else {
+            scheduler.WaitHostCopiesFor(addr, size);
+        }
     }
 
     /// bbport: GPU command thread: waits until the draw recording thread has recorded every

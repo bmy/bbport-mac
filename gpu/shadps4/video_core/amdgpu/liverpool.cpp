@@ -479,8 +479,9 @@ void RunDmaData(Vulkan::Rasterizer& rasterizer, const u8* data) {
     // GPU has not modified the range. Like WriteData, it must not overtake the copies and the
     // fences deferred to the recording thread: the guest, seeing it, frees objects whose labels
     // an earlier fence still writes (a corrupted guest heap free list, guest offset 0x263b8e7).
+    // bbport: only copies reading the destination need to be done first (WaitHostCopiesFor).
     if (dma_data->dst_sel == DmaDataDst::Memory || dma_data->dst_sel == DmaDataDst::MemoryUsingL2) {
-        rasterizer.WaitHostCopies();
+        rasterizer.WaitHostCopiesFor(dma_data->DstAddress<VAddr>(), dma_data->NumBytes());
         rasterizer.WaitDeferredSignals();
     }
     if (dma_data->src_sel == DmaDataSrc::Data && dma_data->dst_sel == DmaDataDst::Gds) {
@@ -522,9 +523,10 @@ void SignalFlip(Vulkan::Rasterizer& rasterizer, const u8*) {
 void RunWriteData(Vulkan::Rasterizer& rasterizer, const u8* data) {
     const auto* header = reinterpret_cast<const PM4Header*>(data);
     const auto* write_data = reinterpret_cast<const PM4CmdWriteData*>(data);
-    // Copies deferred to the recording thread, and fences deferred to it (RecorderFences),
-    // precede writes the guest sees.
-    rasterizer.WaitHostCopies();
+    // Copies deferred to the recording thread that read the memory written, and fences
+    // deferred to it (RecorderFences), precede writes the guest sees.
+    rasterizer.WaitHostCopiesFor(write_data->Address<VAddr>(),
+                                 (header->type3.count.Value() - 2) * sizeof(u32));
     rasterizer.WaitDeferredSignals();
     BbFreeCheck::Check(write_data->Address<u64>(), (header->type3.count.Value() - 2) * sizeof(u32),
                        write_data->data, BbFreeCheck::WriteData);

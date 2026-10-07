@@ -401,7 +401,9 @@ void Scheduler::WaitDeferredSignals() {
         BbToggle::Disabled(BbToggle::OrderedGuestWrites)) {
         return;
     }
-    BbStats::WaitTimer timer{BbStats::host_copies_wait_ns};
+    // Counted apart from the host copies: the fences wait for the copies queued before them.
+    BbStats::WaitTimer timer{BbStats::deferred_signals_wait_ns};
+    BbStats::deferred_signal_waits.fetch_add(1, std::memory_order_relaxed);
     KickRecording(true);
     while (deferred_signals_done->load(std::memory_order_acquire) < issued) {
         // Helps the copy threads the signals wait for.

@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <string>
 #include <sched.h>
 #include <sys/resource.h>
 #include <thread>
@@ -58,6 +59,9 @@ inline void MakeBackground() {
 /// CPU time of the calling thread in microseconds (macOS has no RUSAGE_THREAD).
 /// Defined in bbport_thread_cpu_mac.cpp so Mach headers stay out of shared headers.
 bool CurrentThreadCpuUs(std::uint64_t& user_us, std::uint64_t& sys_us);
+/// BB_FRAME_STATS: CPU time of every thread of the process since the last call, by thread name
+/// and by owner (this port, the game, the system): where a native GPU process would help.
+std::string ReportProcessThreads(double window_s);
 #endif
 
 } // namespace BbThreads

@@ -17,6 +17,7 @@
 #include "common/assert.h"
 #include "bbport_toggles.h"
 #include "bbport_heap_sites.h"
+#include "bbport_threads.h"
 #include "bbport_wait_trace.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
 #include "common/debug.h"
@@ -704,6 +705,12 @@ void VideoOutDriver::Flip(const Request& req) {
                             median, std::sqrt(std::max(0.0, sq / intervals.size() - mean * mean)),
                             sorted[std::min(sorted.size() - 1, sorted.size() * 99 / 100)], spikes);
             }
+#ifdef __APPLE__
+            if (const std::string threads = BbThreads::ReportProcessThreads(window);
+                !threads.empty()) {
+                std::printf("%s\n", threads.c_str());
+            }
+#endif
             intervals.clear();
             window_start = now;
             frames = 0;

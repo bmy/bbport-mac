@@ -162,5 +162,12 @@ c++ -std=c++20 -O2 -pthread -Igpu/shim tests/test_remote_channel.cpp -o /tmp/cha
 clang++ -std=c++20 -O2 -arch x86_64 -arch arm64 -Igpu/shim tests/test_remote_memory.cpp -o /tmp/memory-test && arch -x86_64 /tmp/memory-test
 ```
 
+Result on the M5 Max (macOS 27.0.1, 2026-10-07): both pass. The memory test ran with the game side
+as x86-64 under Rosetta and the GPU side as a native arm64 process (16 KiB pages): the guest range
+was free to reserve in the arm64 process, the pool mapped at the same addresses in both, aliases
+and remaps stayed coherent, and a write fault went over the channel and back with a nested Protect
+call. Note for the runtime: `shm_open` sets close-on-exec, so the pool's descriptor must have it
+cleared (or be passed explicitly) before bb-gpu is spawned.
+
 Next: the remote shim on both sides (phase 4): bb-probe spawns bb-gpu with the pool and channel,
 forwards the runtime's map hooks and write faults, and the Gnm/VideoOut calls listed above.

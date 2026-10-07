@@ -59,7 +59,12 @@ find_package(miniz REQUIRED)
 find_package(Zydis REQUIRED)
 find_program(GLSLANG_COMPILER NAMES glslang glslangValidator REQUIRED)
 # xbyak (header-only; shader recompiler): from the system on Linux, the macOS prefix otherwise.
-find_path(XBYAK_INCLUDE_DIR xbyak/xbyak.h REQUIRED)
+# bbport: x86-64 only; elsewhere the SRT walker is bytecode (docs/macos-native-gpu.md).
+if (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$")
+    set(XBYAK_INCLUDE_DIR "")
+else()
+    find_path(XBYAK_INCLUDE_DIR xbyak/xbyak.h REQUIRED)
+endif()
 
 set(SIRIT_USE_SYSTEM_SPIRV_HEADERS OFF CACHE BOOL "" FORCE)
 add_subdirectory(third_party/sirit EXCLUDE_FROM_ALL)

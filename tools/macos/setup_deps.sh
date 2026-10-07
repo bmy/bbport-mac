@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # tools/macos/setup_deps.sh: one-time toolchain for the macOS (x86-64 / Rosetta 2) build.
+# BB_ARCH=arm64 builds the same libraries natively into deps-arm64 instead, for the native GPU
+# process under development (docs/macos-native-gpu.md); the x86-64 build does not need it.
 #
 # The game's code runs inside our process, so every library linked into bb-probe and
 # libbbgpu must be x86-64. Build tools only run at build time and stay native (arm64).
@@ -8,12 +10,14 @@
 #                                      KosmicKrisp (Mesa's Vulkan-on-Metal driver)
 # Intel Homebrew is avoided: it is Tier 3 (no new bottles) since 2026.
 #
-# Usage: bash tools/macos/setup_deps.sh [prefix]   (default: <repo>/deps-x86_64)
+# Usage: bash tools/macos/setup_deps.sh [prefix]   (default: <repo>/deps-x86_64, or deps-arm64)
 # Re-running skips what is already installed. Log: <prefix>/setup.log
 set -euo pipefail
 cd -- "$(dirname -- "$0")/../.."
 REPO=$PWD
-PREFIX=${1:-$REPO/deps-x86_64}
+ARCH=${BB_ARCH:-x86_64}
+[[ $ARCH == x86_64 || $ARCH == arm64 ]] || { echo "STOP: BB_ARCH must be x86_64 or arm64" >&2; exit 1; }
+PREFIX=${1:-$REPO/deps-$ARCH}
 SRC=$PREFIX/src
 mkdir -p "$PREFIX" "$SRC"
 exec > >(tee -a "$PREFIX/setup.log") 2>&1
@@ -39,10 +43,10 @@ step "Native build tools (Homebrew)"
     boost magic_enum robin-map   # header-only: architecture does not matter
 export PATH="$("$BREW" --prefix)/bin:$PATH"
 
-# x86-64 everywhere below. pkg-config must only see $PREFIX, never Homebrew's arm64 .pc files.
+# $ARCH everywhere below. pkg-config must only see $PREFIX, never Homebrew's .pc files.
 export MACOSX_DEPLOYMENT_TARGET=14.0
-X86_CMAKE=(-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64
-           -DCMAKE_SYSTEM_NAME=Darwin -DCMAKE_SYSTEM_PROCESSOR=x86_64
+X86_CMAKE=(-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=$ARCH
+           -DCMAKE_SYSTEM_NAME=Darwin -DCMAKE_SYSTEM_PROCESSOR=$ARCH
            -DCMAKE_INSTALL_PREFIX="$PREFIX" -DCMAKE_PREFIX_PATH="$PREFIX"
            -DCMAKE_FIND_ROOT_PATH="$PREFIX" -DBUILD_SHARED_LIBS=ON)
 export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig:$PREFIX/share/pkgconfig"
@@ -60,9 +64,9 @@ fetch() {  # fetch <name> <git url> <tag>
 }
 cmake_build() {  # cmake_build <name> [cmake args...]
     local name=$1; shift
-    quiet "$name configure" cmake -S "$SRC/$name" -B "$SRC/$name/build-x86_64" "${X86_CMAKE[@]}" "$@"
-    quiet "$name build" cmake --build "$SRC/$name/build-x86_64" -j "$JOBS"
-    quiet "$name install" cmake --install "$SRC/$name/build-x86_64"
+    quiet "$name configure" cmake -S "$SRC/$name" -B "$SRC/$name/build-$ARCH" "${X86_CMAKE[@]}" "$@"
+    quiet "$name build" cmake --build "$SRC/$name/build-$ARCH" -j "$JOBS"
+    quiet "$name install" cmake --install "$SRC/$name/build-$ARCH"
 }
 have() { [[ -e $PREFIX/$1 ]]; }
 quiet() {  # quiet <label> <command...>: run with output in a log; print its tail on failure
@@ -112,24 +116,29 @@ XXH_TAG=$(latest_tag https://github.com/Cyan4973/xxHash.git '^v0\.8\.[0-9]+$')
 echo "tag: $XXH_TAG"
 if ! have lib/libxxhash.dylib; then
     fetch xxHash https://github.com/Cyan4973/xxHash.git "$XXH_TAG"
-    quiet "xxHash configure" cmake -S "$SRC/xxHash/build/cmake" -B "$SRC/xxHash/build-x86_64" "${X86_CMAKE[@]}" \
+    quiet "xxHash configure" cmake -S "$SRC/xxHash/build/cmake" -B "$SRC/xxHash/build-$ARCH" "${X86_CMAKE[@]}" \
           -DXXHASH_BUILD_XXHSUM=OFF
-    quiet "xxHash build" cmake --build "$SRC/xxHash/build-x86_64" -j "$JOBS"
-    quiet "xxHash install" cmake --install "$SRC/xxHash/build-x86_64"
+    quiet "xxHash build" cmake --build "$SRC/xxHash/build-$ARCH" -j "$JOBS"
+    quiet "xxHash install" cmake --install "$SRC/xxHash/build-$ARCH"
 fi
 
-step "FFmpeg (decoders the game's movies need; x86-64)"
+step "FFmpeg (decoders the game's movies need; $ARCH)"
 FF_TAG=$(latest_tag https://git.ffmpeg.org/ffmpeg.git '^n[0-9]+\.[0-9]+(\.[0-9]+)?$')
 echo "tag: $FF_TAG"
 if ! have lib/libavformat.dylib; then
     fetch ffmpeg https://git.ffmpeg.org/ffmpeg.git "$FF_TAG"
     cd "$SRC/ffmpeg"
-    # Configure natively and cross-compile to x86-64 (the standard universal-build recipe).
+    # Configure natively and cross-compile to x86-64 (the standard universal-build recipe);
+    # arm64 is a plain native build.
+    if [[ $ARCH == x86_64 ]]; then
+        ff_target=(--enable-cross-compile --target-os=darwin --arch=x86_64 --x86asmexe=nasm)
+    else
+        ff_target=(--target-os=darwin --arch=arm64)
+    fi
     if ! quiet "ffmpeg configure" ./configure --prefix="$PREFIX" \
-        --enable-cross-compile --target-os=darwin --arch=x86_64 --cc=clang \
-        --extra-cflags="-arch x86_64 -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET" \
-        --extra-ldflags="-arch x86_64 -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET" \
-        --x86asmexe=nasm \
+        "${ff_target[@]}" --cc=clang \
+        --extra-cflags="-arch $ARCH -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET" \
+        --extra-ldflags="-arch $ARCH -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET" \
         --enable-shared --disable-static --disable-programs --disable-doc --disable-network \
         --disable-everything --enable-avformat --enable-avcodec --enable-swscale --enable-swresample \
         --enable-demuxer=mov,h264,hevc,aac,mpegts --enable-parser=h264,hevc,aac \
@@ -162,7 +171,7 @@ if ! have include/xbyak/xbyak.h; then
     cp -R "$SRC/xbyak/xbyak" "$PREFIX/include/"
 fi
 
-step "miniz (static, x86-64)"
+step "miniz (static, $ARCH)"
 MZ_TAG=$(latest_tag https://github.com/richgel999/miniz.git '^3\.[0-9]+\.[0-9]+$')
 echo "tag: $MZ_TAG"
 if ! have lib/libminiz.a; then
@@ -171,7 +180,7 @@ if ! have lib/libminiz.a; then
         -DBUILD_EXAMPLES=OFF -DBUILD_FUZZERS=OFF -DBUILD_TESTS=OFF
 fi
 
-step "Zydis (static, x86-64)"
+step "Zydis (static, $ARCH)"
 ZY_TAG=$(latest_tag https://github.com/zyantific/zydis.git '^v4\.[0-9]+\.[0-9]+$')
 echo "tag: $ZY_TAG"
 # Zydis' installed config looks for Zycore as its own package, so Zycore is built and installed
@@ -192,7 +201,7 @@ if ! have lib/libZydis.a || ! have lib/cmake/zycore/zycore-config.cmake; then
         -DZYDIS_BUILD_DOXYGEN=OFF -DZYDIS_BUILD_MAN=OFF -DZYDIS_BUILD_TESTS=OFF
 fi
 
-step "KosmicKrisp (Mesa Vulkan-on-Metal driver, x86-64)"
+step "KosmicKrisp (Mesa Vulkan-on-Metal driver, $ARCH)"
 # The Vulkan driver upstream shadPS4 bundles on macOS; the vendored renderer already carries its
 # driver-specific workarounds. Built with shadPS4's wrapper (meson, cross-compiled to x86-64),
 # pinned to the revision upstream used at the vendored shadPS4 commit.
@@ -231,27 +240,27 @@ if ! have lib/kosmickrisp/libvulkan_kosmickrisp.dylib || [[ $(cat "$kk_stamp" 2>
     kk_env=(env -u PKG_CONFIG_LIBDIR
             PKG_CONFIG_PATH="$("$BREW" --prefix)/lib/pkgconfig:$("$BREW" --prefix spirv-llvm-translator)/lib/pkgconfig"
             PATH="$PREFIX/pyenv/bin:$PATH")
-    rm -rf "$kk/build-x86_64"   # meson does not re-run a failed setup in place
-    quiet "kosmickrisp configure" "${kk_env[@]}" cmake -S "$kk" -B "$kk/build-x86_64" -G Ninja \
-        -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0
+    rm -rf "$kk/build-$ARCH"   # meson does not re-run a failed setup in place
+    quiet "kosmickrisp configure" "${kk_env[@]}" cmake -S "$kk" -B "$kk/build-$ARCH" -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=$ARCH -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0
     echo "building Mesa/KosmicKrisp"
-    quiet "kosmickrisp build" "${kk_env[@]}" cmake --build "$kk/build-x86_64" -j "$JOBS"
+    quiet "kosmickrisp build" "${kk_env[@]}" cmake --build "$kk/build-$ARCH" -j "$JOBS"
     mkdir -p "$PREFIX/lib/kosmickrisp"
-    cp "$kk/build-x86_64/outputs/libvulkan_kosmickrisp.dylib" "$kk/build-x86_64/outputs/kosmickrisp_mesa_icd.json" \
+    cp "$kk/build-$ARCH/outputs/libvulkan_kosmickrisp.dylib" "$kk/build-$ARCH/outputs/kosmickrisp_mesa_icd.json" \
         "$PREFIX/lib/kosmickrisp/"
     echo "$KK_PATCHES" > "$kk_stamp"
 fi
 
-step "Verify: every library must contain x86_64"
+step "Verify: every library must contain $ARCH"
 bad=0
 for lib in "$PREFIX"/lib/*.dylib "$PREFIX"/lib/*.a "$PREFIX"/lib/kosmickrisp/*.dylib; do
     [[ -e $lib ]] || continue
     [[ -L $lib ]] && continue
     archs=$(lipo -archs "$lib")
     printf '  %-40s %s\n' "$(basename "$lib")" "$archs"
-    [[ $archs == *x86_64* ]] || bad=1
+    [[ $archs == *$ARCH* ]] || bad=1
 done
-(( bad == 0 )) || die "a library lacks x86_64 (see above)"
+(( bad == 0 )) || die "a library lacks $ARCH (see above)"
 
 cat > "$PREFIX/env.sh" <<EOF
 # source this before building or running the macOS port

@@ -11,6 +11,7 @@
 #include "core/libraries/videoout/video_out.h"
 #include "core/libraries/videoout/videoout_error.h"
 #include "core/platform.h"
+#include "remote/bb_remote.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
 
 extern std::unique_ptr<Vulkan::Presenter> presenter;
@@ -141,6 +142,9 @@ s32 PS4_SYSV_ABI sceVideoOutRegisterBuffers(s32 handle, s32 startIndex, void* co
 s32 PS4_SYSV_ABI sceVideoOutSetFlipRate(s32 handle, s32 rate) {
     LOG_TRACE(Lib_VideoOut, "called");
     driver->GetPort(handle)->flip_rate = rate;
+    if (BbRemote::FrontActive()) {
+        BbRemote::Front::VoSetFlipRate(handle, rate); // bbport: bb-gpu's vblank thread uses it
+    }
     return ORBIS_OK;
 }
 
@@ -338,7 +342,7 @@ s32 PS4_SYSV_ABI sceVideoOutGetBufferLabelAddress(s32 handle, uintptr_t* label_a
     if (!port) {
         return ORBIS_VIDEO_OUT_ERROR_INVALID_HANDLE;
     }
-    *label_addr = reinterpret_cast<uintptr_t>(port->buffer_labels.data());
+    *label_addr = reinterpret_cast<uintptr_t>(port->buffer_labels);
     return 16;
 }
 
@@ -346,6 +350,11 @@ s32 sceVideoOutSubmitEopFlip(s32 handle, u32 buf_id, u32 mode, s64 flip_arg, voi
     auto* port = driver->GetPort(handle);
     if (!port) {
         return ORBIS_VIDEO_OUT_ERROR_INVALID_HANDLE;
+    }
+    // bbport (native GPU process): the flip interrupt is raised in bb-gpu's command processor,
+    // which flips there, in its command stream order.
+    if (BbRemote::FrontActive()) {
+        return BbRemote::Front::VoSubmitEopFlip(handle, buf_id, mode, flip_arg);
     }
 
     Platform::IrqC::Instance()->RegisterOnce(
@@ -362,7 +371,8 @@ s32 sceVideoOutSubmitEopFlip(s32 handle, u32 buf_id, u32 mode, s64 flip_arg, voi
 s32 PS4_SYSV_ABI sceVideoOutGetDeviceCapabilityInfo(
     s32 handle, SceVideoOutDeviceCapabilityInfo* pDeviceCapabilityInfo) {
     pDeviceCapabilityInfo->capability = 0;
-    if (presenter->IsHDRSupported()) {
+    if (BbRemote::FrontActive() ? BbRemote::Front::VoIsHdrSupported()
+                                : presenter->IsHDRSupported()) {
         auto& game_info = Common::ElfInfo::Instance();
         if (game_info.GetPSFAttributes().support_hdr) {
             pDeviceCapabilityInfo->capability |= ORBIS_VIDEO_OUT_DEVICE_CAPABILITY_BT2020_PQ;
@@ -401,6 +411,10 @@ s32 PS4_SYSV_ABI sceVideoOutAdjustColor(s32 handle, const SceVideoOutColorSettin
         return ORBIS_VIDEO_OUT_ERROR_INVALID_HANDLE;
     }
 
+    if (BbRemote::FrontActive()) {
+        BbRemote::Front::VoSetGamma(settings->gamma);
+        return ORBIS_OK;
+    }
     presenter->GetPPSettingsRef().gamma = settings->gamma;
     return ORBIS_OK;
 }
@@ -445,6 +459,9 @@ s32 PS4_SYSV_ABI sceVideoOutConfigureOutputMode_(s32 handle, u32 reserved, const
     default:
         return ORBIS_VIDEO_OUT_ERROR_INVALID_VALUE;
     }
+    if (BbRemote::FrontActive()) {
+        BbRemote::Front::VoSetHdr(handle, port->is_hdr);
+    }
 
     return ORBIS_OK;
 }
@@ -462,6 +479,11 @@ s32 PS4_SYSV_ABI sceVideoOutSubmitChangeBufferAttribute(s32 handle, s32 attribut
 s32 PS4_SYSV_ABI sceVideoOutSetWindowModeMargins(s32 handle, s32 top, s32 bottom) {
     LOG_ERROR(Lib_VideoOut, "(STUBBED) called top = {}, bottom = {}", top, bottom);
     return ORBIS_OK;
+}
+
+// bbport (native GPU process): bb-gpu's message handlers reach its port directly.
+VideoOutPort* GetPortForRemote(s32 handle) {
+    return driver ? driver->GetPort(handle) : nullptr;
 }
 
 void RegisterLib(Core::Loader::SymbolsResolver* sym) {

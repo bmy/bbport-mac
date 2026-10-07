@@ -35,6 +35,10 @@ enum class InterruptId : u32 {
 using IrqHandler = std::function<void(InterruptId)>;
 
 struct IrqController {
+    /// bbport (native GPU process, docs/macos-native-gpu.md): in bb-gpu, every interrupt also
+    /// goes to the game process, whose handlers (event queues) run there.
+    inline static void (*forward)(InterruptId) = nullptr;
+
     void RegisterOnce(InterruptId irq, IrqHandler handler) {
         ASSERT_MSG(static_cast<u32>(irq) <= static_cast<u32>(InterruptId::InterruptIdMax),
                    "Invalid IRQ number");
@@ -79,6 +83,9 @@ struct IrqController {
             h(irq);
 
             ctx.one_time_subscribers.pop();
+        }
+        if (forward) {
+            forward(irq);
         }
     }
 

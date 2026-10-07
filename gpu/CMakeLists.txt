@@ -142,7 +142,8 @@ add_dependencies(bbgpu host_shaders)
 if (APPLE)
     target_sources(bbgpu PRIVATE shim/bbport_metalfx.mm)
     set_source_files_properties(shim/bbport_metalfx.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
-    target_link_libraries(bbgpu PRIVATE "-framework Metal" "-framework Foundation")
+    target_link_libraries(bbgpu PRIVATE "-framework Metal" "-framework Foundation"
+                                        "-framework CoreFoundation")
 endif()
 # In-game settings menu: Dear ImGui (third_party/imgui, MIT) with its Vulkan backend, and an
 # embedded Cyrillic font (third_party/fonts).
@@ -172,6 +173,19 @@ endif()
 target_link_libraries(bbgpu PRIVATE ffx-vulkan::portable ffx-vulkan::fsr4-v07-vulkan)
 target_link_libraries(bbgpu PUBLIC Vulkan::Headers fmt::fmt Boost::headers magic_enum::magic_enum
     tsl::robin_map GPUOpen::VulkanMemoryAllocator PkgConfig::XXHASH PkgConfig::SDL3 $<$<NOT:$<PLATFORM_ID:Darwin>>:PkgConfig::X11> PkgConfig::FFMPEG miniz::miniz Zydis::Zydis sirit)
+
+# bbport: bb-gpu, the native GPU process (docs/macos-native-gpu.md): the GPU core for a game
+# process started with BB_NATIVE_GPU=1. It provides the library's runtime imports from its own
+# view of guest memory (shim/remote/remote_back.cpp). Built on demand
+# (tools/macos/build_gpu_native.sh).
+add_executable(bb-gpu EXCLUDE_FROM_ALL bb_gpu/bb_gpu_main.cpp)
+target_include_directories(bb-gpu PRIVATE shim shadps4 third_party/gcn/include)
+target_link_libraries(bb-gpu PRIVATE bbgpu)
+if (APPLE)
+    target_link_options(bb-gpu PRIVATE -Wl,-export_dynamic)
+else()
+    target_link_options(bb-gpu PRIVATE -rdynamic)
+endif()
 
 # Explicit test targets; neither launches the game nor needs a Vulkan device.
 add_executable(motion-history-test EXCLUDE_FROM_ALL ../tests/test_motion_history.cpp)

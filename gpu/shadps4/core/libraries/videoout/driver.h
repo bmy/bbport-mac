@@ -23,7 +23,10 @@ namespace Libraries::VideoOut {
 struct VideoOutPort {
     SceVideoOutResolutionStatus resolution;
     std::array<VideoOutBuffer, MaxDisplayBuffers> buffer_slots;
-    std::array<u64, MaxDisplayBuffers> buffer_labels; // should be contiguous in memory
+    std::array<u64, MaxDisplayBuffers> own_labels{};
+    /// Should be contiguous in memory. bbport: own_labels, or with the native GPU process the
+    /// memory both processes share (docs/macos-native-gpu.md): the guest's GPU commands write them.
+    u64* buffer_labels = own_labels.data();
     static_assert(sizeof(buffer_labels[0]) == 8u);
     std::array<BufferAttributeGroup, MaxDisplayBufferGroups> groups;
     FlipStatus flip_status;

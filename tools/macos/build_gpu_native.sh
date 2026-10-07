@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# tools/macos/build_gpu_native.sh: builds the GPU library natively for Apple Silicon (arm64), the
-# first step of the native GPU process (docs/macos-native-gpu.md). It does not run the game yet:
-# it checks that libbbgpu compiles and links as arm64. The x86-64 build is unaffected.
+# tools/macos/build_gpu_native.sh: builds the native GPU process for Apple Silicon (arm64):
+# out/gpu-arm64/bb-gpu and its libbbgpu.dylib (docs/macos-native-gpu.md). The game runs with it
+# when BB_NATIVE_GPU=1 is set; the x86-64 build is unaffected.
 #   BB_ARCH=arm64 bash tools/macos/setup_deps.sh     # once: native libraries into deps-arm64
-#   bash tools/macos/build_gpu_native.sh             # out/gpu-arm64/libbbgpu.dylib
+#   bash tools/macos/build_gpu_native.sh             # out/gpu-arm64/bb-gpu
 set -euo pipefail
 cd -- "$(dirname -- "$0")/../.."
 DEPS=${BB_DEPS_ARM64:-$PWD/deps-arm64}
@@ -30,11 +30,20 @@ cmake -S gpu -B out/gpu-arm64 -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
     -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
     -DCMAKE_PREFIX_PATH="$DEPS;$BREW_PREFIX" -DBB_LTO=OFF -DBB_PGO=off > out/gpu-arm64-configure.log 2>&1 ||
     { tail -40 out/gpu-arm64-configure.log >&2; echo "STOP: configure failed (out/gpu-arm64-configure.log)" >&2; exit 1; }
-if ! ninja -C out/gpu-arm64 -k 0 -j "$JOBS" bbgpu > out/gpu-arm64-build.log 2>&1; then
+if ! ninja -C out/gpu-arm64 -k 0 -j "$JOBS" bbgpu bb-gpu > out/gpu-arm64-build.log 2>&1; then
     grep -A1 -E ': (fatal )?error:' out/gpu-arm64-build.log | grep -v '^--$' | awk '!seen[$0]++' > out/gpu-arm64-errors.txt
     head -80 out/gpu-arm64-errors.txt >&2
     echo "STOP: arm64 GPU library build failed: $(grep -cE ': (fatal )?error:' out/gpu-arm64-errors.txt) distinct errors" \
          "(all in out/gpu-arm64-errors.txt, full log out/gpu-arm64-build.log)" >&2
     exit 1
 fi
-echo "Built: out/gpu-arm64/libbbgpu.dylib ($(lipo -archs out/gpu-arm64/libbbgpu.dylib))"
+# The library takes the runtime's functions from the executable at load time (flat namespace):
+# one missing there would stop bb-gpu before main.
+missing=$(comm -23 \
+    <(nm -m out/gpu-arm64/libbbgpu.dylib | sed -n 's/.* \(_[^ ]*\) (dynamically looked up).*/\1/p' | sort -u) \
+    <(nm -gU out/gpu-arm64/bb-gpu | awk '{print $3}' | sort -u))
+if [[ -n $missing ]]; then
+    echo "STOP: bb-gpu does not provide what libbbgpu imports from it:" $missing >&2
+    exit 1
+fi
+echo "Built: out/gpu-arm64/bb-gpu ($(lipo -archs out/gpu-arm64/bb-gpu)) and libbbgpu.dylib"

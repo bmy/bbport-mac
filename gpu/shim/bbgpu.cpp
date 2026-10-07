@@ -21,6 +21,9 @@
 #include <thread>
 #include <vector>
 #include <SDL3/SDL.h>
+#ifdef __APPLE__
+#include <CoreFoundation/CoreFoundation.h>
+#endif
 #include "../bbgpu.h"
 #include "common/elf_info.h"
 #include "common/logging/log.h"
@@ -34,6 +37,7 @@
 #include "bbport_portable.h"
 #include "shader_recompiler/ir/passes/srt.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
+#include "remote/bb_remote.h"
 
 extern "C" {
 // runtime_memory.c
@@ -116,6 +120,10 @@ void MemoryManager::SetRasterizer(Vulkan::Rasterizer* rasterizer_) {
     });
 }
 void MemoryManager::InvalidateMemory(VAddr address, u64 size) {
+    if (BbRemote::FrontActive()) {
+        BbRemote::Front::InvalidateMemory(address, size); // bb-gpu has the caches
+        return;
+    }
     if (rasterizer) rasterizer->InvalidateMemory(address, size);
 }
 namespace {
@@ -217,7 +225,13 @@ boost::icl::interval_set<VAddr> AddressSpace::GetUsableRegions() {
 // Kernel services the vendored libraries call directly.
 namespace Libraries::Kernel {
 u64 PS4_SYSV_ABI sceKernelGetTscFrequency() { return runtime_tsc_frequency(); }
-u64 PS4_SYSV_ABI sceKernelReadTsc() { return Common::FencedRDTSC(); }
+u64 PS4_SYSV_ABI sceKernelReadTsc() {
+#if defined(__aarch64__)
+    return BbRemote::Back::ReadTsc(); // bb-gpu: the game process's TSC (its timestamps)
+#else
+    return Common::FencedRDTSC();
+#endif
+}
 u64 PS4_SYSV_ABI sceKernelGetProcessTime() { return runtime_process_time_us(); }
 u64 PS4_SYSV_ABI sceKernelGetProcessTimeCounter() { return runtime_process_time_counter(); }
 u64 PS4_SYSV_ABI sceKernelGetProcessTimeCounterFrequency() { return 1'000'000'000; }
@@ -308,6 +322,29 @@ extern "C" int bbgpu_init(const BbGpuConfig* config) {
     };
     if (config->user_dir) setenv("BB_GPU_USER_DIR", config->user_dir, 0);
     Core::Emulator::FillElfInfo(*config);
+    // bbport (BB_NATIVE_GPU=1, docs/macos-native-gpu.md): the window, the Vulkan device and the
+    // GPU core start in bb-gpu; here the HLE libraries register and forward to it.
+    if (BbRemote::Requested()) {
+        if (!BbRemote::Front::Init(*config)) {
+            return 1;
+        }
+#ifdef __APPLE__
+        // Gamepads stay here (runtime_pad.c reads them through SDL): this process's main thread,
+        // idle without a window, keeps their events and run loop going.
+        RunOnMainThread([] {
+            Common::SetCurrentThreadName("bb:input");
+            SDL_InitSubSystem(SDL_INIT_GAMEPAD);
+            for (;;) {
+                SDL_PumpEvents();
+                CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.004, false);
+            }
+        });
+#endif
+        Core::Loader::SymbolsResolver resolver;
+        Libraries::GnmDriver::RegisterLib(&resolver);
+        Libraries::VideoOut::RegisterLib(&resolver);
+        return 0;
+    }
     const std::string title = config->title ? config->title : "Bloodborne";
     const s32 width = config->width, height = config->height;
     auto window_main = [title, width, height] {
@@ -320,6 +357,9 @@ extern "C" int bbgpu_init(const BbGpuConfig* config) {
         }
         g_window_cv.notify_all();
         while (window->PollEvents()) {
+            if (BbRemote::BackActive()) {
+                BbRemote::Back::PublishWindowState();
+            }
             SDL_Delay(2);
         }
         LOG_INFO(Frontend, "Window closed by user");
@@ -363,6 +403,9 @@ extern "C" uintptr_t bbgpu_resolve(const char* scoped_nid) {
 }
 
 extern "C" int bbgpu_handle_fault(void* ucontext, void* address) {
+    if (BbRemote::FrontActive()) {
+        return BbRemote::Front::HandleFault(ucontext, address); // bb-gpu tracks the pages
+    }
     // BB_LABEL_TRAP (diagnostic): its read-only label pages first. Not passed on to GPU page
     // tracking (a write fault drains the draw pipe: thousands a second would change the timing
     // under test); label pages are not expected to be GPU-tracked.
@@ -377,6 +420,10 @@ extern "C" int bbgpu_handle_fault(void* ucontext, void* address) {
 
 extern "C" void bbgpu_patch_image(unsigned char* image, uint64_t size) {
     BbGnmHooks::PatchImage(image, size);
+}
+
+extern "C" int bbgpu_share_range(void* address, uint64_t size, int prot) {
+    return BbRemote::FrontActive() ? BbRemote::Front::ShareRange(address, size, prot) : 0;
 }
 
 extern "C" unsigned bbgpu_symbol_count(void) {
@@ -435,16 +482,25 @@ ScreenshotRequests ConsumeScreenshotRequests() { return {}; }
 } // namespace VideoCore
 
 extern "C" int bbgpu_overlay_captures_input(void) {
+    if (BbRemote::FrontActive()) {
+        return BbRemote::Front::OverlayCapturesInput();
+    }
     return BbOverlay::CapturesInput() ? 1 : 0;
 }
 
 extern "C" int bbgpu_text_input_begin(const char* initial, const char* prompt) {
+    if (BbRemote::FrontActive()) {
+        return BbRemote::Front::TextInputBegin(initial, prompt);
+    }
     if (!g_window) return 0;
     g_window->BeginTextInput(initial ? initial : "", prompt ? prompt : "Text");
     return 1;
 }
 
 extern "C" int bbgpu_text_input_poll(char* out, uint64_t size) {
+    if (BbRemote::FrontActive()) {
+        return BbRemote::Front::TextInputPoll(out, size);
+    }
     if (!g_window) return 2;
     std::string text;
     const int state = g_window->PollTextInput(text);

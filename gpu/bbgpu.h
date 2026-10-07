@@ -32,6 +32,10 @@ int bbgpu_text_input_poll(char *out_utf8, uint64_t size);
 int bbgpu_overlay_captures_input(void);
 /* Patches the loaded image before the game runs (image still writable): libGnm entry hooks. */
 void bbgpu_patch_image(unsigned char *image, uint64_t size);
+/* bbport (native GPU process, BB_NATIVE_GPU=1): moves a page-aligned, mapped range of the game's
+ * memory into memory the GPU process shares, keeping its contents; prot is PROT_*. 0 on success
+ * and when there is no GPU process. */
+int bbgpu_share_range(void *address, uint64_t size, int prot);
 /* Number of symbols registered by the vendored libraries (diagnostics). */
 unsigned bbgpu_symbol_count(void);
 #ifdef __APPLE__

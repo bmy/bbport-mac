@@ -28,6 +28,7 @@
 #include "video_core/amdgpu/pm4_cmds.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
+#include "remote/bb_remote.h"
 
 extern Frontend::WindowSDL* g_window;
 std::unique_ptr<Vulkan::Presenter> presenter;
@@ -36,6 +37,47 @@ std::unique_ptr<AmdGpu::Liverpool> liverpool;
 namespace Libraries::GnmDriver {
 
 using namespace AmdGpu;
+
+// bbport (native GPU process, docs/macos-native-gpu.md): the GPU core may run in bb-gpu, where
+// these calls are forwarded; the guest's command buffers are in memory both processes share.
+namespace Gpu {
+static void SubmitGfx(std::span<const u32> dcb, std::span<const u32> ccb) {
+    if (BbRemote::FrontActive()) {
+        BbRemote::Front::SubmitGfx(dcb, ccb);
+        return;
+    }
+    liverpool->SubmitGfx(dcb, ccb);
+}
+static void SubmitAsc(u32 gnm_vqid, std::span<const u32> acb) {
+    if (BbRemote::FrontActive()) {
+        BbRemote::Front::SubmitAsc(gnm_vqid, acb);
+        return;
+    }
+    liverpool->SubmitAsc(gnm_vqid, acb);
+}
+static void SubmitDone(u64 frame) {
+    if (BbRemote::FrontActive()) {
+        BbRemote::Front::SubmitDone(frame);
+        return;
+    }
+    liverpool->SubmitDone(frame);
+}
+static bool IsGpuIdle() {
+    return BbRemote::FrontActive() ? BbRemote::Front::IsGpuIdle() : liverpool->IsGpuIdle();
+}
+struct AscRing {
+    VAddr map_addr;
+    u32 ring_size_dw;
+};
+static AscRing AscQueue(u32 vqid) {
+    if (BbRemote::FrontActive()) {
+        const auto queue = BbRemote::Front::GetAscQueue(vqid);
+        return {VAddr(queue.map_addr), queue.ring_size_dw};
+    }
+    const auto& queue = liverpool->asc_queues[{vqid}];
+    return {queue.map_addr, queue.ring_size_dw};
+}
+} // namespace Gpu
 
 enum GnmEventType : u64 {
     Compute0RelMem = 0x00,
@@ -100,6 +142,9 @@ bool SubmitLockOnDecode() {
 }
 
 void ReleaseSubmissionLock() {
+    if (BbRemote::BackActive()) {
+        BbRemote::Back::ReleaseSubmissionLock(); // the guest waits in the game process
+    }
     std::unique_lock lock{m_wait_idle};
     submission_lock = 0;
     cv_lock.notify_all();
@@ -109,6 +154,9 @@ void ReleaseSubmissionLock() {
 static u64 frames_retired{};
 
 void NoteFramesRetired(u64 frames) {
+    if (BbRemote::BackActive()) {
+        BbRemote::Back::FramesRetired(frames); // the guest waits in the game process
+    }
     BbTimeline::Note(BbTimeline::FrameRetired, frames);
     std::unique_lock lock{m_wait_idle};
     frames_retired = std::max(frames_retired, frames);
@@ -435,7 +483,7 @@ void PS4_SYSV_ABI sceGnmDingDong(u32 gnm_vqid, u32 next_offs_dw) {
     }
 
     auto vqid = gnm_vqid - 1;
-    auto& asc_queue = liverpool->asc_queues[{vqid}];
+    const auto asc_queue = Gpu::AscQueue(vqid);
 
     auto& offs_dw = asc_next_offs_dw[vqid];
 
@@ -449,7 +497,7 @@ void PS4_SYSV_ABI sceGnmDingDong(u32 gnm_vqid, u32 next_offs_dw) {
     if (next_offs_dw < offs_dw && next_offs_dw != 0) {
         // For cases if a submission is split at the end of the ring buffer, we need to submit it in
         // two parts to handle the wrap
-        liverpool->SubmitAsc(gnm_vqid, {reinterpret_cast<const u32*>(asc_queue.map_addr) + offs_dw,
+        Gpu::SubmitAsc(gnm_vqid, {reinterpret_cast<const u32*>(asc_queue.map_addr) + offs_dw,
                                         asc_queue.ring_size_dw - offs_dw});
         offs_dw = 0;
     }
@@ -492,7 +540,7 @@ void PS4_SYSV_ABI sceGnmDingDong(u32 gnm_vqid, u32 next_offs_dw) {
             .base_addr = base_addr,
         });
     }
-    liverpool->SubmitAsc(gnm_vqid, acb_span);
+    Gpu::SubmitAsc(gnm_vqid, acb_span);
     if (SubmitLockOnDecode()) {
         WaitPreviousFrameAtSubmit(); // handed over first, as the graphics submissions
     }
@@ -1368,15 +1416,26 @@ int PS4_SYSV_ABI sceGnmMapComputeQueue(u32 pipe_id, u32 queue_id, VAddr ring_bas
         return ORBIS_GNM_ERROR_COMPUTEQUEUE_INVALID_READ_PTR_ADDR;
     }
 
-    const auto vqid =
-        liverpool->asc_queues.insert(VAddr(ring_base_addr), read_ptr_addr, ring_size_dw, pipe_id);
+    u32 vqid_index = 0;
+    if (BbRemote::FrontActive()) {
+        const s32 index = BbRemote::Front::MapComputeQueue(VAddr(ring_base_addr), read_ptr_addr,
+                                                           ring_size_dw, pipe_id);
+        if (index < 0) {
+            return ORBIS_GNM_ERROR_FAILURE;
+        }
+        vqid_index = u32(index);
+        *read_ptr_addr = 0u;
+    } else {
+        const auto vqid = liverpool->asc_queues.insert(VAddr(ring_base_addr), read_ptr_addr,
+                                                       ring_size_dw, pipe_id);
+        vqid_index = vqid.index;
+        const auto& queue = liverpool->asc_queues[vqid];
+        *queue.read_addr = 0u;
+    }
     // We need to offset index as `dingDong` assumes it to be from the range [1..64]
-    const auto gnm_vqid = vqid.index + 1;
+    const auto gnm_vqid = vqid_index + 1;
     LOG_INFO(Lib_GnmDriver, "ASC pipe {} queue {} mapped to vqueue {}", pipe_id, queue_id,
              gnm_vqid);
-
-    const auto& queue = liverpool->asc_queues[vqid];
-    *queue.read_addr = 0u;
 
     return gnm_vqid;
 }
@@ -2334,26 +2393,26 @@ static inline s32 PerformSubmit(u32 count, const u32* dcb_gpu_addrs[], u32* dcb_
 
     if (send_init_packet) {
         if (sdk_version < Common::ElfInfo::FW_200) {
-            liverpool->SubmitGfx(InitSequence, {});
+            Gpu::SubmitGfx(InitSequence, {});
         } else if (sdk_version < Common::ElfInfo::FW_400) {
             if (sceKernelIsNeoMode()) {
                 if (!UseNeoCompatSequences) {
-                    liverpool->SubmitGfx(InitSequence200Neo, {});
+                    Gpu::SubmitGfx(InitSequence200Neo, {});
                 } else {
-                    liverpool->SubmitGfx(InitSequence200NeoCompat, {});
+                    Gpu::SubmitGfx(InitSequence200NeoCompat, {});
                 }
             } else {
-                liverpool->SubmitGfx(InitSequence200, {});
+                Gpu::SubmitGfx(InitSequence200, {});
             }
         } else {
             if (sceKernelIsNeoMode()) {
                 if (!UseNeoCompatSequences) {
-                    liverpool->SubmitGfx(InitSequence350Neo, {});
+                    Gpu::SubmitGfx(InitSequence350Neo, {});
                 } else {
-                    liverpool->SubmitGfx(InitSequence350NeoCompat, {});
+                    Gpu::SubmitGfx(InitSequence350NeoCompat, {});
                 }
             } else {
-                liverpool->SubmitGfx(InitSequence350, {});
+                Gpu::SubmitGfx(InitSequence350, {});
             }
         }
         send_init_packet = false;
@@ -2398,7 +2457,7 @@ static inline s32 PerformSubmit(u32 count, const u32* dcb_gpu_addrs[], u32* dcb_
         }
         BbGnmHooks::CheckSubmission(dcb_span.data(), dcb_span.size());
         BbGnmHooks::CheckSubmission(ccb_span.data(), ccb_span.size());
-        liverpool->SubmitGfx(dcb_span, ccb_span);
+        Gpu::SubmitGfx(dcb_span, ccb_span);
     }
     return ORBIS_OK;
 }
@@ -2533,14 +2592,14 @@ s32 PS4_SYSV_ABI sceGnmSubmitDone() {
         submits_this_frame = 0;
         WatchOverlapLeak();
         ++frames_submitted;
-        liverpool->SubmitDone(u64(frames_submitted));
+        Gpu::SubmitDone(u64(frames_submitted));
     } else {
         WaitGpuIdle();
-        if (!liverpool->IsGpuIdle()) {
+        if (!Gpu::IsGpuIdle()) {
             submission_lock = true;
         }
         ++frames_submitted;
-        liverpool->SubmitDone();
+        Gpu::SubmitDone(0);
     }
     send_init_packet = true;
     DebugState.IncGnmFrameNum();
@@ -2548,6 +2607,10 @@ s32 PS4_SYSV_ABI sceGnmSubmitDone() {
 }
 
 int PS4_SYSV_ABI sceGnmUnmapComputeQueue(u32 vqid) {
+    if (BbRemote::FrontActive()) {
+        BbRemote::Front::UnmapComputeQueue(vqid - 1);
+        return ORBIS_OK;
+    }
     liverpool->asc_queues.erase(Common::SlotId{vqid - 1});
     return ORBIS_OK;
 }
@@ -3102,9 +3165,12 @@ int PS4_SYSV_ABI Func_F916890425496553() {
 }
 
 void RegisterLib(Core::Loader::SymbolsResolver* sym) {
-    LOG_INFO(Lib_GnmDriver, "Initializing presenter");
-    liverpool = std::make_unique<AmdGpu::Liverpool>();
-    presenter = std::make_unique<Vulkan::Presenter>(*g_window, liverpool.get());
+    // bbport (native GPU process): in the game process the GPU core is bb-gpu's.
+    if (!BbRemote::FrontActive()) {
+        LOG_INFO(Lib_GnmDriver, "Initializing presenter");
+        liverpool = std::make_unique<AmdGpu::Liverpool>();
+        presenter = std::make_unique<Vulkan::Presenter>(*g_window, liverpool.get());
+    }
 
     const s32 result = sceKernelGetCompiledSdkVersion(&sdk_version);
     if (result != ORBIS_OK) {

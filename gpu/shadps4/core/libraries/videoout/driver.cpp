@@ -27,6 +27,7 @@
 #include "core/libraries/kernel/time.h"
 #include "core/libraries/videoout/driver.h"
 #include "core/libraries/kernel/equeue.h"
+#include "remote/bb_remote.h"
 
 extern "C" void runtime_sleep_stats(uint64_t* calls, uint64_t* ns);
 extern "C" void runtime_wait_report(double frames);
@@ -76,6 +77,16 @@ VideoOutDriver::VideoOutDriver(u32 width, u32 height) {
     main_port.resolution.full_height = height;
     main_port.resolution.pane_width = width;
     main_port.resolution.pane_height = height;
+    // bbport (native GPU process, docs/macos-native-gpu.md): the labels live in memory both
+    // processes share. In the game process this driver only forwards: bb-gpu presents.
+    if (BbRemote::FrontActive()) {
+        main_port.buffer_labels = BbRemote::Front::VideoOutLabels();
+        BbRemote::Front::SetVideoOutPort(&main_port);
+        return;
+    }
+    if (BbRemote::BackActive()) {
+        main_port.buffer_labels = BbRemote::Back::VideoOutLabels();
+    }
     const char* separate = std::getenv("BB_PRESENT_THREAD");
     separate_swap = !(separate && separate[0] == '0');
     if (separate_swap) {
@@ -123,12 +134,18 @@ int VideoOutDriver::Open(const ServiceThreadParams* params) {
     if (main_port.is_open) {
         return ORBIS_VIDEO_OUT_ERROR_RESOURCE_BUSY;
     }
+    if (BbRemote::FrontActive()) {
+        return BbRemote::Front::VoOpen();
+    }
     main_port.is_open = true;
     liverpool->SetVoPort(&main_port);
     return 1;
 }
 
 void VideoOutDriver::Close(s32 handle) {
+    if (BbRemote::FrontActive()) {
+        BbRemote::Front::VoClose(handle); // then this copy of the port is cleared as below
+    }
     std::scoped_lock lock{mutex};
 
     // Mark as closed
@@ -137,10 +154,13 @@ void VideoOutDriver::Close(s32 handle) {
     main_port.prev_index = -1;
 
     // Clear port information
-    std::memset(main_port.buffer_labels.data(), 0, sizeof(main_port.buffer_labels));
+    std::memset(main_port.buffer_labels, 0, MaxDisplayBuffers * sizeof(u64));
     std::memset(main_port.groups.data(), 0, sizeof(main_port.groups));
     std::memset(&main_port.vblank_status, 0, sizeof(main_port.vblank_status));
     main_port.flip_status = FlipStatus{};
+    if (BbRemote::BackActive()) {
+        BbRemote::Back::VoFlipStatus(main_port.flip_status, false, 0);
+    }
 
     // Re-initialize buffers
     std::memset(main_port.buffer_slots.data(), 0, sizeof(main_port.buffer_slots));
@@ -176,6 +196,9 @@ VideoOutPort* VideoOutDriver::GetPort(int handle) {
 
 int VideoOutDriver::RegisterBuffers(VideoOutPort* port, s32 startIndex, void* const* addresses,
                                     s32 bufferNum, const BufferAttribute* attribute) {
+    if (BbRemote::FrontActive()) {
+        return BbRemote::Front::VoRegisterBuffers(startIndex, addresses, bufferNum, attribute);
+    }
     const s32 group_index = port->FindFreeGroup();
     if (group_index >= MaxDisplayBufferGroups) {
         return ORBIS_VIDEO_OUT_ERROR_NO_EMPTY_SLOT;
@@ -247,6 +270,9 @@ int VideoOutDriver::RegisterBuffers(VideoOutPort* port, s32 startIndex, void* co
 }
 
 int VideoOutDriver::UnregisterBuffers(VideoOutPort* port, s32 attributeIndex) {
+    if (BbRemote::FrontActive()) {
+        return BbRemote::Front::VoUnregisterBuffers(attributeIndex);
+    }
     if (attributeIndex >= MaxDisplayBufferGroups || !port->groups[attributeIndex].is_occupied) {
         LOG_ERROR(Lib_VideoOut, "Invalid attribute index {}", attributeIndex);
         return ORBIS_VIDEO_OUT_ERROR_INVALID_VALUE;
@@ -267,6 +293,9 @@ int VideoOutDriver::UnregisterBuffers(VideoOutPort* port, s32 attributeIndex) {
 
 int VideoOutDriver::ChangeBufferAttribute(VideoOutPort* port, s32 attributeIndex,
                                           const BufferAttribute* attribute) {
+    if (BbRemote::FrontActive()) {
+        return BbRemote::Front::VoChangeBufferAttribute(attributeIndex, attribute);
+    }
     if (attributeIndex >= MaxDisplayBufferGroups || !port->groups[attributeIndex].is_occupied) {
         LOG_ERROR(Lib_VideoOut, "Invalid attribute index {}", attributeIndex);
         return ORBIS_VIDEO_OUT_ERROR_INVALID_VALUE;
@@ -732,6 +761,10 @@ void VideoOutDriver::Flip(const Request& req) {
             --flip_status.gc_queue_num;
         }
         --flip_status.flip_pending_num;
+        if (BbRemote::BackActive()) {
+            // The game process triggers its flip events (the list below is its own).
+            BbRemote::Back::VoFlipStatus(flip_status, true, req.flip_arg);
+        }
     }
 
     // Trigger flip events for the port.
@@ -773,6 +806,9 @@ void VideoOutDriver::DrawLastFrame() {
 
 bool VideoOutDriver::SubmitFlip(VideoOutPort* port, s32 index, s64 flip_arg,
                                 bool is_eop /*= false*/) {
+    if (BbRemote::FrontActive()) {
+        return BbRemote::Front::VoSubmitFlip(index, flip_arg);
+    }
     {
         std::unique_lock lock{port->port_mutex};
         if (index != -1 && port->flip_status.flip_pending_num > 16) {
@@ -785,6 +821,9 @@ bool VideoOutDriver::SubmitFlip(VideoOutPort* port, s32 index, s64 flip_arg,
         }
         ++port->flip_status.flip_pending_num; // integral GPU and CPU pending flips counter
         port->flip_status.submit_tsc = Libraries::Kernel::sceKernelReadTsc();
+        if (BbRemote::BackActive()) {
+            BbRemote::Back::VoFlipStatus(port->flip_status, false, 0);
+        }
     }
 
     if (!is_eop) {
@@ -890,6 +929,7 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
         {
             // Needs lock here as can be concurrently read by `sceVideoOutGetVblankStatus`
             std::scoped_lock lock{main_port.vo_mutex};
+            const u64 event_count = vblank_status.count; // bbport: native GPU process
 
             // Trigger flip events for the port
             for (auto event : main_port.vblank_events) {
@@ -909,6 +949,9 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
             vblank_status.process_time = Libraries::Kernel::sceKernelGetProcessTime();
             vblank_status.tsc = Libraries::Kernel::sceKernelReadTsc();
             main_port.vblank_cv.notify_all();
+            if (BbRemote::BackActive()) {
+                BbRemote::Back::VoVblank(vblank_status, event_count);
+            }
         }
 
         if (!immediate_flips || main_port.flip_rate != 0) {

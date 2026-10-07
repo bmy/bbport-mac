@@ -72,3 +72,11 @@ echo "loader warnings: $(grep -c 'warning:' out/loader-build.log || true) (out/l
 clang "${ARCH[@]}" -std=c11 -O2 -Wall -Wextra tools/gpu_capabilities.c "${pkg_libs[@]}" "${pkg_cflags[@]}" \
     -o out/bb-gpu-capabilities
 echo "Built: $(lipo -archs out/bb-probe) out/bb-probe, $(lipo -archs "$gpu_lib") $gpu_lib"
+# The native GPU process (docs/macos-native-gpu.md, run with BB_NATIVE_GPU=1), once its arm64
+# libraries exist (BB_ARCH=arm64 bash tools/macos/setup_deps.sh). A failure there does not stop
+# this build: the game still runs as before.
+if [[ -z ${BB_SKIP_GPU:-} && -f deps-arm64/env.sh ]]; then
+    echo "=== Native GPU process (arm64)"
+    bash tools/macos/build_gpu_native.sh ||
+        echo "warning: native GPU process not built (out/gpu-arm64-errors.txt)" >&2
+fi

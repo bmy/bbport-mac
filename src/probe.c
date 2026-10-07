@@ -595,6 +595,24 @@ static int probe_main(int argc, char **argv) {
             executable_entry = 1;
     }
     if (!executable_entry) fail("entry is not executable");
+    /* bbport (native GPU process, BB_NATIVE_GPU=1): the GPU reads some of the game's own data
+     * (resource tables in its data segments), so those move into memory the GPU process shares.
+     * Only segments whose 16 KiB pages hold nothing else. */
+#ifndef _WIN32
+    if (!cpu_only) {
+        const uint64_t share_page = 16384;
+        for (uint64_t i = 0; i < ns; ++i) {
+            const uint64_t start = segments[i].address, end = (start + segments[i].size + share_page - 1) & ~(share_page - 1);
+            if ((segments[i].flags & 1) || !segments[i].size || start % share_page) continue;
+            int alone = 1;
+            for (uint64_t j = 0; j < ns; ++j)
+                if (j != i && segments[j].size && segments[j].address < end && start < segments[j].address + segments[j].size) alone = 0;
+            if (!alone) continue;
+            const int prot = ((segments[i].flags & 4) ? PROT_READ : 0) | ((segments[i].flags & 2) ? PROT_WRITE : 0);
+            if (bbgpu_share_range(image + start, end - start, prot)) fail("cannot share the game's data with the GPU process");
+        }
+    }
+#endif
     printf("Mapped %" PRIu64 " bytes, %" PRIu64 " segments; applied %" PRIu64 " relocations\n", size, ns, nr);
     if (native_libc) {
         for (uint64_t m=0;m<module_count;++m) {

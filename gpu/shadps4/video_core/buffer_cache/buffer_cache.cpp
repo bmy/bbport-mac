@@ -362,7 +362,10 @@ int PreuploadMode() {
         if (GuestInPlace()) {
             return 0; // the GPU reads the game's memory itself: nothing to upload
         }
-        return env && (env[0] == '1' || env[0] == '2') ? env[0] - '0' : 0;
+        const int value = env && (env[0] == '1' || env[0] == '2') ? env[0] - '0' : 0;
+        static const char* const names[] = {"off", "normal", "full"};
+        std::printf("Background upload of game data: %s (BB_PREUPLOAD=%d)\n", names[value], value);
+        return value;
     }();
     return mode;
 }

@@ -7,6 +7,7 @@
 #include "common/arch.h"
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -1253,9 +1254,12 @@ void RunSrtWalker(const PersistentSrtInfo& srt, const u32* user_data, u32* flat)
                       walk, first, size, expected[first], flat[first]);
         }
     }
-    if ((walk & (walk - 1)) == 0 && walk >= 1024) {
-        LOG_INFO(Render_Recompiler, "SRT check: {} walks, {} differed", walk,
-                 mismatches.load(std::memory_order_relaxed));
+    // Always in the log (LOG_INFO is filtered): a run with no line at all walked no table.
+    if ((walk & (walk - 1)) == 0 && (walk == 1 || walk >= 1024)) {
+        std::printf("SRT check: %llu walks compared with the x86 walker, %llu differed\n",
+                    static_cast<unsigned long long>(walk),
+                    static_cast<unsigned long long>(mismatches.load(std::memory_order_relaxed)));
+        std::fflush(stdout);
     }
 #else
     InterpretSrt(reinterpret_cast<const u32*>(srt.walker_func), user_data, flat);

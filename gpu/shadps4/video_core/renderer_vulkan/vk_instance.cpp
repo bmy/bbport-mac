@@ -936,7 +936,16 @@ u64 Instance::GetDeviceMemoryBudgetNow() const {
 
     u64 total_budget = 0;
     for (const size_t heap : valid_heaps) {
+#ifdef __APPLE__
+        // KosmicKrisp's budget is the usage plus 90% of the free and inactive pages, and macOS
+        // keeps few of those (file cache, compressed memory): it stayed ~1 GB above the usage
+        // whatever the Mac had, so the texture cache sat at its pressure mark and evicted
+        // hundreds of images every few seconds, only to upload them again. The heap size is
+        // Metal's recommendedMaxWorkingSetSize (a share of the Mac's memory): the real limit.
+        total_budget += props.memoryProperties.memoryHeaps[heap].size;
+#else
         total_budget += memory_budget_props.heapBudget[heap];
+#endif
     }
     return total_budget;
 }

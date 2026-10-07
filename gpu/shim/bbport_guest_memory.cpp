@@ -14,6 +14,9 @@
 // bbport (macOS): no dma-buf; guest direct memory stays in the runtime's shared memory object,
 // and the PC memory model stays off (BufferCache checks Usable).
 namespace BbGuestMemory {
+bool PcModelGpu(const Vulkan::Instance&) {
+    return false;
+}
 bool Usable(const Vulkan::Instance&) {
     return false;
 }

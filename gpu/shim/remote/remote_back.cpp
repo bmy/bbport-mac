@@ -25,6 +25,8 @@
 #include <unistd.h>
 #include <vector>
 #ifdef __APPLE__
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
 #include <sys/event.h>
 #else
 #include <sys/prctl.h>
@@ -554,6 +556,33 @@ void InstallFaultHandler() {
     sigaction(SIGILL, &action, nullptr);
 }
 
+/// The game image's part of the low region (it is loaded at its start).
+constexpr u64 LowReserveBytes = 4ull << 30;
+
+/// What already occupies [begin, end) in this process (a failed reservation).
+void ReportMappings(u64 begin, u64 end) {
+#ifdef __APPLE__
+    mach_vm_address_t address = begin;
+    for (int shown = 0; address < end && shown < 12; ++shown) {
+        mach_vm_size_t size = 0;
+        vm_region_extended_info_data_t info{};
+        mach_msg_type_number_t count = VM_REGION_EXTENDED_INFO_COUNT;
+        mach_port_t object = MACH_PORT_NULL;
+        if (mach_vm_region(mach_task_self(), &address, &size, VM_REGION_EXTENDED_INFO,
+                           reinterpret_cast<vm_region_info_t>(&info), &count,
+                           &object) != KERN_SUCCESS ||
+            address >= end) {
+            break;
+        }
+        std::fprintf(stderr, "GPU process:   in use %#llx-%#llx (%llu MiB), protection %d, tag %u\n",
+                     static_cast<unsigned long long>(address),
+                     static_cast<unsigned long long>(address + size),
+                     static_cast<unsigned long long>(size >> 20), info.protection, info.user_tag);
+        address += size;
+    }
+#endif
+}
+
 u64 ArgValue(int argc, char** argv, const char* name, bool& found) {
     for (int i = 1; i + 1 < argc; ++i) {
         if (std::strcmp(argv[i], name) == 0) {
@@ -580,11 +609,21 @@ int Main(int argc, char** argv) {
         std::fprintf(stderr, "bb-gpu: the game process starts this (BB_NATIVE_GPU=1)\n");
         return 2;
     }
-    // The guest's ranges first, before anything else in this process can land in them.
-    std::string_view error;
-    if (!g.low.Reserve(LowBegin, LowEnd, error) ||
-        !g.guest.Reserve(GuestBegin, GuestEnd + ControlBytes, error)) {
-        std::fprintf(stderr, "GPU process: %.*s\n", int(error.size()), error.data());
+    // The guest's ranges first, before anything else in this process can land in them. Of the
+    // low region only the part the game image is loaded into (its shared data segments).
+    const auto reserve = [](MemoryMirror& mirror, u64 begin, u64 end, const char* what) {
+        std::string_view error;
+        if (mirror.Reserve(begin, end, error)) {
+            return true;
+        }
+        std::fprintf(stderr, "GPU process: cannot reserve the %s %#llx-%#llx: %.*s\n", what,
+                     static_cast<unsigned long long>(begin), static_cast<unsigned long long>(end),
+                     int(error.size()), error.data());
+        ReportMappings(begin, end);
+        return false;
+    };
+    if (!reserve(g.guest, GuestBegin, GuestEnd + ControlBytes, "guest range") ||
+        !reserve(g.low, LowBegin, LowBegin + LowReserveBytes, "game image range")) {
         return 3;
     }
     void* at = mmap(reinterpret_cast<void*>(ControlAddress), ControlBytes, PROT_READ | PROT_WRITE,

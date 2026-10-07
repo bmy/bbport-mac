@@ -118,10 +118,12 @@ struct ValueArgs {
 
 struct FaultArgs {
     std::uint64_t address, rip;
-    std::uint32_t is_write, pad;
+    std::uint32_t is_write;
+    std::uint32_t lock_held; ///< the faulting thread holds the runtime's lock (it faulted in it)
 };
-/// The protections the GPU side decided while handling the fault: the faulting thread applies them
-/// itself (it may hold the runtime's lock, which the game process's reader would wait for).
+/// With lock_held, the protections the GPU side decided while handling the fault: the faulting
+/// thread applies them itself (the protection thread would wait for that lock). Otherwise they
+/// were applied through MsgProtect before the reply, in order with everyone else's.
 inline constexpr std::uint32_t MaxFaultProtects = 160;
 struct FaultReply {
     std::int32_t handled;

@@ -336,6 +336,7 @@ extern "C" int bbgpu_init(const BbGpuConfig* config) {
             SDL_InitSubSystem(SDL_INIT_GAMEPAD);
             for (;;) {
                 SDL_PumpEvents();
+                SDL_FlushEvents(SDL_EVENT_FIRST, SDL_EVENT_LAST); // nobody reads them here
                 CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.004, false);
             }
         });

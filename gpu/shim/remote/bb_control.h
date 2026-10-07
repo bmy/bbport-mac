@@ -18,7 +18,7 @@ inline constexpr std::uint64_t LowBegin = 0x0800000000ull;   ///< the low region
 inline constexpr std::uint64_t LowEnd = 0x0fc0000000ull;     ///< platform.h BB_LOW_MAX (macOS)
 
 inline constexpr std::uint64_t ControlAddress = GuestEnd;
-inline constexpr std::uint64_t ControlBytes = 4ull << 20;
+inline constexpr std::uint64_t ControlBytes = 8ull << 20;
 /// Pool bytes after direct and flexible memory for the control block and shared image data.
 inline constexpr std::uint64_t HostSpanBytes = 512ull << 20;
 
@@ -31,6 +31,10 @@ struct SharedState {
 
 struct ControlBlock {
     ChannelLayout channel;
+    /// Page protection only (MsgProtect, bb-gpu -> game process), served by a thread of its own:
+    /// it needs nothing but the runtime's lock, so it is never stuck behind a VideoOut or event
+    /// queue lock, and protections apply in the order bb-gpu decides them.
+    ChannelLayout protect;
     alignas(4096) SharedState state;
 };
 static_assert(sizeof(ControlBlock) <= ControlBytes);

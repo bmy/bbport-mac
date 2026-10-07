@@ -48,6 +48,7 @@ typedef void (*RuntimeMirrorHook)(int op, uintptr_t address, uint64_t size, uint
                                   int kind, int prot, int type, int shared);
 void runtime_memory_set_mirror_hook(RuntimeMirrorHook hook);
 int runtime_memory_is_mapped(uintptr_t address, uint64_t size);
+int runtime_memory_lock_held(void);
 void runtime_memory_gpu_protect(uintptr_t address, uint64_t size, int read, int write);
 typedef void (*RuntimeGpuRange)(uintptr_t address, uint64_t size);
 void runtime_memory_set_gpu_hooks(RuntimeGpuRange map, RuntimeGpuRange unmap,
@@ -92,7 +93,7 @@ constexpr u64 SharePage = 16384; // shared mappings are whole 16 KiB pages, even
 
 struct State {
     ControlBlock* control = nullptr;
-    std::unique_ptr<Channel> channel;
+    std::unique_ptr<Channel> channel, protect;
     int pool_fd = -1;
     u64 pool_bytes = 0, host_offset = 0, host_next = 0, host_end = 0;
     pid_t child = -1;
@@ -247,16 +248,9 @@ void ApplyVblank(const VoVblankArgs& args) {
 
 // ---- messages from bb-gpu -------------------------------------------------------------------
 
-/// The reader thread never calls bb-gpu itself: bb-gpu's calls (Protect) wait for it.
+/// The reader thread never calls bb-gpu itself.
 void Handle(const Message& message, auto&& reply) {
     switch (message.type) {
-    case MsgProtect: {
-        const auto args = Payload<ProtectArgs>(message);
-        runtime_memory_gpu_protect(args.address, args.size, int(args.read), int(args.write));
-        const ResultReply result{0, 0};
-        reply(&result, sizeof(result));
-        break;
-    }
     case MsgIrq:
         Platform::IrqC::Instance()->Signal(
             static_cast<Platform::InterruptId>(Payload<ValueArgs>(message).value));
@@ -293,6 +287,24 @@ void ReaderThread() {
     for (;;) {
         g.channel->ReceiveOne([](const Message& message, auto&& reply) { Handle(message, reply); },
                               [] { return false; });
+    }
+}
+
+/// bb-gpu's page protection calls (ControlBlock::protect): only the runtime's lock is taken here.
+void ProtectThread() {
+    Common::SetCurrentThreadName("bb:remote-protect");
+    for (;;) {
+        g.protect->ReceiveOne(
+            [](const Message& message, auto&& reply) {
+                if (message.type == MsgProtect) {
+                    const auto args = Payload<ProtectArgs>(message);
+                    runtime_memory_gpu_protect(args.address, args.size, int(args.read),
+                                               int(args.write));
+                }
+                const ResultReply result{0, 0};
+                reply(&result, sizeof(result));
+            },
+            [] { return false; });
     }
 }
 
@@ -429,13 +441,16 @@ bool Init(const BbGpuConfig& config) {
     }
     g.control = static_cast<ControlBlock*>(at);
     Channel::Init(&g.control->channel);
+    Channel::Init(&g.control->protect);
     new (&g.control->state) SharedState{};
     g.channel = std::make_unique<Channel>(&g.control->channel, Side::Frontend);
+    g.protect = std::make_unique<Channel>(&g.control->protect, Side::Frontend);
 
     if (!Spawn()) {
         return false;
     }
     std::thread(ReaderThread).detach();
+    std::thread(ProtectThread).detach();
     std::thread(WatchThread).detach();
 
     HelloArgs hello{};
@@ -667,10 +682,10 @@ int HandleFault(void* context, void* address) {
         return 0;
     }
     const FaultArgs args{addr, BbPortable::Rip(context), Common::IsWriteError(context) ? 1u : 0u,
-                         0};
+                         runtime_memory_lock_held() ? 1u : 0u};
     FaultReply reply{};
     g.channel->Call(MsgWriteFault, &args, sizeof(args), &reply, sizeof(reply));
-    // Applied by this thread: it may hold the runtime's lock (see FaultReply).
+    // Only when this thread holds the runtime's lock (see FaultReply).
     for (u32 i = 0; i < std::min(reply.count, MaxFaultProtects); ++i) {
         const auto& protect = reply.protects[i];
         runtime_memory_gpu_protect(protect.address, protect.size, int(protect.read),

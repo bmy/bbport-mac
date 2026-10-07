@@ -78,7 +78,7 @@ struct State {
     int pool_fd = -1;
     u64 pool_bytes = 0;
     ControlBlock* control = nullptr;
-    std::unique_ptr<Channel> channel;
+    std::unique_ptr<Channel> channel, protect;
     MemoryMirror guest, low;
     VmaTable table;
     std::mutex hook_mutex;
@@ -93,7 +93,7 @@ struct State {
 };
 State g;
 
-/// The write fault being handled on the reader thread: its protections go back with the reply.
+/// A write fault from a thread holding the runtime's lock: its protections go back with the reply.
 thread_local std::vector<ProtectArgs>* collected_protects = nullptr;
 
 template <typename T>
@@ -272,7 +272,7 @@ void CallHook(GpuRange State::*which, const RangeArgs& args) {
 void WriteFault(const Message& message, auto&& reply) {
     const auto args = Payload<FaultArgs>(message);
     std::vector<ProtectArgs> protects;
-    collected_protects = &protects;
+    collected_protects = args.lock_held ? &protects : nullptr;
     int handled = 0;
     if (auto* rasterizer = Core::Memory::Instance()->GetRasterizer()) {
         handled = args.is_write ? rasterizer->OnWriteFault(args.address, false, args.rip)
@@ -283,10 +283,10 @@ void WriteFault(const Message& message, auto&& reply) {
     out.handled = handled;
     out.count = u32(std::min<std::size_t>(protects.size(), MaxFaultProtects));
     std::copy_n(protects.begin(), out.count, out.protects);
-    // More than fit (not expected): the rest as calls, which the game process's reader applies.
+    // More than fit (not expected): the rest as calls.
     for (std::size_t i = out.count; i < protects.size(); ++i) {
         ResultReply result{};
-        g.channel->Call(MsgProtect, &protects[i], sizeof(ProtectArgs), &result, sizeof(result));
+        g.protect->Call(MsgProtect, &protects[i], sizeof(ProtectArgs), &result, sizeof(result));
     }
     reply(&out, u32(offsetof(FaultReply, protects) + out.count * sizeof(ProtectArgs)));
 }
@@ -595,7 +595,8 @@ int Main(int argc, char** argv) {
     }
     g.control = static_cast<ControlBlock*>(at);
     g.channel = std::make_unique<Channel>(&g.control->channel, Side::Backend);
-    if (!g.channel->Valid()) {
+    g.protect = std::make_unique<Channel>(&g.control->protect, Side::Backend);
+    if (!g.channel->Valid() || !g.protect->Valid()) {
         std::fprintf(stderr, "GPU process: the control block is not initialized\n");
         return 5;
     }
@@ -712,7 +713,7 @@ void MemoryGpuProtect(uintptr_t address, u64 size, int read, int write) {
         return;
     }
     ResultReply result{};
-    g.channel->Call(MsgProtect, &args, sizeof(args), &result, sizeof(result));
+    g.protect->Call(MsgProtect, &args, sizeof(args), &result, sizeof(result));
 }
 
 void SetGpuHooks(GpuRange map, GpuRange unmap, GpuRange invalidate) {

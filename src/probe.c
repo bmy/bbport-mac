@@ -586,18 +586,10 @@ static int probe_main(int argc, char **argv) {
     }
 #endif
     if (!cpu_only) bbgpu_patch_image(image, size);
-    protect(traps, bb_round_page((import_count + 1) * 32), 5);
-    protect(image, bb_round_page(size), 0);
-    int executable_entry = 0;
-    for (uint64_t i = 0; i < ns; ++i) {
-        protect(image + segments[i].address, bb_round_page(segments[i].size), (unsigned)segments[i].flags);
-        if ((segments[i].flags & 1) && entry >= segments[i].address && entry - segments[i].address < segments[i].size)
-            executable_entry = 1;
-    }
-    if (!executable_entry) fail("entry is not executable");
     /* bbport (native GPU process, BB_NATIVE_GPU=1): the GPU reads some of the game's own data
      * (resource tables in its data segments), so those move into memory the GPU process shares.
-     * Only segments whose 16 KiB pages hold nothing else. */
+     * Only segments whose 16 KiB pages hold nothing else; before the protection below (all of it
+     * is still readable and writable here), which then applies to the shared pages. */
 #ifndef _WIN32
     if (!cpu_only) {
         const uint64_t share_page = 16384;
@@ -608,11 +600,20 @@ static int probe_main(int argc, char **argv) {
             for (uint64_t j = 0; j < ns; ++j)
                 if (j != i && segments[j].size && segments[j].address < end && start < segments[j].address + segments[j].size) alone = 0;
             if (!alone) continue;
-            const int prot = ((segments[i].flags & 4) ? PROT_READ : 0) | ((segments[i].flags & 2) ? PROT_WRITE : 0);
-            if (bbgpu_share_range(image + start, end - start, prot)) fail("cannot share the game's data with the GPU process");
+            if (bbgpu_share_range(image + start, end - start, PROT_READ | PROT_WRITE))
+                fail("cannot share the game's data with the GPU process");
         }
     }
 #endif
+    protect(traps, bb_round_page((import_count + 1) * 32), 5);
+    protect(image, bb_round_page(size), 0);
+    int executable_entry = 0;
+    for (uint64_t i = 0; i < ns; ++i) {
+        protect(image + segments[i].address, bb_round_page(segments[i].size), (unsigned)segments[i].flags);
+        if ((segments[i].flags & 1) && entry >= segments[i].address && entry - segments[i].address < segments[i].size)
+            executable_entry = 1;
+    }
+    if (!executable_entry) fail("entry is not executable");
     printf("Mapped %" PRIu64 " bytes, %" PRIu64 " segments; applied %" PRIu64 " relocations\n", size, ns, nr);
     if (native_libc) {
         for (uint64_t m=0;m<module_count;++m) {

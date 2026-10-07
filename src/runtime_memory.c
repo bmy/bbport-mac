@@ -71,6 +71,8 @@ enum { MIRROR_MAP, MIRROR_UNMAP, MIRROR_PROTECT };
 typedef struct { int op; uintptr_t address; uint64_t size, phys; int kind, prot, type, shared; } MirrorEvent;
 static MirrorHook mirror_hook;
 static MirrorEvent *mirror_events; static size_t mirror_count, mirror_capacity;
+static __thread int mirror_queued; /* this thread queued events: it sends them before returning */
+static __thread unsigned read_depth; /* runtime_memory_lock_held */
 static pthread_mutex_t mirror_send=PTHREAD_MUTEX_INITIALIZER;
 static void flush_mirror(void);
 /* Odd while a writer holds the lock; readers' region caches are valid for one even value. */
@@ -82,11 +84,15 @@ static void write_unlock(void) {
     if (!--exclusive_depth) {
         __atomic_add_fetch(&table_generation,1,__ATOMIC_RELEASE);
         pthread_rwlock_unlock(&lock);
-        if (__atomic_load_n(&mirror_count,__ATOMIC_RELAXED)) flush_mirror();
+        /* Another thread may be sending this thread's events right now: flush_mirror waits for
+         * it (mirror_send), so they are out before the guest goes on. */
+        if (mirror_queued) { mirror_queued=0; flush_mirror(); }
     }
 }
-static void read_lock(void) { if (!exclusive_depth) pthread_rwlock_rdlock(&lock); }
-static void read_unlock(void) { if (!exclusive_depth) pthread_rwlock_unlock(&lock); }
+static void read_lock(void) { ++read_depth; if (!exclusive_depth) pthread_rwlock_rdlock(&lock); }
+static void read_unlock(void) { --read_depth; if (!exclusive_depth) pthread_rwlock_unlock(&lock); }
+/* bbport (native GPU process): this thread holds the lock (it faulted inside the runtime). */
+int runtime_memory_lock_held(void) { return exclusive_depth || read_depth; }
 static Block blocks[LIMIT];
 static Vma *vmas; static size_t vma_count, vma_capacity;
 static int pool_fd=-1;
@@ -276,9 +282,10 @@ static void queue_mirror(int op, uintptr_t address, uint64_t size, uint64_t phys
     }
     mirror_events[mirror_count]=(MirrorEvent){op,address,size,phys,kind,prot,type,shared};
     __atomic_store_n(&mirror_count,mirror_count+1,__ATOMIC_RELEASE);
+    mirror_queued=1;
 }
-/* Outside the lock. Sent under mirror_send, so a thread that finds the queue empty knows its
- * events went out: a guest thread's next GPU submission cannot overtake its own mapping. */
+/* Outside the lock, by the thread that queued (after another one's send of them, if any, has
+ * finished): a guest thread's next GPU submission cannot overtake its own mapping. */
 static void flush_mirror(void) {
     pthread_mutex_lock(&mirror_send);
     for (;;) {
@@ -363,7 +370,8 @@ static int split_at(uintptr_t a) {
     if (i==vma_count || vmas[i].start>=a) return 0;
     Vma right=vmas[i];
     right.start=a;
-    if (right.kind==KIND_DIRECT) right.phys+=a-vmas[i].start;
+    /* Flexible memory too (bbport): its pages are released by offset (flex_free). */
+    if (right.kind!=KIND_RESERVED) right.phys+=a-vmas[i].start;
     vmas[i].end=a;
     return vma_insert(i+1,right);
 }

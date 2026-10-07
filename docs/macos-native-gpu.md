@@ -180,18 +180,20 @@ cleared (or be passed explicitly) before bb-gpu is spawned.
   environment gets the arm64 libraries and KosmicKrisp (`deps-arm64`, or `BB_GPU_DEPS`;
   `BB_GPU_PROCESS` overrides the executable).
 - Memory: the runtime reports every change to its mapping table (`runtime_memory_set_mirror_hook`;
-  queued under its lock, sent in order after it, before the call returns to the guest). bb-gpu maps
+  queued under its lock, sent in order after it by the thread that made them, before the call
+  returns to the guest). bb-gpu maps
   the same pool pages at the same addresses and keeps a copy of the table (`remote/bb_vma_table.h`),
   from which it answers the GPU library's `runtime_memory_*` queries itself
   (`gpu/bb_gpu/bb_gpu_main.cpp`). `tests/test_remote_table.cpp` checks that copy against
   `runtime_memory.c` over random maps, unmaps, protections, releases and reservations. The game's
   data segments move into the pool's host span at load (`bbgpu_share_range`, probe.c): the GPU
   reads resource tables there.
-- Page tracking: a write fault in the game process goes to bb-gpu (`MsgWriteFault`); the
-  protections bb-gpu decides while handling it come back in the reply and the faulting thread
-  applies them (it may hold the runtime's lock). Protections bb-gpu's own threads decide are calls
-  the game process's reader applies. Invalidations, file-read notes and decoded movie frames are
-  messages.
+- Page tracking: a write fault in the game process goes to bb-gpu (`MsgWriteFault`). Every page
+  protection bb-gpu decides is a call on a second channel (`ControlBlock::protect`) that a game
+  process thread of its own applies, in the order they were decided; that thread takes nothing but
+  the runtime's lock. A fault from a thread that holds that lock itself (inside the runtime) gets
+  its protections back in the reply instead and applies them. Invalidations, file-read notes and
+  decoded movie frames are messages.
 - GnmDriver stays in the game process; submissions, `SubmitDone`, the idle check and compute queues
   go through a small facade in `gnmdriver.cpp` (host-memory init sequences travel inline). Frames
   retired, the submission lock and every interrupt come back (`IrqController::forward`).

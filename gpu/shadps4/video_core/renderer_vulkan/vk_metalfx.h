@@ -2,17 +2,18 @@
 // bbport: MetalFX temporal upscaler (BB_UPSCALER=metalfx; macOS with KosmicKrisp only). The
 // scene's color, depth and motion vectors are copied into buffers on exportable memory whose
 // MTLHeaps (VK_EXT_external_memory_metal) MetalFX reads on KosmicKrisp's own MTLDevice
-// (gpu/shim/bbport_metalfx.mm); its output comes back the same way. With VK_EXT_metal_objects
-// (this port's KosmicKrisp patch 0002) nothing waits on the CPU: Metal waits for the submission
-// holding the input copies on the scheduler's timeline (its MTLSharedEvent) and signals a timeline
-// of its own that the submission copying the output back waits for. Without it (or with
-// BB_METALFX_SYNC=1): synchronous, the scheduler finishes the frame so far, MetalFX runs and is
-// waited for, Vulkan continues. Elsewhere it reports itself unsupported.
+// (gpu/shim/bbport_metalfx.mm); its output comes back the same way. The GPU thread submits the
+// copies and records the copy back; MetalFX runs on the submission thread right before the copy
+// back is submitted (it waits for the copies, then for MetalFX). BB_METALFX_SYNC=1: the GPU
+// thread finishes the frame so far and waits for MetalFX itself. BB_METALFX_EVENTS=1 (needs this
+// port's KosmicKrisp patch 0002): GPU-side waits through shared events. Elsewhere it reports
+// itself unsupported.
 
 #pragma once
 
 #include <array>
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include "common/types.h"
@@ -92,7 +93,14 @@ private:
     std::string problem;
     void* get_metal_handle = nullptr; ///< PFN_vkGetMemoryMetalHandleEXT
     void SetUpEvents();
-    /// Asynchronous: the scheduler's timeline and MetalFX's own, as id<MTLSharedEvent>.
+    /// Sync: the GPU thread waits for the GPU and MetalFX. SubmitThread (default): MetalFX runs
+    /// right before the copy back is submitted, on the submission thread. Events
+    /// (BB_METALFX_EVENTS=1): GPU-side waits through shared events.
+    enum class Mode { Sync, SubmitThread, Events };
+    Mode mode = Mode::Sync;
+    std::mutex deferred_mutex;
+    std::string deferred_error; ///< a submission-thread MetalFX failure, reported next frame
+    /// Events: the scheduler's timeline and MetalFX's own, as id<MTLSharedEvent>.
     bool async = false;
     vk::Semaphore done_semaphore{}; ///< timeline signalled by Metal (via `done_event`)
     void* done_event = nullptr;

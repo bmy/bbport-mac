@@ -77,7 +77,16 @@ MetalFxUpscaler::MetalFxUpscaler(const Instance& instance_, Scheduler& scheduler
 
 void MetalFxUpscaler::SetUpEvents() {
     if (EnvOn("BB_METALFX_SYNC")) {
+        mode = Mode::Sync;
         std::printf("Upscaler: MetalFX synchronous (BB_METALFX_SYNC=1)\n");
+        return;
+    }
+    // Default: MetalFX on the submission thread (no waits on the GPU thread, none across APIs).
+    // BB_METALFX_EVENTS=1: Metal and Vulkan wait for each other on the GPU through shared events
+    // (timed out on KosmicKrisp: Metal never saw the Vulkan value).
+    mode = Mode::SubmitThread;
+    if (!EnvOn("BB_METALFX_EVENTS")) {
+        std::printf("Upscaler: MetalFX on the submission thread (no GPU thread waits)\n");
         return;
     }
     if (!instance.IsMetalObjectsEnabled()) {
@@ -123,6 +132,7 @@ void MetalFxUpscaler::SetUpEvents() {
         return;
     }
     async = true;
+    mode = Mode::Events;
     std::printf("Upscaler: MetalFX without CPU waits (Vulkan timelines as Metal shared events)\n");
 }
 
@@ -322,18 +332,18 @@ bool MetalFxUpscaler::Run(const Frame& frame) {
         .dstAccessMask = vk::AccessFlagBits2::eHostRead,
     };
     cmd.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &to_metal});
-    // An earlier asynchronous frame that failed: its event was still set, so nothing hangs.
-    if (std::string error; async && scaler->TakeError(error)) {
-        Fail(error, true);
-        return false;
-    }
-    // Asynchronous: this submission's timeline value is what Metal waits for. Synchronous: the
-    // GPU finishes everything first.
-    const u64 copies_tick = scheduler.CurrentTick();
-    if (async) {
-        scheduler.Flush();
-    } else {
-        scheduler.Finish();
+    // An earlier frame that failed after this thread moved on (submission thread, events).
+    {
+        std::string error;
+        if (async && scaler->TakeError(error)) {
+            Fail(error, true);
+            return false;
+        }
+        std::scoped_lock lock{deferred_mutex};
+        if (!deferred_error.empty()) {
+            Fail(std::exchange(deferred_error, {}), true);
+            return false;
+        }
     }
 
     // Diagnostics for the conventions (A/B on the Mac): jitter sign, motion sign, reversed Z.
@@ -342,20 +352,37 @@ bool MetalFxUpscaler::Run(const Frame& frame) {
     static const bool depth_reversed = EnvOn("BB_METALFX_DEPTH_REVERSED");
     const float jitter_sign = invert_jitter ? -1.0f : 1.0f;
     const float motion_sign = invert_motion ? -1.0f : 1.0f;
-    std::string error;
-    if (!scaler->Encode({.jitter_x = jitter_sign * frame.jitter[0],
-                         .jitter_y = jitter_sign * frame.jitter[1],
-                         .motion_scale_x = motion_sign,
-                         .motion_scale_y = motion_sign,
-                         .reset = frame.reset,
-                         .depth_reversed = depth_reversed,
-                         .wait_event = async ? work_event : nullptr,
-                         .wait_value = copies_tick,
-                         .signal_event = async ? done_event : nullptr,
-                         .signal_value = async ? done_value + 1 : 0},
-                        error)) {
-        Fail(error, true);
-        return false;
+    BbMetalFx::Frame metal{.jitter_x = jitter_sign * frame.jitter[0],
+                           .jitter_y = jitter_sign * frame.jitter[1],
+                           .motion_scale_x = motion_sign,
+                           .motion_scale_y = motion_sign,
+                           .reset = frame.reset,
+                           .depth_reversed = depth_reversed};
+
+    // This submission's timeline value: the input copies are done once the GPU reaches it.
+    const u64 copies_tick = scheduler.CurrentTick();
+    if (mode == Mode::Sync) {
+        // The GPU finishes everything first; MetalFX runs here and is waited for.
+        scheduler.Finish();
+        std::string error;
+        if (!scaler->Encode(metal, error)) {
+            Fail(error, true);
+            return false;
+        }
+    } else if (mode == Mode::Events) {
+        scheduler.Flush();
+        metal.wait_event = work_event;
+        metal.wait_value = copies_tick;
+        metal.signal_event = done_event;
+        metal.signal_value = done_value + 1;
+        std::string error;
+        if (!scaler->Encode(metal, error)) {
+            Fail(error, true);
+            return false;
+        }
+    } else {
+        // Mode::SubmitThread: MetalFX runs right before the copy back is submitted (below).
+        scheduler.Flush();
     }
 
     cmd = scheduler.CommandBuffer();
@@ -386,11 +413,26 @@ bool MetalFxUpscaler::Run(const Frame& frame) {
     output_barrier(vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eTransfer,
                    vk::AccessFlagBits2::eTransferWrite, vk::PipelineStageFlagBits2::eAllCommands,
                    rw);
-    if (async) {
+    if (mode == Mode::Events) {
         // The copy back (and, in queue order, everything after it) waits for MetalFX on the GPU.
         ++done_value;
         SubmitInfo info{};
         info.AddWait(done_semaphore, done_value);
+        scheduler.Flush(info);
+    } else if (mode == Mode::SubmitThread) {
+        // Right before the copy back goes to the queue (BB_ASYNC_SUBMIT: on a recording thread,
+        // after the input copies were submitted): wait for them, run MetalFX and wait for it. The
+        // GPU thread goes on with the next frame meanwhile.
+        SubmitInfo info{};
+        info.before_submit.push_back(
+            [this, metal, copies_tick, work = scheduler.GetWorkSemaphore()] {
+                work->Wait(copies_tick);
+                std::string error;
+                if (!scaler->Encode(metal, error)) {
+                    std::scoped_lock lock{deferred_mutex};
+                    deferred_error = error;
+                }
+            });
         scheduler.Flush(info);
     }
     return true;

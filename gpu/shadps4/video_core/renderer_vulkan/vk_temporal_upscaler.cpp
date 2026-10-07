@@ -22,6 +22,9 @@
 #include "video_core/host_shaders/taa_comp.h"
 #include "video_core/host_shaders/taa_sharpen_comp.h"
 #include "video_core/host_shaders/taa_sharpen_ldr_comp.h"
+#include "video_core/host_shaders/fsr4_decode_comp.h"
+#include "video_core/host_shaders/fsr4_encode_comp.h"
+#include "video_core/host_shaders/fsr4_reactive_comp.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
 #include "video_core/renderer_vulkan/vk_camera_motion.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
@@ -170,6 +173,18 @@ void PrintIssues(const char* what, u64 issues) {
 
 } // namespace
 
+void DumpFinalFrameIfDue(const Instance& instance, Scheduler& scheduler, vk::CommandBuffer cmdbuf,
+                         vk::Image image, u32 width, u32 height, vk::Format format) {
+    static const char* trigger = std::getenv("BB_FINAL_DUMP_TRIGGER");
+    static int index = 0;
+    if (!trigger || std::remove(trigger) != 0) {
+        return;
+    }
+    const bool bgra = format == vk::Format::eB8G8R8A8Unorm || format == vk::Format::eB8G8R8A8Srgb;
+    DumpImages(instance, scheduler, cmdbuf, index++,
+               {{image, width, height, 4, "final", bgra ? "bgra" : "rgba"}});
+}
+
 TemporalUpscaler::TemporalUpscaler(const Instance& instance_, Scheduler& scheduler_,
                                    VideoCore::TextureCache& texture_cache_, Runtime& runtime_,
                                    CameraMotion& camera_motion_, SceneTargets& scene_targets_)
@@ -248,10 +263,48 @@ bool TemporalUpscaler::Active() const {
 }
 
 bool TemporalUpscaler::ReactiveOn() const {
-    // FSR 4 takes no reactive mask: the opaque snapshot and the mask pass would be wasted.
-    return BbSettings::Get().reactive && !BbToggle::Disabled(1u << 27) && !UseFsr4() &&
+    // FSR 4 takes no reactive mask itself: the mask blends its output afterwards
+    // (RecordFsr4Reactive). MetalFX takes none.
+    return BbSettings::Get().reactive && !BbToggle::Disabled(1u << 27) &&
            BbSettings::Get().upscaler != BbSettings::UpscalerTaa &&
            BbSettings::Get().upscaler != BbSettings::UpscalerMetalFx;
+}
+
+void TemporalUpscaler::RecordFsr4Reactive(vk::CommandBuffer cmdbuf, vk::ImageView color, u32 w,
+                                          u32 h, u32 ow, u32 oh) {
+    const auto all = vk::PipelineStageFlagBits2::eAllCommands;
+    const vk::MemoryBarrier2 before{
+        .srcStageMask = all, .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite};
+    cmdbuf.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &before});
+    const vk::DescriptorImageInfo current{.sampler = *fsr4_linear_sampler, .imageView = color,
+                                          .imageLayout = vk::ImageLayout::eGeneral};
+    const vk::DescriptorImageInfo mask{.sampler = *fsr4_linear_sampler, .imageView = *reactive_view,
+                                       .imageLayout = vk::ImageLayout::eGeneral};
+    const vk::DescriptorImageInfo out{.imageView = *output_view,
+                                      .imageLayout = vk::ImageLayout::eGeneral};
+    const std::array<vk::WriteDescriptorSet, 3> writes{{
+        {.dstBinding = 0, .descriptorCount = 1,
+         .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &current},
+        {.dstBinding = 1, .descriptorCount = 1,
+         .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &mask},
+        {.dstBinding = 2, .descriptorCount = 1,
+         .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &out},
+    }};
+    const std::array<float, 5> push{float(w), float(h), jitter[0], jitter[1], 1.0f};
+    cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, *fsr4_reactive_pipeline);
+    cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute, *fsr4_reactive_pipeline_layout, 0,
+                                writes);
+    cmdbuf.pushConstants(*fsr4_reactive_pipeline_layout, vk::ShaderStageFlagBits::eCompute, 0,
+                         sizeof(push), push.data());
+    cmdbuf.dispatch((ow + 7) / 8, (oh + 7) / 8, 1);
+    const vk::MemoryBarrier2 after{
+        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .srcAccessMask = vk::AccessFlagBits2::eShaderWrite,
+        .dstStageMask = all,
+        .dstAccessMask = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite};
+    cmdbuf.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &after});
 }
 
 void TemporalUpscaler::OnSceneColor(VideoCore::ImageId color) {
@@ -534,6 +587,12 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
                    vk::ImageUsageFlagBits::eTransferSrc);
     make_image(reactive_image, reactive_view, vk::Format::eR8Unorm,
                vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled);
+    fsr4_linear_view.reset();
+    fsr4_linear_image = VideoCore::UniqueImage{};
+    if (use_fsr4) {
+        make_image(fsr4_linear_image, fsr4_linear_view, vk::Format::eR16G16B16A16Sfloat,
+                   vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled);
+    }
     for (u32 i = 0; i < taa_history.size(); ++i) {
         taa_history_views[i].reset();
         taa_history[i] = VideoCore::UniqueImage{};
@@ -645,6 +704,47 @@ void TemporalUpscaler::CreatePipelines() {
     storage_layout(2, taa_sharpen_desc_layout, taa_sharpen_pipeline_layout, sizeof(float));
     taa_sharpen_pipeline = compute(TAA_SHARPEN_COMP, *taa_sharpen_pipeline_layout);
     taa_sharpen_ldr_pipeline = compute(TAA_SHARPEN_LDR_COMP, *taa_sharpen_pipeline_layout);
+    storage_layout(1, fsr4_encode_desc_layout, fsr4_encode_pipeline_layout, sizeof(u32));
+    fsr4_encode_pipeline = compute(FSR4_ENCODE_COMP, *fsr4_encode_pipeline_layout);
+    {
+        const std::array<vk::DescriptorSetLayoutBinding, 2> bindings{{
+            {.binding = 0, .descriptorType = vk::DescriptorType::eSampledImage,
+             .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},
+            {.binding = 1, .descriptorType = vk::DescriptorType::eStorageImage,
+             .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},
+        }};
+        fsr4_decode_desc_layout = Check(device.createDescriptorSetLayoutUnique({
+            .flags = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
+            .bindingCount = u32(bindings.size()), .pBindings = bindings.data()}));
+        const vk::PushConstantRange push{vk::ShaderStageFlagBits::eCompute, 0, sizeof(u32)};
+        fsr4_decode_pipeline_layout = Check(device.createPipelineLayoutUnique({
+            .setLayoutCount = 1, .pSetLayouts = &*fsr4_decode_desc_layout,
+            .pushConstantRangeCount = 1, .pPushConstantRanges = &push}));
+        fsr4_decode_pipeline = compute(FSR4_DECODE_COMP, *fsr4_decode_pipeline_layout);
+    }
+    {
+        std::array<vk::DescriptorSetLayoutBinding, 3> bindings{};
+        for (u32 i = 0; i < bindings.size(); ++i) {
+            bindings[i] = {.binding = i,
+                           .descriptorType = i < 2 ? vk::DescriptorType::eCombinedImageSampler
+                                                   : vk::DescriptorType::eStorageImage,
+                           .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute};
+        }
+        fsr4_reactive_desc_layout = Check(device.createDescriptorSetLayoutUnique({
+            .flags = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
+            .bindingCount = u32(bindings.size()), .pBindings = bindings.data()}));
+        const vk::PushConstantRange push{vk::ShaderStageFlagBits::eCompute, 0, 5 * sizeof(float)};
+        fsr4_reactive_pipeline_layout = Check(device.createPipelineLayoutUnique({
+            .setLayoutCount = 1, .pSetLayouts = &*fsr4_reactive_desc_layout,
+            .pushConstantRangeCount = 1, .pPushConstantRanges = &push}));
+        fsr4_linear_sampler = Check(device.createSamplerUnique({
+            .magFilter = vk::Filter::eLinear, .minFilter = vk::Filter::eLinear,
+            .mipmapMode = vk::SamplerMipmapMode::eNearest,
+            .addressModeU = vk::SamplerAddressMode::eClampToEdge,
+            .addressModeV = vk::SamplerAddressMode::eClampToEdge,
+            .addressModeW = vk::SamplerAddressMode::eClampToEdge}));
+        fsr4_reactive_pipeline = compute(FSR4_REACTIVE_COMP, *fsr4_reactive_pipeline_layout);
+    }
     {
         std::array<vk::DescriptorSetLayoutBinding, 7> bindings{};
         for (u32 i = 0; i < bindings.size(); ++i) {
@@ -727,8 +827,7 @@ void TemporalUpscaler::RecordTaa(vk::CommandBuffer cmdbuf, vk::ImageView color,
                   (BbToggle::Disabled(BbToggle::TaaClip) ? 2u << 8 : 0u) |
                   (BbToggle::Disabled(BbToggle::TaaVariance) ? 4u << 8 : 0u) |
                   (BbToggle::Disabled(BbToggle::TaaFilter) ? 8u << 8 : 0u) |
-                  (BbToggle::Disabled(BbToggle::TaaKeepNearerHistory) ? 16u << 8 : 0u) |
-                  (camera_motion.ViewYUp() ? 32u << 8 : 0u);
+                  (BbToggle::Disabled(BbToggle::TaaKeepNearerHistory) ? 16u << 8 : 0u);
     cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, *taa_pipeline);
     if (params.pad & 0xffu) {
         static u32 diagnostic_frames = 0;
@@ -775,9 +874,13 @@ void TemporalUpscaler::ExtraSharpen(vk::Image target, bool ldr, u32 w, u32 h, fl
     }
     const auto device = instance.GetDevice();
     if (extra_sharpen_width != w || extra_sharpen_height != h) {
-        // Retired command buffers may still read the old copy.
-        scheduler.Finish();
-        extra_sharpen_view.reset();
+        // Submitted work may still read the old copy: destroyed once the GPU is past it. (A
+        // Finish() here submitted the command buffer Run() goes on recording into.)
+        scheduler.DeferOperation([image = std::move(extra_sharpen_image),
+                                  view = std::move(extra_sharpen_view)]() mutable {
+            view.reset();
+            image.Destroy();
+        });
         extra_sharpen_image = VideoCore::UniqueImage(device, instance.GetAllocator());
         extra_sharpen_image.Create(vk::ImageCreateInfo{
             .imageType = vk::ImageType::e2D,
@@ -1135,6 +1238,9 @@ void TemporalUpscaler::Run() {
     } else if (UseFsr4()) {
         dispatched = RecordFsr4(cmdbuf, {input_color, input_color_view, w, h},
                                 {input_depth, input_depth_view, w, h}, w, h, ow, oh, frame_ms);
+        if (dispatched && has_reactive) {
+            RecordFsr4Reactive(cmdbuf, input_color_view, w, h, ow, oh);
+        }
     } else if (UseMetalFx()) {
         dispatched = RecordMetalFx({input_color, color.info.pixel_format,
                                     vk::ImageAspectFlagBits::eColor},
@@ -1716,9 +1822,102 @@ void TemporalUpscaler::RunScaled() {
                                 ow, oh, false);
             cmdbuf = scheduler.CommandBuffer();
         } else {
-            ok4 = RecordFsr4(cmdbuf, {color_image, color_view, source_width, source_height},
+            // bbport: FSR 4 treats its colour as linear light; this frame is the game's
+            // tonemapped, sRGB-encoded one. Decoded first, the output encoded again below.
+            // BB_FSR4_LINEAR=0 or toggle bit 63: the encoded frame as before (A/B).
+            static const bool linear_env = [] {
+                const char* env = std::getenv("BB_FSR4_LINEAR");
+                return !env || env[0] != '0';
+            }();
+            // An sRGB-format frame is decoded by its view already (and encoded by the blit).
+            const bool srgb_format =
+                vk::to_string(color.info.pixel_format).find("Srgb") != std::string::npos;
+            fsr4_linear_frame = linear_env && fsr4_linear_image && !srgb_format &&
+                                !BbToggle::Disabled(BbToggle::Fsr4EncodedInput);
+            Fsr4Upscaler::Image input{color_image, color_view, source_width, source_height};
+            {
+                static int reported = -1;
+                if (int(fsr4_linear_frame) != reported) {
+                    reported = int(fsr4_linear_frame);
+                    std::printf("Upscaler: FSR 4 input %s (%s)\n",
+                                fsr4_linear_frame ? "decoded to linear light" : "as it is",
+                                vk::to_string(color.info.pixel_format).c_str());
+                }
+            }
+            if (fsr4_linear_frame) {
+                const vk::ImageMemoryBarrier2 to_write{
+                    .srcStageMask = all, .srcAccessMask = vk::AccessFlagBits2::eNone,
+                    .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+                    .dstAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+                    .oldLayout = vk::ImageLayout::eUndefined, .newLayout = vk::ImageLayout::eGeneral,
+                    .image = vk::Image(fsr4_linear_image),
+                    .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
+                const vk::MemoryBarrier2 source_ready{
+                    .srcStageMask = all, .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
+                    .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+                    .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead};
+                cmdbuf.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &source_ready,
+                                         .imageMemoryBarrierCount = 1,
+                                         .pImageMemoryBarriers = &to_write});
+                const vk::DescriptorImageInfo src{.imageView = color_view,
+                                                  .imageLayout = vk::ImageLayout::eGeneral};
+                const vk::DescriptorImageInfo dst{.imageView = *fsr4_linear_view,
+                                                  .imageLayout = vk::ImageLayout::eGeneral};
+                const std::array<vk::WriteDescriptorSet, 2> writes{{
+                    {.dstBinding = 0, .descriptorCount = 1,
+                     .descriptorType = vk::DescriptorType::eSampledImage, .pImageInfo = &src},
+                    {.dstBinding = 1, .descriptorCount = 1,
+                     .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &dst},
+                }};
+                const u32 unused = 0;
+                cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, *fsr4_decode_pipeline);
+                cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute,
+                                            *fsr4_decode_pipeline_layout, 0, writes);
+                cmdbuf.pushConstants(*fsr4_decode_pipeline_layout,
+                                     vk::ShaderStageFlagBits::eCompute, 0, sizeof(unused), &unused);
+                cmdbuf.dispatch((source_width + 7) / 8, (source_height + 7) / 8, 1);
+                const vk::MemoryBarrier2 decoded{
+                    .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+                    .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+                    .dstStageMask = all,
+                    .dstAccessMask = vk::AccessFlagBits2::eShaderRead};
+                cmdbuf.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &decoded});
+                input = {vk::Image(fsr4_linear_image), *fsr4_linear_view, source_width,
+                         source_height};
+            }
+            ok4 = RecordFsr4(cmdbuf, input,
                             {depth_image, depth_view, source_width, source_height}, w, h, ow,
                             oh, frame_ms);
+            if (ok4 && fsr4_linear_frame) {
+                const vk::MemoryBarrier2 upscaled{
+                    .srcStageMask = all, .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
+                    .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+                    .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead |
+                                     vk::AccessFlagBits2::eShaderStorageWrite};
+                cmdbuf.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &upscaled});
+                const vk::DescriptorImageInfo out{.imageView = *output_view,
+                                                  .imageLayout = vk::ImageLayout::eGeneral};
+                const vk::WriteDescriptorSet write{.dstBinding = 0, .descriptorCount = 1,
+                    .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &out};
+                const u32 unused = 0;
+                cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, *fsr4_encode_pipeline);
+                cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute,
+                                            *fsr4_encode_pipeline_layout, 0, write);
+                cmdbuf.pushConstants(*fsr4_encode_pipeline_layout,
+                                     vk::ShaderStageFlagBits::eCompute, 0, sizeof(unused), &unused);
+                cmdbuf.dispatch((ow + 7) / 8, (oh + 7) / 8, 1);
+                const vk::MemoryBarrier2 encoded{
+                    .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+                    .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+                    .dstStageMask = all,
+                    .dstAccessMask = vk::AccessFlagBits2::eMemoryRead |
+                                     vk::AccessFlagBits2::eMemoryWrite};
+                cmdbuf.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &encoded});
+            }
+            // The game's (encoded) frame, as the output is encoded again by now.
+            if (ok4 && mask_ready) {
+                RecordFsr4Reactive(cmdbuf, color_view, w, h, ow, oh);
+            }
         }
         if (ok4) {
             if (BbSettings::Get().upscaler != BbSettings::UpscalerTaa) {
@@ -1992,6 +2191,13 @@ bool TemporalUpscaler::DisplayOverride(VAddr address, Display& display) {
         return false;
     }
     display = {vk::Image(it->second.image), it->second.format, it->second.width, it->second.height};
+    if (PresentDumpDue()) {
+        DumpPresented(display.image, display.width, display.height, display.format);
+    }
+    return true;
+}
+
+bool TemporalUpscaler::PresentDumpDue() {
     // Diagnostic capture of the actual completed display buffer, including native UI.
     // BB_PRESENT_DUMP_COUNT=N: the trigger dumps N consecutive frames (temporal stability).
     static const char* dump = std::getenv("BB_PRESENT_DUMP_TRIGGER");
@@ -1999,21 +2205,21 @@ bool TemporalUpscaler::DisplayOverride(VAddr address, Display& display) {
         const char* env = std::getenv("BB_PRESENT_DUMP_COUNT");
         return env ? std::max(1, std::atoi(env)) : 1;
     }();
-    static int dump_index = 0;
-    static int dump_remaining = 0;
-    if (dump && dump_remaining == 0 && std::remove(dump) == 0) {
-        dump_remaining = dump_count;
+    if (dump && present_dump_remaining == 0 && std::remove(dump) == 0) {
+        present_dump_remaining = dump_count;
     }
-    if (dump_remaining > 0) {
-        --dump_remaining;
-        scheduler.EndRendering();
-        const bool bgra = display.format == vk::Format::eB8G8R8A8Unorm ||
-                          display.format == vk::Format::eB8G8R8A8Srgb;
-        DumpImages(instance, scheduler, scheduler.CommandBuffer(), dump_index++,
-                   {{display.image, display.width, display.height, 4, "present",
-                     bgra ? "bgra" : "rgba"}});
+    if (present_dump_remaining == 0) {
+        return false;
     }
+    --present_dump_remaining;
     return true;
+}
+
+void TemporalUpscaler::DumpPresented(vk::Image image, u32 width, u32 height, vk::Format format) {
+    scheduler.EndRendering();
+    const bool bgra = format == vk::Format::eB8G8R8A8Unorm || format == vk::Format::eB8G8R8A8Srgb;
+    DumpImages(instance, scheduler, scheduler.CommandBuffer(), present_dump_index++,
+               {{image, width, height, 4, "present", bgra ? "bgra" : "rgba"}});
 }
 
 } // namespace Vulkan

@@ -1,4 +1,5 @@
 #include "bbport_write_log.h"
+#include "bbport_gnm_hooks.h"
 // bbport: glue between the C loader and the vendored shadPS4 video core.
 #include "bbport_overlay.h"
 #include "bbport_settings.h"
@@ -26,6 +27,7 @@
 #include "common/rdtsc.h"
 #include "core/libraries/kernel/orbis_error.h"
 #include "core/libraries/libs.h"
+#include "core/emulator_settings.h"
 #include "core/memory.h"
 #include "core/signals.h"
 #include "sdl_window.h"
@@ -36,6 +38,7 @@ extern "C" {
 // runtime_memory.c
 int runtime_memory_is_mapped(uintptr_t address, uint64_t size);
 int runtime_memory_write_backing(uintptr_t address, const void* data, uint64_t size);
+void runtime_memory_read_backing(uintptr_t address, void* data, uint64_t size);
 uint64_t runtime_memory_clamp(uintptr_t address, uint64_t size);
 int runtime_memory_region(uintptr_t address, uintptr_t* start, uintptr_t* end, int* mapped);
 const uint64_t* runtime_memory_generation(void);
@@ -151,6 +154,15 @@ u64 MemoryManager::ClampRangeSize(VAddr virtual_addr, u64 size) {
     return runtime_memory_clamp(virtual_addr, size);
 }
 static void CopySparseSerial(VAddr source, u8* dest, u64 size) {
+    // BB_READBACKS=2 protects GPU-written pages against reads: the copy threads and recorders
+    // read through the backing view, as a read fault on them would wait for the GPU thread,
+    // which waits for them.
+    static const bool precise =
+        EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Precise;
+    if (precise) {
+        runtime_memory_read_backing(source, dest, size);
+        return;
+    }
     if (size && CachedMapped(source, size)) {
         std::memcpy(dest, reinterpret_cast<const void*>(source), size);
         return;
@@ -354,6 +366,10 @@ extern "C" int bbgpu_handle_fault(void* ucontext, void* address) {
         return 1;
     }
     return BbFreeCheck::OnStaleTrapFault(reinterpret_cast<std::uint64_t>(address)) ? 1 : 0;
+}
+
+extern "C" void bbgpu_patch_image(unsigned char* image, uint64_t size) {
+    BbGnmHooks::PatchImage(image, size);
 }
 
 extern "C" unsigned bbgpu_symbol_count(void) {

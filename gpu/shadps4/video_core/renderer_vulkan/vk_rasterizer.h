@@ -92,6 +92,9 @@ public:
 
     void FillBuffer(VAddr address, u32 num_bytes, u32 value, bool is_gds);
     void CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, bool src_gds);
+    /// bbport: whether FillBuffer/CopyBuffer into guest memory at `dst` may write it on the CPU
+    /// now (otherwise the GPU writes it, in stream order).
+    [[nodiscard]] bool DmaMayWriteOnCpu(VAddr dst, u32 num_bytes);
     u32 ReadDataFromGds(u32 gsd_offset);
     bool InvalidateMemory(VAddr addr, u64 size, bool assume_locks = false);
     /// bbport: data written into GPU memory by a path we hear of (file reads, the game's resource
@@ -125,19 +128,23 @@ public:
         DrainDrawPipe();
         scheduler.WaitHostCopies();
     }
-    /// The same before a WRITE_DATA or DMA into [addr, addr + size), only if a pending host copy
-    /// reads that memory (Scheduler::WaitHostCopiesFor). BB_HOST_COPY_WAITS=all: always.
-    void WaitHostCopiesFor(VAddr addr, u64 size) {
+    /// Before a write into [address, address + size): waits only when a host copy may still read
+    /// it (Scheduler::WaitHostCopiesFor). BB_HOST_COPY_WAITS=all: always (the old behaviour).
+    void WaitHostCopiesFor(VAddr address, u64 size) {
+        DrainDrawPipe();
         static const bool all = [] {
             const char* env = std::getenv("BB_HOST_COPY_WAITS");
             return env && std::string_view{env} == "all";
         }();
-        DrainDrawPipe();
         if (all) {
             scheduler.WaitHostCopies();
         } else {
-            scheduler.WaitHostCopiesFor(addr, size);
+            scheduler.WaitHostCopiesFor(address, size);
         }
+    }
+    /// Notes the guest memory a host copy issued now reads (see Scheduler::NoteHostCopySource).
+    void NoteHostCopySource(VAddr address, u64 size) {
+        scheduler.NoteHostCopySource(address, size);
     }
 
     /// bbport: GPU command thread: waits until the draw recording thread has recorded every
@@ -193,6 +200,11 @@ public:
     /// GPU in stream order, like the command processor's writes; false when the range is not
     /// bound in place (the caller writes it with the CPU).
     bool WriteGuestMemory(VAddr address, const void* data, u32 size);
+    /// bbport BB_GUEST_IN_PLACE (in stream order: the recording thread): a WRITE_DATA performed by
+    /// the GPU, as the command processor does, instead of a CPU store now (ahead of the GPU work
+    /// recorded before it). Values of up to 8 bytes are registered for WAIT_REG_MEM until the GPU
+    /// has written them. False: not in place (or BB_GPU_COMMAND_WRITES=0), the caller stores it.
+    bool WriteDataOnGpu(VAddr address, const void* data, u32 size);
     /// End of a guest submission: submits the work recorded so far when signals wait for it and
     /// the last submission is BB_HONEST_FLUSH_US (1000) old: the GPU starts on it as the hardware
     /// would, instead of at the end of the frame, and the guest's mid-frame waits end sooner.
@@ -619,6 +631,8 @@ private:
     };
     std::array<RingStage, Shader::MaxStageTypes> ring_stages{};
     u32 num_ring_stages = 0;
+    /// bbport: the vertex stream V#s of the packet being recorded (stage B; empty elsewhere).
+    std::span<const AmdGpu::Buffer> packet_vsharps;
     const RingBinding* FindRingBinding(const Shader::Info& stage, u32 index) const {
         for (u32 i = 0; i < num_ring_stages; ++i) {
             if (ring_stages[i].info == &stage) {

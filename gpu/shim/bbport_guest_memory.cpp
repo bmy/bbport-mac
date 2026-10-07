@@ -25,17 +25,19 @@ const Chunk* Find(std::uint64_t) {
 #else
 extern "C" void runtime_memory_set_guest_chunk_allocator(int (*alloc)(uint64_t phys,
                                                                       uint64_t size));
+extern "C" void runtime_memory_set_guest_chunk_whole(int whole);
 
 namespace BbGuestMemory {
 namespace {
 using u64 = std::uint64_t;
-constexpr u64 ChunkShift = 28; // runtime_memory.c: CHUNK (256 MiB)
-constexpr std::size_t MaxChunks = 64;
+constexpr std::size_t MaxChunks = 256;
 
 vk::Device device;
 vk::PhysicalDeviceMemoryProperties memory_properties;
 std::mutex mutex;
-std::array<Chunk*, MaxChunks> chunks{};
+std::array<Chunk*, MaxChunks> chunks{}; // sorted by phys
+std::size_t chunk_count = 0;
+bool whole_only = false; // the driver's dma-buf maps at offset 0 only: a chunk per allocation
 std::atomic<u64> chunk_bytes{0};
 
 std::uint32_t FindType(std::uint32_t bits) {
@@ -52,8 +54,11 @@ std::uint32_t FindType(std::uint32_t bits) {
 
 /// The runtime's chunk allocator: a dma-buf fd of `size` bytes of GPU-visible memory, or -1.
 int AllocChunk(u64 phys, u64 size) {
-    if ((phys >> ChunkShift) >= MaxChunks) {
-        return -1;
+    {
+        std::scoped_lock lk{mutex};
+        if (chunk_count == MaxChunks) {
+            return -1;
+        }
     }
     static std::atomic<int> failures{0};
     const auto fail = [&](const char* what, vk::Result result) {
@@ -114,7 +119,12 @@ int AllocChunk(u64 phys, u64 size) {
     }
     {
         std::scoped_lock lk{mutex};
-        chunks[phys >> ChunkShift] = new Chunk{phys, size, buffer, memory};
+        std::size_t i = chunk_count++;
+        for (; i > 0 && chunks[i - 1]->phys > phys; --i) {
+            chunks[i] = chunks[i - 1];
+        }
+        static std::uint32_t next_index = 0;
+        chunks[i] = new Chunk{phys, size, buffer, memory, next_index++};
     }
     const u64 total = chunk_bytes.fetch_add(size) + size;
     std::printf("Guest memory: direct memory %#llx+%llu MiB in GPU-visible memory (dma-buf), "
@@ -124,6 +134,22 @@ int AllocChunk(u64 phys, u64 size) {
     return fd;
 }
 } // namespace
+
+bool PcModelGpu(const Vulkan::Instance& instance) {
+    static const bool ok = [&] {
+        constexpr std::uint32_t AmdVendor = 0x1002;
+        const std::uint32_t vendor = instance.GetVendorID();
+        const char* any = std::getenv("BB_PC_MODEL_ANY_GPU");
+        if (vendor == AmdVendor || (any && any[0] == '1')) {
+            return true;
+        }
+        std::printf("Guest memory: the new memory model is tested on AMD GPUs only; this GPU "
+                    "(vendor 0x%04x) uses the model of 0.3 (BB_PC_MODEL_ANY_GPU=1: try it)\n",
+                    vendor);
+        return false;
+    }();
+    return ok;
+}
 
 bool Usable(const Vulkan::Instance& instance) {
     static const bool usable = [&] {
@@ -176,9 +202,23 @@ bool Usable(const Vulkan::Instance& instance) {
             // The whole buffer and one page inside it, writing through one, reading through the other.
             void* whole = mmap(nullptr, Size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
             void* page = mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, Offset);
+            // BB_GUEST_WHOLE_CHUNKS=1: as if the offset mapping failed (tests the NVIDIA path).
+            const char* force_whole = std::getenv("BB_GUEST_WHOLE_CHUNKS");
+            if (force_whole && force_whole[0] == '1' && page != MAP_FAILED) {
+                munmap(page, 4096);
+                page = MAP_FAILED;
+            }
             if (whole != MAP_FAILED && page != MAP_FAILED) {
                 *static_cast<volatile std::uint32_t*>(page) = 0x5ca1ab1e;
                 ok = static_cast<volatile std::uint32_t*>(whole)[Offset / 4] == 0x5ca1ab1e;
+            } else if (whole != MAP_FAILED) {
+                // Offset 0 only (NVIDIA): a second mapping of the start must alias the first.
+                void* again = mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+                if (again != MAP_FAILED) {
+                    *static_cast<volatile std::uint32_t*>(again) = 0x5ca1ab1e;
+                    ok = whole_only = static_cast<volatile std::uint32_t*>(whole)[0] == 0x5ca1ab1e;
+                    munmap(again, 4096);
+                }
             }
             if (whole != MAP_FAILED) {
                 munmap(whole, Size);
@@ -193,8 +233,11 @@ bool Usable(const Vulkan::Instance& instance) {
         }
         dev.destroyBuffer(buffer);
         if (!ok) {
-            std::printf("Guest memory: the driver's dma-buf cannot be mapped at an offset (%s)\n",
+            std::printf("Guest memory: the driver's dma-buf cannot be mapped (%s)\n",
                         fd >= 0 ? "mmap failed" : "no exportable cached system memory");
+        } else if (whole_only) {
+            std::printf("Guest memory: the driver's dma-buf maps at offset 0 only: one chunk per "
+                        "direct memory allocation\n");
         }
         return ok;
     }();
@@ -205,7 +248,7 @@ void Install(const Vulkan::Instance& instance) {
     // BB_GUEST_IN_PLACE (the GPU uses this memory in place) needs it too.
     const char* env = std::getenv("BB_GUEST_GPU_MEMORY");
     const char* in_place = std::getenv("BB_GUEST_IN_PLACE");
-    if (!(env && env[0] == '1') && !(in_place && in_place[0] == '1')) {
+    if (!(env && env[0] == '1') && !(in_place && in_place[0] == '1' && PcModelGpu(instance))) {
         return;
     }
     if (!Usable(instance)) {
@@ -214,17 +257,28 @@ void Install(const Vulkan::Instance& instance) {
     }
     device = instance.GetDevice();
     memory_properties = instance.GetPhysicalDevice().getMemoryProperties();
+    runtime_memory_set_guest_chunk_whole(whole_only ? 1 : 0);
     runtime_memory_set_guest_chunk_allocator(&AllocChunk);
     std::printf("Guest memory: direct memory chunks come from Vulkan (BB_GUEST_GPU_MEMORY=1)\n");
 }
 
 const Chunk* Find(std::uint64_t phys) {
-    const u64 index = phys >> ChunkShift;
-    if (index >= MaxChunks) {
+    std::scoped_lock lk{mutex};
+    // The last chunk starting at or below phys.
+    std::size_t lo = 0, hi = chunk_count;
+    while (lo < hi) {
+        const std::size_t mid = (lo + hi) / 2;
+        if (chunks[mid]->phys <= phys) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    if (lo == 0) {
         return nullptr;
     }
-    std::scoped_lock lk{mutex};
-    return chunks[index];
+    const Chunk* c = chunks[lo - 1];
+    return phys < c->phys + c->size ? c : nullptr;
 }
 } // namespace BbGuestMemory
 #endif // __APPLE__

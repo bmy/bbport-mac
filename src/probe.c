@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
+#include <cpuid.h>
 #include "runtime.h"
 #include "platform.h"
 #include "gpu/bbgpu.h"
@@ -52,6 +53,42 @@ static int gpu_enabled;
 int vulkan_smoke(void);
 
 static void fail(const char *message) { fprintf(stderr, "ERROR: %s\n", message); exit(1); }
+
+/* The game's code was compiled for the PS4's CPU (AMD Jaguar) and runs as it is: AVX, BMI1
+ * (andn/bextr/blsr/tzcnt), MOVBE, LZCNT and POPCNT, thousands of each in eboot.bin. A CPU without
+ * them stops at the first one with SIGILL (exit code 132, issue #26), and lzcnt/tzcnt even run as
+ * bsr/bsf there, with other results. Said before the game starts; BB_SKIP_CPU_CHECK=1 skips it. */
+static void check_cpu(void) {
+    const char *skip = getenv("BB_SKIP_CPU_CHECK");
+    if (skip && !strcmp(skip, "1")) return;
+    unsigned a, b, c, d, leaf1_c = 0, leaf7_b = 0, ext1_c = 0;
+    if (__get_cpuid(1, &a, &b, &c, &d)) leaf1_c = c;
+    if (__get_cpuid_count(7, 0, &a, &b, &c, &d)) leaf7_b = b;
+    if (__get_cpuid(0x80000001u, &a, &b, &c, &d)) ext1_c = c;
+    int avx = (leaf1_c & bit_AVX) && (leaf1_c & bit_OSXSAVE);
+    if (avx) {
+        unsigned lo, hi;
+        __asm__ volatile("xgetbv" : "=a"(lo), "=d"(hi) : "c"(0));
+        avx = (lo & 6) == 6; /* the OS saves SSE and AVX state */
+    }
+    const struct { int present; const char *name; } features[] = {
+        {avx, "AVX"}, {(leaf7_b & bit_BMI) != 0, "BMI1"}, {(leaf1_c & bit_MOVBE) != 0, "MOVBE"},
+        {(ext1_c & bit_LZCNT) != 0, "LZCNT"}, {(leaf1_c & bit_POPCNT) != 0, "POPCNT"},
+        {(leaf1_c & bit_SSE4_2) != 0, "SSE4.2"},
+    };
+    char missing[64] = "";
+    for (unsigned i = 0; i < sizeof(features) / sizeof(features[0]); ++i) {
+        if (features[i].present) continue;
+        if (missing[0]) strcat(missing, ", ");
+        strcat(missing, features[i].name);
+    }
+    if (!missing[0]) return;
+    fprintf(stderr,
+            "ERROR: this CPU lacks %s. Bloodborne's code was compiled for the PS4's CPU and uses "
+            "these instructions directly: it needs an Intel Haswell (4th generation Core, 2013) or "
+            "newer, or an AMD Ryzen. BB_SKIP_CPU_CHECK=1 starts anyway.\n", missing);
+    exit(1);
+}
 static uint64_t read64(FILE *f) {
     unsigned char b[8];
     if (fread(b, 1, 8, f) != 8) fail("truncated boot file");
@@ -304,9 +341,14 @@ static void apply_patches(const char *path, Segment *segments, uint64_t ns, cons
 /* Restarts the game through run.sh (the settings menu: a new render resolution is a patch
  * applied at start). Descriptors are closed first so the old GPU device and its memory are
  * released before the new process opens its own. */
+volatile int runtime_restarting;
 void runtime_restart(void) {
     fflush(NULL);
     puts("Runtime: restarting through run.sh");
+    /* The GPU threads still run until exec: their Vulkan calls fail once the device fd is
+     * closed below, and an assertion there must not end the process (exit 23) before exec. */
+    runtime_restarting = 1;
+    __sync_synchronize();
 #ifndef _WIN32
 #ifdef __APPLE__
     for (int fd=3, top=getdtablesize(); fd<top; ++fd) close(fd);
@@ -332,6 +374,7 @@ static int probe_main(int argc, char **argv) {
 #endif
 #endif
     if (argc == 2 && !strcmp(argv[1], "--vulkan-only")) return vulkan_smoke();
+    check_cpu();
     int cpu_only = 0, strict_imports = 0;
     unsigned timeout_seconds = 10;
     const char *content_profile=NULL, *app0=NULL, *user_dir=NULL, *patch_file=NULL;
@@ -537,6 +580,7 @@ static int probe_main(int argc, char **argv) {
         printf("TLS: %zu guest TCB loads redirected to the pthread TSD slot\n", tls_sites);
     }
 #endif
+    if (!cpu_only) bbgpu_patch_image(image, size);
     protect(traps, bb_round_page((import_count + 1) * 32), 5);
     protect(image, bb_round_page(size), 0);
     int executable_entry = 0;

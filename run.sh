@@ -116,12 +116,21 @@ fi
 # VRAM), 0 = off. BB_GUEST_GPU_MEMORY=1 puts guest direct memory in GPU-visible dma-buf chunks
 # (BB_GUEST_IN_PLACE below implies it: it commits all allocated memory up front and rules out BB_UFFD).
 export BB_PREUPLOAD=${BB_PREUPLOAD:-1}
-# Memory model. BB_GUEST_IN_PLACE=1 (experimental; the launcher's "New memory model"): as a PC game,
-# the GPU uses the game's memory where it is (GPU-visible system memory) and keeps the data it reads
-# often in VRAM, giving VRAM back when it is no longer used. Tested only on an RX 7800 XT and the
-# Steam Deck; NVIDIA cannot map its memory as needed and falls back. 0 (default): the model of 0.2
-# (VRAM copies of the game's memory, write tracking).
-export BB_GUEST_IN_PLACE=${BB_GUEST_IN_PLACE:-0}
+# Memory model and translation. BB_PC_MODEL=1 (the launcher's "New memory and translation model",
+# experimental, off by default) selects how a PC release would work: the GPU uses the game's
+# memory where it is (GPU-visible system memory) and keeps the data it reads often in VRAM, the
+# command processor's work is translated rather than emulated (BB_GUEST_IN_PLACE=1 and what
+# depends on it). AMD GPUs only for now: on others the GPU library keeps it off
+# (BB_PC_MODEL_ANY_GPU=1: try it anyway; NVIDIA, whose dma-buf maps at offset 0 only, gets one
+# chunk per direct memory allocation). 0 (default): the model of 0.3 (VRAM copies of the game's
+# memory, write tracking), with the fixes made since. BB_GUEST_IN_PLACE set by hand overrides it.
+# BB_AS_0_3=1 (the launcher's developer switch "Synchronisation as in 0.3"): what changed since the
+# 0.3 release is reverted for comparisons: the 0.3 memory model, WRITE_DATA/DMA waiting for every
+# host copy, the scheduler's concurrent recording check.
+if [[ ${BB_AS_0_3:-0} == 1 ]]; then
+    export BB_GUEST_IN_PLACE=0 BB_HOST_COPY_WAITS=all BB_PRODUCER_CHECK=1
+fi
+export BB_GUEST_IN_PLACE=${BB_GUEST_IN_PLACE:-${BB_PC_MODEL:-0}}
 # MangoHud (launcher switch: MANGOHUD=1) must be drawn once. Two overlays on top of each other
 # showed doubled, offset text: the Steam Deck's performance overlay (mangoapp, game mode) plus the
 # in-game layer, or the AppImage's bundled layer plus a system MangoHud (the layer names differ,
@@ -161,7 +170,7 @@ if [[ -n ${BB_PREBUILT:-} ]]; then
     probe=${BB_PROBE:-bin/bb-probe}
 else
     bash build.sh
-    probe=out/bb-probe
+    probe=${BB_PROBE:-out/bb-probe}  # BB_PROBE: a wrapper (gdb) around it
 fi
 probe_args=("$out/boot-linked.bin" --content-profile "$out/content.bin" --patches "$out/patches.bin" --app0 "$game" --user "${BB_USER_DIR:-$data/user}" --timeout "${BB_TIMEOUT:-0}" "$@")
 if [[ -n ${mod_game:-} ]]; then

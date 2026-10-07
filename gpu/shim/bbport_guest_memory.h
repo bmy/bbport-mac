@@ -21,13 +21,19 @@ struct Chunk {
     std::uint64_t size = 0;
     vk::Buffer buffer;      ///< the whole chunk, for transfers
     vk::DeviceMemory memory;
+    std::uint32_t index = 0; ///< creation order (stable key)
 };
 
-/// Whether the runtime can use such chunks: dma-buf export, and mmap of the dma-buf at any page
-/// offset (the game's mappings start inside chunks). Checked once with a small chunk; NVIDIA's
-/// dma-buf took offset 0 only: every direct memory mapping after the first failed and the game
-/// panicked at startup (an uninitialized SprjWindow singleton).
+/// Whether the runtime can use such chunks: dma-buf export and mmap of the dma-buf. Checked once
+/// with a small chunk. A driver that maps at page offsets gets 256 MiB chunks (the game's mappings
+/// start inside them); NVIDIA's dma-buf maps at offset 0 only (the grid made every mapping after
+/// the first fail and the game panic at startup), so there each direct allocation is its own chunk:
+/// the game maps its allocations whole, at offset 0.
 bool Usable(const Vulkan::Instance& instance);
+/// Whether the PC memory model (BB_GUEST_IN_PLACE, the launcher's new memory and translation
+/// model) may run on this GPU: tested on AMD only. Elsewhere it stays off (the 0.3 model) unless
+/// BB_PC_MODEL_ANY_GPU=1.
+bool PcModelGpu(const Vulkan::Instance& instance);
 /// Hands the runtime direct memory chunks from now on (when enabled and supported).
 void Install(const Vulkan::Instance& instance);
 /// The chunk holding direct memory address `phys`, or null.

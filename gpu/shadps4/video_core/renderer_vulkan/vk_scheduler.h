@@ -709,6 +709,16 @@ public:
     /// Sends the current execution context to the GPU and waits for it to complete.
     void Finish();
 
+    /// bbport: waits for the GPU to complete the submissions before the current one, which is
+    /// not sent: for callers that keep recording into it (the upscaler between CommandBuffer()
+    /// and the end of its pass) and free resources only earlier submissions used.
+    void WaitSubmittedWork() {
+        const u64 tick = CurrentTick();
+        if (tick > 1) {
+            Wait(tick - 1);
+        }
+    }
+
     /// Waits for the given tick to trigger on the GPU.
     void Wait(u64 tick);
 
@@ -759,14 +769,33 @@ public:
     /// stack: a null record_chunk/ordered_chunk crashed HandOver and SmallGuestCopy.
     class ProducerScope {
     public:
-        ProducerScope(Scheduler& scheduler, const char* where) noexcept;
-        ~ProducerScope() noexcept;
+        ProducerScope(Scheduler& scheduler_, const char* where) noexcept : scheduler{scheduler_} {
+            if (ProducerCheck()) {
+                Enter(where);
+            }
+        }
+        ~ProducerScope() noexcept {
+            if (ProducerCheck()) {
+                Leave();
+            }
+        }
+        /// BB_PRODUCER_CHECK=1 (the launcher's crash diagnostics); off otherwise, the check
+        /// costs an atomic exchange per recorded command.
+        static bool ProducerCheck() noexcept {
+            static const bool enabled = [] {
+                const char* env = std::getenv("BB_PRODUCER_CHECK");
+                return env && env[0] == '1';
+            }();
+            return enabled;
+        }
         ProducerScope(const ProducerScope&) = delete;
         ProducerScope& operator=(const ProducerScope&) = delete;
 
     private:
+        void Enter(const char* where) noexcept;
+        void Leave() noexcept;
         Scheduler& scheduler;
-        const char* previous_where;
+        const char* previous_where = nullptr;
         bool outer = false;
     };
 
@@ -806,6 +835,17 @@ public:
             func(cmdbuf);
             Breadcrumbs::Mark(cmdbuf, stream, id, true);
         });
+    }
+
+    /// bbport: waits until the submission signalling `tick` is in the queue. Another thread's
+    /// submission waiting for the tick on the same queue must not go first (BB_ASYNC_SUBMIT
+    /// submits from the recording threads): the queue would wait for a later submission.
+    void WaitSubmitted(u64 tick) {
+        u64 submitted = submitted_tick.load(std::memory_order_acquire);
+        while (submitted < tick) {
+            submitted_tick.wait(submitted, std::memory_order_acquire);
+            submitted = submitted_tick.load(std::memory_order_acquire);
+        }
     }
 
     /// bbport: the breadcrumb stream of this scheduler, for passes recorded on CommandBuffer().
@@ -862,14 +902,13 @@ public:
     /// submission that reads them. Waits for all.
     void WaitHostCopies();
 
-    /// bbport: notes the guest memory a host copy just issued reads (after issuing it), so that
-    /// WaitHostCopiesFor can tell whether a guest-visible write needs that copy finished first.
+    /// bbport: guest memory [address, address + size) a host copy issued now will read (the
+    /// source of a deferred upload or rename). WaitHostCopiesFor waits only for these.
     void NoteHostCopySource(u64 address, u64 size);
-
-    /// bbport: WaitHostCopies only if a host copy not known to be done reads guest memory in
-    /// [address, address + size): a WRITE_DATA or DMA into memory no pending copy reads cannot
-    /// change what the copies see (the 0.3+ upstream rule; BB_HOST_COPY_WAITS=all: always wait).
-    /// Pages of 64 KiB in a direct-mapped table: a collision or a long source waits as before.
+    /// Waits for the host copies when one of them may still read [address, address + size): a
+    /// write there (the command processor's WRITE_DATA/DMA) must not change what they copy.
+    /// Writes elsewhere do not wait (the hardware's command processor writes do not wait for
+    /// earlier draws either).
     void WaitHostCopiesFor(u64 address, u64 size);
 
     /// Runs `copy` on a recording thread in order with the commands, the other host copies and
@@ -881,18 +920,6 @@ public:
             copy();
             host_copies_done.store(seq, std::memory_order_release);
         });
-    }
-
-    /// bbport BB_FAST_FENCES=1 (experiment): small guest copies go to the copy threads instead
-    /// of the recording thread, and a deferred fence is signalled as soon as the copies issued
-    /// before it are done, instead of after the recording thread reaches it (it waited for all
-    /// the commands recorded before it: 20-30% of the GPU thread's time on the Mac).
-    [[nodiscard]] static bool FastFences() {
-        static const bool on = [] {
-            const char* env = std::getenv("BB_FAST_FENCES");
-            return env && env[0] == '1';
-        }();
-        return on;
     }
 
     /// bbport: runs `signal` once the guest memory copies issued so far are done, without
@@ -994,8 +1021,19 @@ private:
     }
 
     /// Waits for the recording threads, then records on this thread into the current segment's
-    /// command buffer until the next KickRecording().
+    /// command buffer until the next KickRecording(). bbport: with BB_ASYNC_SUBMIT, into a
+    /// segment of its own instead, without waiting (direct_segment).
     void EnterDirectMode();
+
+    /// Ends the direct segment (this thread's command buffer); the next commands go to a new
+    /// segment of the recording threads.
+    void LeaveDirectSegment();
+
+    /// Whether ordered tasks run on the calling thread right away: no recording threads, or
+    /// direct mode after waiting for them (not a direct segment: earlier tasks may be queued).
+    [[nodiscard]] bool OrderedInline() const noexcept {
+        return workers.empty() || (direct_mode && !direct_segment);
+    }
 
     /// Cuts the command stream after the current segment when it is long enough.
     void MaybeSplit();
@@ -1011,7 +1049,7 @@ private:
     template <typename Func>
     void RecordOrdered(Func&& func) {
         ProducerScope producer{*this, "RecordOrdered"};
-        if (workers.empty() || direct_mode) {
+        if (OrderedInline()) {
             func();
             return;
         }
@@ -1081,6 +1119,7 @@ private:
     std::vector<std::unique_ptr<SubmissionBatch>> all_batches;
     std::vector<SubmissionBatch*> free_batches; ///< guarded by recorder_mutex
     bool async_submit = false; ///< BB_ASYNC_SUBMIT (default on)
+    std::atomic<u64> submitted_tick{0}; ///< the last tick handed to the queue (WaitSubmitted)
     u32 current_segment = 0;
     std::atomic<u32> active_worker{0}; ///< the worker of current_segment (it spins for work)
     size_t segment_bytes = 0;          ///< closures of the current segment handed over or retired
@@ -1097,23 +1136,26 @@ private:
     bool ordered_running = false; ///< a thread runs ordered chunks (guarded by recorder_mutex)
     std::vector<std::unique_ptr<RecordChunk>> free_chunks;
     bool direct_mode = false; ///< the command buffer is recorded on the caller's thread
+    /// bbport: direct_mode in a segment of its own (direct_pool), the recording threads going on
+    /// with the segments before it.
+    bool direct_segment = false;
+    std::unique_ptr<CommandPool> direct_pool; ///< used by the producer thread only
     u64 host_copies_issued = 0;
     std::atomic<u64> host_copies_done{0};
-    /// NoteHostCopySource: the 64 KiB guest pages pending copies read (page ~0: two pages
-    /// share the slot), each with the number of the note; notes up to `sources_done` are done
-    /// (a full WaitHostCopies), and any before `sources_untracked` was too long to record.
-    struct CopySource {
-        u64 page = ~0ull;
+    /// Host copy sources by 64 KiB granule in a direct-mapped table: a slot is pending while its
+    /// note is newer than the last completed WaitHostCopies; a slot two granules share is a
+    /// wildcard (any granule mapping there counts as pending).
+    struct HostCopySlot {
+        u64 granule = 0;
         u64 seq = 0;
     };
-    static constexpr u32 CopySourceSlots = 4096;
-    static constexpr u32 CopySourcePageShift = 16;
-    static constexpr u64 CopySourceMaxPages = 64;
-    std::mutex sources_mutex;
-    std::array<CopySource, CopySourceSlots> copy_sources{};
-    u64 sources_seq = 0;
-    u64 sources_done = 0;
-    u64 sources_untracked = 0;
+    static constexpr u32 HostCopySlots = 4096;
+    static constexpr u64 HostCopyWildcard = ~u64(0);
+    std::mutex host_copy_sources_mutex;
+    std::array<HostCopySlot, HostCopySlots> host_copy_slots{};
+    u64 host_copy_source_seq = 0;
+    u64 host_copy_sources_done = 0;  ///< notes up to this one are copied
+    u64 host_copy_big_seq = 0;       ///< last note too large for the table (counts as everywhere)
     std::atomic<u64> deferred_signals_issued{0}; ///< by the thread recording (A or B)
     std::atomic<u32> producer_tid{0};                 ///< ProducerScope: the thread inside
     std::atomic<const char*> producer_where{nullptr}; ///< and where

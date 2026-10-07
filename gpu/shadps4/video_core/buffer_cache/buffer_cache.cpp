@@ -28,7 +28,6 @@
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
-#include "video_core/renderer_vulkan/vk_draw_pipe.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/texture_cache/texture_cache.h"
 
@@ -412,19 +411,19 @@ bool GarlicInVram() {
     return on;
 }
 
-namespace {
-std::atomic<bool> in_place_disabled{false};
-}
 void DisableGuestInPlace() {
-    in_place_disabled.store(true, std::memory_order_relaxed);
+    Detail::guest_in_place.store(2, std::memory_order_relaxed);
+    Detail::write_tracking.store(0, std::memory_order_relaxed); // recomputed: now on
 }
 
-bool WriteTracking() {
+bool Detail::ComputeWriteTracking() {
     static const bool forced = [] {
         const char* env = std::getenv("BB_WRITE_TRACKING");
         return env && env[0] == '1';
     }();
-    return forced || !GuestInPlace();
+    const bool on = forced || !GuestInPlace();
+    write_tracking.store(on ? 1 : 2, std::memory_order_relaxed);
+    return on;
 }
 
 bool WriteVerify() {
@@ -435,7 +434,7 @@ bool WriteVerify() {
     return on && !WriteTracking();
 }
 
-bool GuestInPlace() {
+bool Detail::ComputeGuestInPlace() {
     static const bool on = [] {
         const char* env = std::getenv("BB_GUEST_IN_PLACE");
         const bool enabled = env && env[0] == '1';
@@ -445,7 +444,10 @@ bool GuestInPlace() {
         }
         return enabled;
     }();
-    return on && !in_place_disabled.load(std::memory_order_relaxed);
+    // DisableGuestInPlace may have run first: it stays off then.
+    u8 expected = 0;
+    guest_in_place.compare_exchange_strong(expected, on ? 1 : 2, std::memory_order_relaxed);
+    return guest_in_place.load(std::memory_order_relaxed) == 1;
 }
 
 static constexpr size_t GDS_BUFFER_SIZE = 64_KB;
@@ -483,8 +485,10 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
       memory_semaphore{instance} {
     integrated_gpu = instance.IsIntegrated();
     // bbport: the PC memory model needs the game's direct memory in dma-buf chunks the runtime can
-    // map at any offset (BbGuestMemory::Usable). Without them it is off, as BB_GUEST_IN_PLACE=0.
-    if (GuestInPlace() && !BbGuestMemory::Usable(instance)) {
+    // map at any offset (BbGuestMemory::Usable), and an AMD GPU for now (PcModelGpu). Without
+    // them it is off, as BB_GUEST_IN_PLACE=0.
+    if (GuestInPlace() &&
+        (!BbGuestMemory::PcModelGpu(instance) || !BbGuestMemory::Usable(instance))) {
         DisableGuestInPlace();
         std::printf("Guest memory: the PC memory model is off with this driver; the GPU uses copies "
                     "in VRAM (as BB_GUEST_IN_PLACE=0)\n");
@@ -556,17 +560,17 @@ void BufferCache::RunGuestCopy(const BbCopy::Item& item) {
 
 // Small guest copies run on the recording thread (it spins for work: no wakeup, and it is
 // idle most of the time); PoolSmallCopies (toggle 524288) batches them for the copy threads.
+// Each source is noted once the copy is queued (a WaitHostCopies started after the note covers it).
 void BufferCache::SmallGuestCopy(const BbCopy::Item& item) {
-    if (Vulkan::Scheduler::FastFences()) {
-        // Deferred fences follow only the copy threads (Scheduler::SignalAfterHostCopies). Stage
-        // B's batch goes out when its pipe runs dry (DrawPipe); another thread's at once, as a
-        // fence on stage B flushes only its own.
-        BbCopy::QueueCopy(item);
-        if (!Vulkan::DrawPipe::OnStageB()) {
-            BbCopy::FlushBatch();
-        }
-    } else if (scheduler.IsRecordingDeferred() &&
-               !BbToggle::Disabled(BbToggle::PoolSmallCopies)) {
+    if (!scheduler.IsRecordingDeferred()) {
+        // bbport: commands recorded on this thread (direct mode: the draw or dispatch after the
+        // upscaler's passes; or BB_VK_RECORD_THREAD=0): the copy runs now, before the commands
+        // that read it. In this thread's copy batch it ran at the next submission at the
+        // earliest, possibly after a WRITE_DATA had changed its source (that wait runs only the
+        // GpuComm thread's own batch). Suspected in the vertex explosions with
+        // BB_VK_RECORD_THREAD=0 (issue #39).
+        item.run(item);
+    } else if (!BbToggle::Disabled(BbToggle::PoolSmallCopies)) {
         scheduler.RecordHostCopy([item] { item.run(item); });
     } else {
         BbCopy::QueueCopy(item);
@@ -942,6 +946,7 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
     }
     // For read-only buffers use device local stream buffer to reduce renderpass breaks.
     if (!is_written && size <= STREAM_THRESHOLD && !IsRegionGpuModified(device_addr, size)) {
+        BB_SECTION(ObtainStream);
         if (stats) {
             auto& region = Stats().regions[RegionKey(device_addr)];
             ++region.stream_count;
@@ -974,6 +979,7 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
     const u64 last_block = (device_addr + size - 1) >> block_shift;
     const auto* arena = GetArena(first_block, last_block);
     EnsureResident(arena, first_block, last_block);
+    BB_SECTION(ObtainVram);
     const u64 uploaded_before = BbStats::buffer_upload_bytes.load(std::memory_order_relaxed);
     if (GuestInPlace()) {
         BbStats::bound_vram_bytes.fetch_add(size, std::memory_order_relaxed);
@@ -996,6 +1002,22 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
     }
     TraceBinding(device_addr, size, is_written, is_written ? 1 : 4);
     return {arena, arena->Offset(device_addr)};
+}
+
+std::optional<std::pair<const Buffer*, u64>> BufferCache::CommandWriteTarget(VAddr device_addr,
+                                                                           u32 size) {
+    if (!GuestInPlace() || size == 0) {
+        return std::nullopt;
+    }
+    const u64 first_block = device_addr >> block_shift;
+    const u64 last_block = (device_addr + size - 1) >> block_shift;
+    const auto* arena = GetArena(first_block, last_block);
+    EnsureResident(arena, first_block, last_block);
+    if (!IsInPlace(device_addr, size)) {
+        return std::nullopt;
+    }
+    WriteTicks().Note(device_addr, size, scheduler.CurrentTick());
+    return std::pair<const Buffer*, u64>{arena, arena->Offset(device_addr)};
 }
 
 std::pair<const Buffer*, u64> BufferCache::ObtainBufferForImage(VAddr device_addr, u32 size) {
@@ -1172,17 +1194,24 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
 
 void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_block,
                                  bool in_place) {
+    BB_SECTION(EnsureResident);
     NoteUse(first_block << block_shift, (last_block - first_block + 1) << block_shift);
-    ProcessPendingUnmaps();
-    ProcessIdleBlocks();
-    ProcessDemotions();
-    ProcessPendingAssets();
-    ProcessLateWrites();
-    DiagArenaCheck();
+    if (maintained_epoch != packet_epoch) {
+        Maintain();
+    }
+    // bbport: the blocks were all resident the last time and nothing changed since: no interval
+    // lookup (it ran for every buffer binding).
+    thread_local std::array<ResidencyMemo, 256> resident_memo{};
+    auto& memo = resident_memo[first_block & (resident_memo.size() - 1)];
+    if (memo.first == first_block && memo.last == last_block &&
+        memo.generation == ResidencyGeneration()) {
+        return;
+    }
     IntervalList bind_ranges;
     resident_ranges.ForEachGap(first_block, last_block + 1,
                                [&](u64 start, u64 end) { bind_ranges.Add({start, end}); });
     if (bind_ranges.Empty()) {
+        memo = {first_block, last_block, ResidencyGeneration()};
         return;
     }
     BbStats::Timer timer{BbStats::t_resident};
@@ -1809,7 +1838,7 @@ std::optional<std::pair<const Buffer*, u64>> BufferCache::GuestChunkSource(VAddr
         phys + size > chunk->phys + chunk->size) {
         return std::nullopt;
     }
-    auto& buffer = chunk_buffers[(chunk->phys >> 28) % chunk_buffers.size()];
+    auto& buffer = chunk_buffers[chunk->index % chunk_buffers.size()];
     if (!buffer) {
         buffer = std::make_unique<Buffer>(instance, chunk->size, chunk->memory,
                                           fmt::format("bbport guest memory {:#x}", chunk->phys));
@@ -2280,6 +2309,16 @@ void BufferCache::UnmapInPlace(VAddr addr, u64 size) {
     unmaps_pending.store(true, std::memory_order_release);
 }
 
+void BufferCache::Maintain() {
+    maintained_epoch = packet_epoch;
+    ProcessPendingUnmaps();
+    ProcessIdleBlocks();
+    ProcessDemotions();
+    ProcessPendingAssets();
+    ProcessLateWrites();
+    DiagArenaCheck(); // bbport (BB_ARENA_CHECK=1, macOS diagnostics)
+}
+
 void BufferCache::ProcessPendingUnmaps() {
     if (!unmaps_pending.load(std::memory_order_acquire)) {
         return;
@@ -2333,8 +2372,18 @@ void BufferCache::ProcessPendingUnmaps() {
 }
 
 bool BufferCache::IsInPlace(VAddr addr, u64 size) const {
-    return GuestInPlace() && size != 0 &&
-           in_place_blocks.Contains(addr >> block_shift, ((addr + size - 1) >> block_shift) + 1);
+    if (!GuestInPlace() || size == 0) {
+        return false;
+    }
+    const u64 first = addr >> block_shift, last = (addr + size - 1) >> block_shift;
+    // bbport: asked for every binding; the answer holds while the residency is unchanged.
+    thread_local std::array<ResidencyMemo, 256> in_place_memo{};
+    auto& memo = in_place_memo[first & (in_place_memo.size() - 1)];
+    const u64 generation = ResidencyGeneration();
+    if (memo.first != first || memo.last != last || memo.generation != generation) {
+        memo = {first, last, generation, false, in_place_blocks.Contains(first, last + 1)};
+    }
+    return memo.in_place;
 }
 
 bool BufferCache::SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 size,
@@ -2488,6 +2537,9 @@ const Buffer* BufferCache::UploadCopies(const Buffer* arena, std::span<vk::Buffe
                 }
                 staging.Flush();
             });
+            for (const auto& copy : *group) {
+                scheduler.NoteHostCopySource(copy.source, copy.size);
+            }
         };
         for (auto& copy : copies) {
             group->push_back({copy.dstOffset, staging.mapped + copy.srcOffset, copy.size});
@@ -2502,10 +2554,6 @@ const Buffer* BufferCache::UploadCopies(const Buffer* arena, std::span<vk::Buffe
         }
         if (!group->empty()) {
             launch();
-        }
-        // After the launches: a note means its copy was issued (Scheduler::WaitHostCopies).
-        for (const auto& copy : copies) {
-            scheduler.NoteHostCopySource(copy.dstOffset + arena->cpu_addr, copy.size);
         }
         return staging.buffer;
     }

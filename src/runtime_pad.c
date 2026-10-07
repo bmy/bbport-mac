@@ -1,7 +1,7 @@
-/* libScePad on SDL3 gamepads, with a keyboard fallback. SDL events are pumped
- * by the window thread (gpu/shim/window.cpp); here state is only sampled.
+/* libScePad on SDL3 gamepads and the keyboard. SDL events are pumped by the window thread
+ * (gpu/shim/window.cpp); here state is only sampled.
  *
- * Keyboard layout (when no gamepad is connected):
+ * Keyboard layout (also with a gamepad connected: both drive the game):
  *   WASD left stick, arrow keys right stick, Space Cross, LShift Circle,
  *   E Square, Q Triangle, 1 L1, 3 R1, R L2, F R2, Z L3, C R3,
  *   Enter Options, Tab left touchpad, Backspace right touchpad,
@@ -143,7 +143,8 @@ static void report_guest_heap(void) {
  * a left-side click, touchpad_right), and on the keyboard the sticks: move_* (left), look_*
  * (right). Gamepad names as SDL's: a b x y back start leftstick rightstick leftshoulder
  * rightshoulder dpup dpdown dpleft dpright touchpad misc1 paddle1-4, plus lefttrigger and
- * righttrigger. The keyboard drives the game when no gamepad is connected (touchpad clicks always). */
+ * righttrigger. The keyboard works next to a gamepad (the Steam Deck always has one): its buttons
+ * add to the gamepad's, a held move/look key moves the stick all the way. */
 enum {
     IN_CROSS, IN_CIRCLE, IN_SQUARE, IN_TRIANGLE, IN_L1, IN_R1, IN_L2, IN_R2, IN_L3, IN_R3,
     IN_OPTIONS, IN_TOUCHPAD, IN_TOUCHPAD_RIGHT, IN_UP, IN_DOWN, IN_LEFT, IN_RIGHT,
@@ -253,6 +254,23 @@ static int pad_value(SDL_Gamepad *g, int input) {
     return value;
 }
 
+/* key held for the negative / positive direction: the stick all the way, else the gamepad's. */
+static uint8_t key_axis(uint8_t value, int negative, int positive) {
+    return negative || positive ? (uint8_t)(128-(negative ? 128 : 0)+(positive ? 127 : 0)) : value;
+}
+static void apply_keyboard(PadData *d, const bool *k) {
+    for (int i=IN_CROSS;i<=IN_RIGHT;++i)
+        if (i!=IN_TOUCHPAD && i!=IN_TOUCHPAD_RIGHT && key_down(k,i)) d->buttons|=input_buttons[i];
+    if (key_down(k,IN_TOUCHPAD)) touch_click(d,0);
+    if (key_down(k,IN_TOUCHPAD_RIGHT)) touch_click(d,1);
+    if (key_down(k,IN_L2)) d->l2=255;
+    if (key_down(k,IN_R2)) d->r2=255;
+    d->left_x=key_axis(d->left_x,key_down(k,IN_MOVE_LEFT),key_down(k,IN_MOVE_RIGHT));
+    d->left_y=key_axis(d->left_y,key_down(k,IN_MOVE_UP),key_down(k,IN_MOVE_DOWN));
+    d->right_x=key_axis(d->right_x,key_down(k,IN_LOOK_LEFT),key_down(k,IN_LOOK_RIGHT));
+    d->right_y=key_axis(d->right_y,key_down(k,IN_LOOK_UP),key_down(k,IN_LOOK_DOWN));
+}
+
 static void sample_host(PadData *d) {
     report_guest_heap();
     memset(d,0,sizeof(*d));
@@ -289,21 +307,8 @@ static void sample_host(PadData *d) {
         // Back/Select on pads without a touch surface is a left-side click.
         if ((d->buttons & BTN_TOUCHPAD) && !d->touch_count) touch_click(d,0);
         if (touch_right) touch_click(d,1);
-        if (k && key_down(k,IN_TOUCHPAD)) touch_click(d,0);
-        if (k && key_down(k,IN_TOUCHPAD_RIGHT)) touch_click(d,1);
-        return;
     }
-    if (!k) return;
-    for (int i=IN_CROSS;i<=IN_RIGHT;++i)
-        if (i!=IN_TOUCHPAD && i!=IN_TOUCHPAD_RIGHT && key_down(k,i)) d->buttons|=input_buttons[i];
-    if (key_down(k,IN_TOUCHPAD)) touch_click(d,0);
-    if (key_down(k,IN_TOUCHPAD_RIGHT)) touch_click(d,1);
-    if (d->buttons & BTN_L2) d->l2=255;
-    if (d->buttons & BTN_R2) d->r2=255;
-    d->left_x=(uint8_t)(128-(key_down(k,IN_MOVE_LEFT) ? 128 : 0)+(key_down(k,IN_MOVE_RIGHT) ? 127 : 0));
-    d->left_y=(uint8_t)(128-(key_down(k,IN_MOVE_UP) ? 128 : 0)+(key_down(k,IN_MOVE_DOWN) ? 127 : 0));
-    d->right_x=(uint8_t)(128-(key_down(k,IN_LOOK_LEFT) ? 128 : 0)+(key_down(k,IN_LOOK_RIGHT) ? 127 : 0));
-    d->right_y=(uint8_t)(128-(key_down(k,IN_LOOK_UP) ? 128 : 0)+(key_down(k,IN_LOOK_DOWN) ? 127 : 0));
+    if (k) apply_keyboard(d,k);
 }
 
 /* BB_PAD_FILE=<file>: scripted input for automated runs. The file holds whitespace-separated
@@ -419,6 +424,21 @@ static void replay_sample(PadData *d) {
     d->left_x=s->axes[0]; d->left_y=s->axes[1]; d->right_x=s->axes[2]; d->right_y=s->axes[3];
     d->l2=s->l2; d->r2=s->r2;
 }
+/* Touches as the DualShock 4 reports them: every finger that goes down gets a new id (1..127, kept
+ * while it stays down) and the time since the first one went down. With id 0 and no hold time
+ * the game ignored touchpad presses: no gesture menu from the touchpad, Back or Tab. */
+static void touch_ids(PadData *d) {
+    static uint8_t next_id=1, ids[2]; static int down[2]; static uint64_t since;
+    for (int i=0;i<2;++i) {
+        const int now=i<d->touch_count;
+        if (now && !down[i]) { ids[i]=next_id; next_id=next_id==127 ? 1 : next_id+1; }
+        down[i]=now;
+        if (now) d->touches[i].id=ids[i];
+    }
+    if (!d->touch_count) since=0;
+    else if (!since) since=d->timestamp;
+    d->touch_held_time=d->touch_count ? (uint32_t)(d->timestamp-since) : 0;
+}
 static void sample(PadData *d) {
     sample_host(d);
     if (bbgpu_overlay_captures_input()) return;
@@ -432,6 +452,7 @@ static void sample(PadData *d) {
     if (injected.buttons & BTN_R2) d->r2=255;
     uint8_t *axes[4]={&d->left_x,&d->left_y,&d->right_x,&d->right_y};
     for (int i=0;i<4;++i) if (injected.stick[i]>=0) *axes[i]=(uint8_t)injected.stick[i];
+    touch_ids(d);
 }
 
 static ABI int32_t pad_init(void) { pthread_mutex_lock(&lock); initialized=1; pthread_mutex_unlock(&lock); return 0; }

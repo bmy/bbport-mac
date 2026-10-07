@@ -82,7 +82,36 @@ static int pool_fd=-1;
 typedef int (*GuestChunkAlloc)(uint64_t phys, uint64_t size);
 static GuestChunkAlloc chunk_alloc;
 static int *chunk_fds; /* per CHUNK of direct memory: -1 not decided, -2 memfd, else a dma-buf fd */
+/* Drivers whose dma-buf maps at offset 0 only (NVIDIA): a chunk per direct allocation instead of
+ * the CHUNK grid. The game maps each of its allocations once, whole, so its mappings and the
+ * backing view start at offset 0 of their chunk. */
 static unsigned char *backing_base; /* second view of the pool: host writes bypass guest/GPU page protection */
+static int whole_chunks;
+typedef struct { uint64_t phys, size; int fd; } Region;
+#define MAX_REGIONS 256
+static Region regions[MAX_REGIONS];
+static size_t region_count;
+/* The region holding phys (sorted by phys), or NULL; *next: start of the next region above. */
+static const Region *region_at(uint64_t phys, uint64_t *next) {
+    *next=POOL_SIZE;
+    for (size_t i=0;i<region_count;++i) {
+        if (phys<regions[i].phys) { *next=regions[i].phys; return NULL; }
+        if (phys<regions[i].phys+regions[i].size) return &regions[i];
+    }
+    return NULL;
+}
+static void add_region(uint64_t phys, uint64_t size) {
+    if (region_count==MAX_REGIONS) return;
+    int fd=chunk_alloc(phys,size);
+    if (fd>=0 && mmap(backing_base+phys,size,PROT_READ|PROT_WRITE,MAP_SHARED|MAP_FIXED,fd,0)==MAP_FAILED) {
+        close(fd);
+        fd=-1;
+    }
+    size_t i=region_count;
+    while (i>0 && regions[i-1].phys>phys) { regions[i]=regions[i-1]; --i; }
+    regions[i]=(Region){phys,size,fd>=0 ? fd : -2};
+    ++region_count;
+}
 #define FLEX_SPAN (UINT64_C(1024) * 1024 * 1024)
 static uint64_t flex_bitmap[FLEX_SPAN/PAGE/64];
 /* GPU hooks (bbgpu): notified outside the lock, in order, after each operation. */
@@ -130,6 +159,19 @@ static uint64_t chunk_size(uint64_t c) {
 /* Decides where the chunks of [phys, phys+size) of direct memory live (lock held). */
 static void ensure_chunks(uint64_t phys, uint64_t size) {
     if (!chunk_fds || phys>=POOL_SIZE) return;
+    if (whole_chunks) {
+        if (!chunk_alloc) return;
+        const uint64_t end=phys+size<POOL_SIZE ? phys+size : POOL_SIZE;
+        for (uint64_t at=phys;at<end;) {
+            uint64_t next;
+            const Region *r=region_at(at,&next);
+            if (r) { at=r->phys+r->size; continue; }
+            const uint64_t gap_end=next<end ? next : end;
+            add_region(at,gap_end-at);
+            at=gap_end;
+        }
+        return;
+    }
     const uint64_t last=(phys+size-1<POOL_SIZE ? phys+size-1 : POOL_SIZE-1)/CHUNK;
     for (uint64_t c=phys/CHUNK;c<=last;++c) {
         if (chunk_fds[c]!=-1) continue;
@@ -146,6 +188,24 @@ static void *map_phys(uintptr_t address, uint64_t size, int prot, uint64_t phys)
     if (!chunk_fds || phys>=POOL_SIZE)
         return mmap((void *)address,size,prot,MAP_SHARED|MAP_FIXED,pool_fd,(off_t)phys);
     ensure_chunks(phys,size);
+    for (uint64_t done=0;whole_chunks && done<size;) {
+        const uint64_t at=phys+done;
+        uint64_t next;
+        const Region *r=region_at(at,&next);
+        const uint64_t room=r ? r->phys+r->size-at : next-at, n=size-done<room ? size-done : room;
+        void *p = r && r->fd>=0
+            ? mmap((void *)(address+done),n,prot,MAP_SHARED|MAP_FIXED,r->fd,(off_t)(at-r->phys))
+            : mmap((void *)(address+done),n,prot,MAP_SHARED|MAP_FIXED,pool_fd,(off_t)at);
+        if (p==MAP_FAILED) {
+            static int reported;
+            if (reported++ < 4)
+                fprintf(stderr,"Runtime: mapping direct memory %#" PRIx64 "+%#" PRIx64 " from %s failed: %s\n",
+                        at,n,r && r->fd>=0 ? "a GPU-visible dma-buf (whole-allocation chunk)" : "the memfd",strerror(errno));
+            return MAP_FAILED;
+        }
+        done+=n;
+        if (done==size) return (void *)address;
+    }
     for (uint64_t done=0;done<size;) {
         const uint64_t at=phys+done, c=at/CHUNK;
         const uint64_t room=c*CHUNK+chunk_size(c)-at, n=size-done<room ? size-done : room;
@@ -171,6 +231,15 @@ static void zero_phys(uint64_t phys, uint64_t size) {
         if (!chunk_fds || at>=POOL_SIZE) {
             pool_discard(at,size-done);
             return;
+        }
+        if (whole_chunks) {
+            uint64_t next;
+            const Region *r=region_at(at,&next);
+            const uint64_t room=r ? r->phys+r->size-at : next-at, n=size-done<room ? size-done : room;
+            if (r && r->fd>=0) memset(backing_base+at,0,n);
+            else pool_discard(at,n); /* bbport: hole punching, or a clear on macOS */
+            done+=n;
+            continue;
         }
         const uint64_t c=at/CHUNK, room=c*CHUNK+chunk_size(c)-at, n=size-done<room ? size-done : room;
         if (chunk_fds[c]>=0) memset(backing_base+at,0,n);
@@ -657,14 +726,17 @@ void *runtime_low_map_high(size_t size, int prot) {
  * 1073741824 the lock-free UpdateImage path for clean, tracked images. */
 /* Bits 32 and up: the draw pipeline and related GPU thread work (gpu/shim/bbport_toggles.h). */
 uint64_t runtime_disabled_optimizations;
+/* bbport: a second number in BB_TOGGLE_FILE: temporary experiment bits (BbToggle::Experiment). */
+uint64_t runtime_experiment_bits;
 /* Speculative readers of guest memory (GPU draw-preparation workers) register a recovery
  * point: a fault on that thread jumps back to it instead of terminating (probe.c). */
 __thread sigjmp_buf *runtime_fault_recover;
 static void *toggle_watcher(void *path) {
     for (unsigned long long last=ULLONG_MAX;;) {
         FILE *f=fopen(path,"r");
-        unsigned long long value=0;
-        if (f) { if (fscanf(f,"%llu",&value)!=1) value=0; fclose(f); }
+        unsigned long long value=0, experiment=0;
+        if (f) { if (fscanf(f,"%llu %llu",&value,&experiment)<1) value=0; fclose(f); }
+        __atomic_store_n(&runtime_experiment_bits,(uint64_t)experiment,__ATOMIC_RELEASE);
         if (value!=last) {
             /* bbport: BB_TOGGLES (set at start) stays disabled. */
             const char *fixed=getenv("BB_TOGGLES");
@@ -678,6 +750,7 @@ static void *toggle_watcher(void *path) {
     return NULL;
 }
 /* bbport: the GPU library provides direct memory chunks (see CHUNK). */
+void runtime_memory_set_guest_chunk_whole(int whole) { whole_chunks=whole; }
 void runtime_memory_set_guest_chunk_allocator(int (*alloc)(uint64_t phys, uint64_t size)) {
     write_lock();
     chunk_alloc=alloc;
@@ -814,6 +887,28 @@ int runtime_memory_write_backing(uintptr_t address, const void *data, uint64_t s
     }
     read_unlock();
     return ok;
+}
+/* Reads through the backing view: the host's copies of guest memory (uploads), which the GPU's
+ * read protection (BB_READBACKS=2: GPU-written pages) must not stop. A fault there would ask the
+ * GPU thread for a readback while it waits for these very copies (a hang at start). Gaps read
+ * as zeros. */
+void runtime_memory_read_backing(uintptr_t address, void *data, uint64_t size) {
+    unsigned char *out=data;
+    read_lock();
+    for (uintptr_t at=address, end=address+size; at<end;) {
+        const size_t i=vma_index(at);
+        uint64_t n;
+        if (i<vma_count && vmas[i].start<=at && vmas[i].kind!=KIND_RESERVED) {
+            n=(vmas[i].end<end ? vmas[i].end : end)-at;
+            memcpy(out+(at-address),backing_base+vmas[i].phys+(at-vmas[i].start),n);
+        } else {
+            const uintptr_t next=i==vma_count ? end : vmas[i].start>at ? vmas[i].start : vmas[i].end;
+            n=(next<end ? next : end)-at;
+            memset(out+(at-address),0,n);
+        }
+        at+=n;
+    }
+    read_unlock();
 }
 /* Per-thread cache of recently found regions for the GPU's per-draw queries:
  * entries hold for as long as the table generation they were read at. */

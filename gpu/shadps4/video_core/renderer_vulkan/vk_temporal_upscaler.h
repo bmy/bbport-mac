@@ -38,6 +38,11 @@ class Runtime;
 class CameraMotion;
 class SceneTargets;
 
+/// bbport BB_FINAL_DUMP_TRIGGER: the frame as presented (after FSR and post processing) is saved
+/// as final_<w>x<h> in BB_DUMP_DIR when the trigger file exists (consumed). `image` in General.
+void DumpFinalFrameIfDue(const Instance& instance, Scheduler& scheduler, vk::CommandBuffer cmdbuf,
+                         vk::Image image, u32 width, u32 height, vk::Format format);
+
 class TemporalUpscaler {
 public:
     TemporalUpscaler(const Instance& instance, Scheduler& scheduler,
@@ -121,6 +126,10 @@ public:
         u32 width, height;
     };
     bool DisplayOverride(VAddr address, Display& display);
+    /// BB_PRESENT_DUMP_TRIGGER: whether this presented frame is to be saved (consumes the trigger).
+    bool PresentDumpDue();
+    /// Saves `image` (General layout, 4 bytes a pixel) as present_<w>x<h> in BB_DUMP_DIR.
+    void DumpPresented(vk::Image image, u32 width, u32 height, vk::Format format);
 
 private:
     /// bbport: views of guest images the upscaler reads, kept across frames: FSR 4 registers
@@ -246,6 +255,7 @@ private:
         bool valid = false;
     };
     std::mutex display_mutex;
+    int present_dump_remaining = 0, present_dump_index = 0;
     std::unordered_map<VAddr, DisplayImage> displays;
     FfxVkPortableUpscaleContext* context = nullptr;
     bool resources_ready = false; ///< images below match width/height/out size
@@ -280,6 +290,26 @@ private:
     vk::UniquePipelineLayout taa_sharpen_pipeline_layout;
     vk::UniquePipeline taa_sharpen_pipeline;
     vk::UniquePipeline taa_sharpen_ldr_pipeline;
+    // bbport: FSR 4 in linear light on the scaled presets (fsr4_color.comp): the decoded input
+    // and the passes that decode it and encode the output again.
+    VideoCore::UniqueImage fsr4_linear_image;
+    bool fsr4_linear_frame = false; ///< this frame's FSR 4 input was decoded (and the output encoded)
+    vk::UniqueImageView fsr4_linear_view;
+    vk::UniqueDescriptorSetLayout fsr4_decode_desc_layout;
+    vk::UniquePipelineLayout fsr4_decode_pipeline_layout;
+    vk::UniquePipeline fsr4_decode_pipeline;
+    vk::UniqueDescriptorSetLayout fsr4_encode_desc_layout;
+    vk::UniquePipelineLayout fsr4_encode_pipeline_layout;
+    vk::UniquePipeline fsr4_encode_pipeline;
+    vk::UniqueSampler fsr4_linear_sampler;
+    vk::UniqueDescriptorSetLayout fsr4_reactive_desc_layout;
+    vk::UniquePipelineLayout fsr4_reactive_pipeline_layout;
+    vk::UniquePipeline fsr4_reactive_pipeline;
+    /// bbport: FSR 4 takes no reactive mask: its output is blended with `color` (the frame it
+    /// upscaled, render size, General layout, same colour space as the output) where the mask
+    /// marks blended effects (fsr4_reactive.comp). Recorded after FSR 4 into `cmdbuf`.
+    void RecordFsr4Reactive(vk::CommandBuffer cmdbuf, vk::ImageView color, u32 w, u32 h, u32 ow,
+                            u32 oh);
     // ExtraSharpen: a copy of the upscaled frame (RCAS reads neighbours) and the target views.
     VideoCore::UniqueImage extra_sharpen_image;
     vk::UniqueImageView extra_sharpen_view;

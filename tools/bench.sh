@@ -8,8 +8,8 @@ name=${1:?usage: tools/bench.sh NAME [ENV=VALUE...]}
 shift
 base=out/bench_${name}_$(date +%m%d_%H%M%S)
 env BB_GAME_DIR="${BB_GAME_DIR:-$PWD/../game_files/CUSA03173}" "$@" BB_FRAME_LOG="$PWD/$base.frames.csv" \
-    tools/restart.sh > /dev/null
+    tools/restart.sh > /dev/null || exit 1
 sleep "${HOLD:-60}"
-pkill -x bb-probe; sleep 3; pkill -9 -x bb-probe
+tools/stop_own.sh
 cp out/session.log "$base.log"
 echo "$base.log"

@@ -31,6 +31,9 @@ enum Id : std::uint32_t {
     PipelineBind,    ///< Pipeline::BindResources (descriptors, push constants)
     Kick,            ///< ResetBindings and the hand-over to the Vulkan recording threads
     Preupload,
+    EnsureResident,
+    ObtainStream,  ///< ObtainBuffer's copy of a small read-only buffer into the stream buffer
+    ObtainVram,    ///< ObtainBuffer's VRAM path (SynchronizeMemory)
     Count,
 };
 inline constexpr const char* Names[Count] = {
@@ -38,6 +41,7 @@ inline constexpr const char* Names[Count] = {
     "buffers",      "textures",    "begin render",  "vertex",       "index",
     "emit vertex",  "dynamic",     "dispatch",      "HLE shader",   "ObtainBuffer",
     "flush",        "motion",      "descriptors",   "kick",         "preupload",
+    "EnsureResident", "stream copy", "VRAM path",
 };
 inline std::array<std::atomic<std::uint64_t>, Count> cycles{};
 

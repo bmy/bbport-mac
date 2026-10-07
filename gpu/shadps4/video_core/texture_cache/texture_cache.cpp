@@ -1131,6 +1131,9 @@ void TextureCache::GarbageCollectImages() {
         BbStats::coarse_second.store(u32(second), std::memory_order_relaxed);
         gc_tick_at_second[second % gc_tick_at_second.size()] = gc_tick;
     }
+    if (BbToggle::Disabled(BbToggle::TextureCollector)) {
+        return;
+    }
     if (total_used_memory < trigger_gc_memory) {
         return;
     }

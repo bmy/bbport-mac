@@ -43,6 +43,26 @@ class TextureCache;
 class MemoryTracker;
 class PageManager;
 
+/// bbport: an IntervalList whose every change advances `generation`: lookups of the buffer
+/// cache's residency remember their answers for as long as nothing changed (ResidencyMemo).
+template <class IV = Interval>
+class TrackedIntervalList : public IntervalList<IV> {
+public:
+    void Add(IV value) {
+        ++generation;
+        IntervalList<IV>::Add(value);
+    }
+    void Subtract(u64 start, u64 end) {
+        ++generation;
+        IntervalList<IV>::Subtract(start, end);
+    }
+    void Clear() {
+        ++generation;
+        IntervalList<IV>::Clear();
+    }
+    static inline u64 generation = 1;
+};
+
 class BufferCache {
     static constexpr u64 ADDRESS_SPACE_BITS = 40;
     static constexpr u64 ARENA_PAGE_BITS = 32;
@@ -94,6 +114,12 @@ public:
     /// Flushes any GPU modified buffer in the logical page range back to CPU memory.
     void ReadMemory(VAddr device_addr, u64 size, bool is_write = false, bool assume_locks = false);
 
+    /// bbport: a new draw or dispatch is being recorded: the per-binding housekeeping of
+    /// EnsureResident (unmaps, demotions, assets, late writes) runs once for it, not per binding.
+    void NewPacket() noexcept {
+        ++packet_epoch;
+    }
+
     /// Finds a buffer for the specified region.
     [[nodiscard]] std::pair<const Buffer*, u64> ObtainBuffer(VAddr device_addr, u32 size,
                                                              bool is_written,
@@ -101,6 +127,14 @@ public:
 
     /// Attempts to obtain a buffer without modifying the cache contents.
     [[nodiscard]] std::pair<const Buffer*, u64> ObtainBufferForImage(VAddr device_addr, u32 size);
+
+    /// bbport BB_GUEST_IN_PLACE: where a command processor write (WRITE_DATA) the GPU performs in
+    /// stream order lands: the arena over the game's memory, if the range is bound there in place.
+    /// Not counted as a GPU write of the block (those move blocks to VRAM): it is CPU data, as a PC
+    /// game's constant updates. The range counts as GPU-modified until the GPU has done it, so no
+    /// copy of it is taken before (IsRegionGpuModified).
+    [[nodiscard]] std::optional<std::pair<const Buffer*, u64>> CommandWriteTarget(VAddr device_addr,
+                                                                                u32 size);
 
     /// Return true when a region is modified from the CPU
     [[nodiscard]] bool IsRegionCpuModified(VAddr addr, size_t size);
@@ -193,6 +227,19 @@ private:
     };
     void BindInPlace(u64 start, u64 end, std::vector<ResidentBind>& out, IntervalList<>& rest,
                      bool any_type = false);
+    /// bbport: the housekeeping EnsureResident did before every binding (Process*), once a packet.
+    void Maintain();
+    u64 packet_epoch = 1, maintained_epoch = 0;
+    /// bbport: answers of EnsureResident ("all resident") and IsInPlace for block ranges, valid
+    /// while resident_ranges and in_place_blocks keep their generation.
+    struct ResidencyMemo {
+        u64 first = ~0ull, last = 0, generation = 0;
+        bool resident = false, in_place = false;
+    };
+    std::array<ResidencyMemo, 256> residency_memo{};
+    static u64 ResidencyGeneration() noexcept {
+        return TrackedIntervalList<Backing>::generation + TrackedIntervalList<>::generation;
+    }
     void ProcessPendingUnmaps();
     /// bbport BB_GUEST_IN_PLACE: a write fault (guest thread). Blocks the CPU keeps writing (faults in
     /// 3 frames of 60) move from VRAM to the game's memory in place: dynamic data, like an upload
@@ -323,9 +370,9 @@ private:
             return {{a, b}, memory, offset + (a - start)};
         }
     };
-    IntervalList<Backing> resident_ranges;
+    TrackedIntervalList<Backing> resident_ranges;
     /// bbport BB_GUEST_IN_PLACE: blocks bound to the game's own memory, and guest unmaps to apply.
-    IntervalList<> in_place_blocks;
+    TrackedIntervalList<> in_place_blocks;
     std::mutex pending_unmaps_mutex;
     std::vector<std::pair<VAddr, u64>> pending_unmaps;
     std::atomic<bool> unmaps_pending{false};
@@ -367,7 +414,7 @@ private:
     std::vector<std::pair<VAddr, u64>> precise_uploads;
     std::atomic<bool> late_writes_pending{false};
     u64 bind_wait_tick = 0;                            ///< the next arena binds wait for it
-    std::array<std::unique_ptr<Buffer>, 64> chunk_buffers{}; ///< per 256 MiB guest memory chunk
+    std::array<std::unique_ptr<Buffer>, 256> chunk_buffers{}; ///< per guest memory chunk (Chunk::index)
 
     u32 arena_memory_type_index{};
     vk::DeviceMemory residency_memory{}; ///< bbport: the 64 MiB block arena residency comes from

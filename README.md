@@ -1,6 +1,6 @@
 # bbport-mac — Bloodborne on Apple Silicon Macs
 
-A macOS port of [bbport](https://github.com/deadinside28/bloodborne_pc) (release 0.3),
+A macOS port of [bbport](https://github.com/deadinside28/bloodborne_pc) (release 0.4),
 deadinside28's native port of *Bloodborne* (PS4, CUSA03173, game version 1.09). It runs the game's original
 executable on an Apple Silicon Mac and renders it through Vulkan on Metal, with temporal
 upscaling (AMD FSR 3.1) up to 4K.
@@ -142,7 +142,7 @@ For Terminal runs; in the app, most are regular settings and the rest go in
 | `BB_GAMEPAD` | Which controller to use: part of its name or its GUID |
 | `BB_CAMERA_Y` | `up` or `down` forces which way the camera motion vectors treat vertical. By default it follows each frame's G-buffer viewport (the wrong one makes FSR shimmer on floors) |
 | `BB_HOST_COPY_WAITS=all` | Waits for every pending guest memory copy before each WRITE_DATA/DMA packet, as before. By default only copies reading the memory written are waited for (faster) |
-| `BB_BREADCRUMBS=1` | Turns on bbport 0.3's GPU crash breadcrumbs (off on the Mac: with KosmicKrisp they blank the picture) |
+| `BB_BREADCRUMBS=1` | Turns on bbport's GPU crash breadcrumbs (off on the Mac: with KosmicKrisp they blank the picture) |
 | `BB_PRELOAD_THREADS` | Threads for the startup shader warm-up (default: all cores) |
 
 ## Upscalers on the Mac
@@ -163,18 +163,15 @@ For Terminal runs; in the app, most are regular settings and the rest go in
   upstream shadPS4 moved to in October 2026) ran clearly slower in testing, even with them
   switched off, and drew blood on characters wrongly. The port stays on the previous version
   for now.
-- **Depth of field (bbport 0.3).** With DOF on, the top of the frame shows an upside-down copy of
-  the scene and horizontal streaks. It happens on Linux too and the upstream developer knows;
-  until it's fixed, turn **Depth of field** off in the app's Game effects.
 - **Dense scenes.** These drop below 60 FPS. The cause is CPU cost under Rosetta (see
   *Performance*), not the GPU.
 - **Single test machine.** Everything so far has been tested on one Mac.
 
 ## Roadmap
 
-1. **Tune multi-thread recording on the Mac,** so dense scenes get closer to 60. bbport 0.3
-   records Vulkan commands on several threads and submits from them; how many threads suit
-   KosmicKrisp under Rosetta is still to be measured.
+1. **Dense scenes closer to 60.** Measured in October 2026: the number of recording threads
+   (2, 3 or 4) makes no difference, and removing bbport's own waits only moves the time
+   elsewhere. The cost is the Vulkan-to-Metal path running under Rosetta (item 3).
 2. **Geometry shaders:** find what makes the newer KosmicKrisp slower, report it upstream, and
    move to it once it's as fast.
 3. **Move the renderer into a separate native arm64 process.** The renderer is the shadPS4-based

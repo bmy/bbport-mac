@@ -9,6 +9,8 @@
 #include <cstdlib>
 
 extern "C" std::uint64_t runtime_disabled_optimizations;
+/// Temporary experiment bits: the second number in BB_TOGGLE_FILE (runtime_memory.c).
+extern "C" std::uint64_t runtime_experiment_bits;
 /// Recovery point for speculative guest memory reads on this thread (runtime_memory.c).
 extern "C" __thread sigjmp_buf* runtime_fault_recover;
 
@@ -54,6 +56,8 @@ enum : std::uint64_t {
     OrderedGuestWrites = 1ull << 49,
     SceneHalfRes = 1ull << 50, ///< live scaling also reduces the 960x540 post targets
     UpdateImageFastPath = 1u << 30,
+    /// Bit set: the texture collector frees nothing (A/B of its evictions while the game runs).
+    TextureCollector = 1ull << 31,
     // TAA A/B in one run: optional techniques, off by default (no measured gain, 2026-10-02).
     TaaTonemapBlend = 1ull << 51,
     TaaClip = 1ull << 52,
@@ -62,6 +66,9 @@ enum : std::uint64_t {
     // On by default (bit set: off): history of a thin feature this jitter phase missed is kept
     // when nothing moves. Static-camera flicker of railings/window bars p99.9 -45% (2026-10-03).
     TaaKeepNearerHistory = 1ull << 55,
+    /// FSR 4 (4.0 and 4.1.1) gets the motion vectors with y negated (motionVectorScale.y = -1); FSR 3
+    /// and TAA keep them. A/B of the vertical convention FSR 4 expects.
+    Fsr4MotionYFlip = 1ull << 56,
     SceneMipBias = 1ull << 57, ///< negative LOD bias of G-buffer samplers at reduced scene sizes
     /// The command stream is cut into segments recorded in parallel (BB_VK_RECORD_THREADS);
     /// bit set: no new cuts, one recording thread at a time.
@@ -75,10 +82,20 @@ enum : std::uint64_t {
     /// Scene textures use BB_ANISO (16) times anisotropic filtering instead of the game's
     /// ratio; bit set: the game's own samplers (A/B while the game runs).
     ForcedAniso = 1ull << 61,
+    /// Camera motion vectors: the screen y sign derived from the G-buffer viewport, inverted
+    /// (A/B of the y convention while the game runs).
+    CameraYFlip = 1ull << 62,
+    /// FSR 4 on the scaled presets gets the tonemapped frame decoded to linear light (its output
+    /// encoded again); bit set: the encoded frame as before (A/B while the game runs).
+    Fsr4EncodedInput = 1ull << 63,
     // Bits 20-29 are used as raw debug toggles by the camera/object motion and the upscaler.
 };
 inline bool Disabled(std::uint64_t bit) {
     return (__atomic_load_n(&runtime_disabled_optimizations, __ATOMIC_RELAXED) & bit) != 0;
+}
+/// A temporary experiment switched on by bit `bit` of the second number in BB_TOGGLE_FILE.
+inline bool Experiment(std::uint64_t bit) {
+    return (__atomic_load_n(&runtime_experiment_bits, __ATOMIC_RELAXED) & bit) != 0;
 }
 } // namespace BbToggle
 

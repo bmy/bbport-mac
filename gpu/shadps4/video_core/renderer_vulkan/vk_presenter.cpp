@@ -318,136 +318,6 @@ static vk::Format GetFrameViewFormat(const Libraries::VideoOut::PixelFormat form
 }
 
 
-namespace {
-/// bbport BB_DISPLAY_CHECK=1: every 5 s the image the presenter shows
-/// (before the post pass) and the frame it draws are read back, and the log says how much of
-/// each is not black (finds where a black picture starts).
-bool DisplayCheckDue() {
-    static const bool enabled = [] {
-        const char* env = std::getenv("BB_DISPLAY_CHECK");
-        return env && env[0] == '1';
-    }();
-    if (!enabled) {
-        return false;
-    }
-    static auto last = std::chrono::steady_clock::now();
-    const auto now = std::chrono::steady_clock::now();
-    if (now - last < std::chrono::seconds(5)) {
-        return false;
-    }
-    last = now;
-    return true;
-}
-
-u32 CheckBytesPerPixel(vk::Format format) {
-    switch (format) {
-    case vk::Format::eR16G16B16A16Sfloat:
-    case vk::Format::eR16G16B16A16Unorm:
-        return 8;
-    case vk::Format::eB8G8R8A8Unorm:
-    case vk::Format::eB8G8R8A8Srgb:
-    case vk::Format::eR8G8B8A8Unorm:
-    case vk::Format::eR8G8B8A8Srgb:
-    case vk::Format::eA2R10G10B10UnormPack32:
-    case vk::Format::eA2B10G10R10UnormPack32:
-    case vk::Format::eB10G11R11UfloatPack32:
-        return 4;
-    default:
-        return 0;
-    }
-}
-
-void CheckImage(const Instance& instance, Scheduler& scheduler, vk::CommandBuffer cmdbuf,
-                vk::Image image, vk::ImageLayout layout, vk::Format format, u32 width, u32 height,
-                const char* name) {
-    const u32 bpp = CheckBytesPerPixel(format);
-    if (!image || bpp == 0 || width == 0 || height == 0) {
-        std::printf("Display check: %s %ux%u format %s not checked\n", name, width, height,
-                    vk::to_string(format).c_str());
-        return;
-    }
-    const VkDeviceSize size = VkDeviceSize(width) * height * bpp;
-    const VkBufferCreateInfo buffer_ci{
-        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-        .size = size,
-        .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-    };
-    const VmaAllocationCreateInfo alloc_ci{
-        .flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT,
-        .usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
-    };
-    VkBuffer buffer{};
-    VmaAllocation allocation{};
-    VmaAllocationInfo info{};
-    if (vmaCreateBuffer(instance.GetAllocator(), &buffer_ci, &alloc_ci, &buffer, &allocation,
-                        &info) != VK_SUCCESS) {
-        return;
-    }
-    const vk::ImageLayout copy_layout =
-        layout == vk::ImageLayout::eGeneral ? layout : vk::ImageLayout::eTransferSrcOptimal;
-    const auto transition = [&](vk::ImageLayout from, vk::ImageLayout to) {
-        if (from == to) {
-            return;
-        }
-        const vk::ImageMemoryBarrier2 b{
-            .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
-            .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
-            .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
-            .dstAccessMask = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
-            .oldLayout = from,
-            .newLayout = to,
-            .image = image,
-            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
-        };
-        cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &b});
-    };
-    const vk::MemoryBarrier2 before{
-        .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
-        .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
-        .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
-        .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
-    };
-    cmdbuf.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &before});
-    transition(layout, copy_layout);
-    const vk::BufferImageCopy region{
-        .imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
-        .imageExtent = {width, height, 1},
-    };
-    cmdbuf.copyImageToBuffer(image, copy_layout, vk::Buffer{buffer}, region);
-    transition(copy_layout, layout);
-    const bool ten_bit = format == vk::Format::eA2R10G10B10UnormPack32 ||
-                         format == vk::Format::eA2B10G10R10UnormPack32;
-    const bool float11 = format == vk::Format::eB10G11R11UfloatPack32;
-    scheduler.DeferPriorityOperation([allocator = instance.GetAllocator(), buffer, allocation,
-                                      info, width, height, bpp, ten_bit, float11, name,
-                                      format_name = vk::to_string(format)] {
-        vmaInvalidateAllocation(allocator, allocation, 0, VK_WHOLE_SIZE);
-        const auto* data = static_cast<const u8*>(info.pMappedData);
-        const u64 pixels = u64(width) * height;
-        u64 lit = 0, sum = 0;
-        for (u64 i = 0; i < pixels; ++i) {
-            const u8* px = data + i * bpp;
-            bool on;
-            if (bpp == 8) {
-                u64 v;
-                std::memcpy(&v, px, 8);
-                on = (v & 0x0000ffffffffffffull) != 0;
-            } else {
-                u32 v;
-                std::memcpy(&v, px, 4);
-                on = (v & (float11 ? 0xffffffffu : ten_bit ? 0x3fffffffu : 0x00ffffffu)) != 0;
-            }
-            lit += on;
-            sum += px[bpp == 8 ? 1 : 1];
-        }
-        std::printf("Display check: %s %ux%u %s: %.1f%% of pixels not black, mean of byte 1 "
-                    "%.1f\n",
-                    name, width, height, format_name.c_str(), 100.0 * double(lit) / double(pixels),
-                    double(sum) / double(pixels));
-        vmaDestroyBuffer(allocator, buffer, allocation);
-    });
-}
-} // namespace
 
 Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& attribute,
                                VAddr cpu_address) {
@@ -472,23 +342,10 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
         .layerCount = VK_REMAINING_ARRAY_LAYERS,
     };
 
-    const auto pre_barrier = vk::ImageMemoryBarrier2{
-        .srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-        .srcAccessMask = vk::AccessFlagBits2::eColorAttachmentRead,
-        .dstStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-        .dstAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
-        .oldLayout = vk::ImageLayout::eUndefined,
-        .newLayout = vk::ImageLayout::eColorAttachmentOptimal,
-        .image = frame->image,
-        .subresourceRange{frame_subresources},
-    };
-
+    // bbport: recorded like draws, on the recording threads. CommandBuffer() would first wait
+    // for them to record everything handed over before (~90 us a frame of the draw recording
+    // thread) and then submit from this thread.
     draw_scheduler.EndRendering();
-    const auto cmdbuf = draw_scheduler.CommandBuffer();
-    cmdbuf.pipelineBarrier2(vk::DependencyInfo{
-        .imageMemoryBarrierCount = 1,
-        .pImageMemoryBarriers = &pre_barrier,
-    });
 
     VideoCore::ImageViewInfo view_info{};
     view_info.format = GetFrameViewFormat(attribute.attrib.pixel_format);
@@ -509,63 +366,81 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
         }));
         draw_scheduler.DeferOperation([device, image_view] { device.destroyImageView(image_view); });
         image_size = vk::Extent2D{display.width, display.height};
-        const vk::ImageMemoryBarrier2 to_read{
-            .srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-            .srcAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
-            .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
-            .dstAccessMask = vk::AccessFlagBits2::eShaderRead,
-            .oldLayout = vk::ImageLayout::eGeneral,
-            .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-            .image = display.image,
-            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
-        };
-        cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &to_read});
+        draw_scheduler.Record([image = display.image](vk::CommandBuffer cmdbuf) {
+            const vk::ImageMemoryBarrier2 to_read{
+                .srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                .srcAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
+                .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+                .dstAccessMask = vk::AccessFlagBits2::eShaderRead,
+                .oldLayout = vk::ImageLayout::eGeneral,
+                .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+                .image = image,
+                .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+            };
+            cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &to_read});
+        });
     } else {
         auto& image = texture_cache.GetImage(image_id);
         image_view = *image.FindView(view_info).image_view;
         image_size = vk::Extent2D{image.info.size.width, image.info.size.height};
+        // bbport: BB_PRESENT_DUMP_TRIGGER for the game's own display buffer too.
+        if (auto& upscaler = rasterizer->GetUpscaler(); upscaler.PresentDumpDue()) {
+            runtime.Transit(&image, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eTransfer,
+                            vk::AccessFlagBits2::eTransferRead);
+            runtime.FlushBarriers();
+            upscaler.DumpPresented(image.GetImage(), image_size.width, image_size.height,
+                                   view_info.format);
+        }
         runtime.Transit(&image, vk::ImageLayout::eShaderReadOnlyOptimal,
                         vk::PipelineStageFlagBits2::eFragmentShader,
                         vk::AccessFlagBits2::eShaderRead);
         runtime.FlushBarriers();
     }
     expected_ratio = static_cast<float>(image_size.width) / static_cast<float>(image_size.height);
-    const bool display_check = DisplayCheckDue();
-    if (display_check) {
-        if (upscaled) {
-            CheckImage(instance, draw_scheduler, cmdbuf, display.image,
-                       vk::ImageLayout::eShaderReadOnlyOptimal, display.format, display.width,
-                       display.height, "display (port-drawn)");
-        } else {
-            auto& image = texture_cache.GetImage(image_id);
-            CheckImage(instance, draw_scheduler, cmdbuf, image.GetImage(),
-                       vk::ImageLayout::eShaderReadOnlyOptimal, image.info.pixel_format,
-                       image.info.size.width, image.info.size.height, "display (guest buffer)");
-        }
-    }
-
-    {
-        const Breadcrumbs::Scope crumb{cmdbuf, draw_scheduler.CrumbStream(), "presenter FSR"};
-        image_view = fsr_pass.Render(cmdbuf, image_view, image_size, {frame->width, frame->height},
-                                     fsr_settings, frame->is_hdr);
-    }
-
     // Vulkan has no sRGB variant of the 10-bit format, so an A2R10G10B10Srgb buffer reaches
     // the post process pass still sRGB encoded and has to be decoded there instead.
     pp_settings.srgb_input =
         attribute.attrib.pixel_format == Libraries::VideoOut::PixelFormat::A2R10G10B10Srgb;
-    {
-        const Breadcrumbs::Scope crumb{cmdbuf, draw_scheduler.CrumbStream(),
-                                       "presenter post process"};
-        pp_pass.Render(cmdbuf, image_view, image_size, *frame, pp_settings);
-    }
-    if (display_check) {
-        CheckImage(instance, draw_scheduler, cmdbuf, frame->image, vk::ImageLayout::eGeneral,
-                   swapchain.GetSurfaceFormat().format, frame->width, frame->height,
-                   "frame after post pass");
-    }
 
-
+    // Numbered here, in command order; marked where the commands are recorded.
+    const u32 stream = draw_scheduler.CrumbStream();
+    const bool crumbs = Breadcrumbs::Enabled();
+    const u32 fsr_crumb = crumbs ? Breadcrumbs::Note(stream, {.name = "presenter FSR"}) : 0;
+    const u32 pp_crumb = crumbs ? Breadcrumbs::Note(stream, {.name = "presenter post process"}) : 0;
+    draw_scheduler.Record([this, frame, image_view, image_size, frame_subresources, stream,
+                           fsr_crumb, pp_crumb, fsr = fsr_settings,
+                           pp = pp_settings](vk::CommandBuffer cmdbuf) {
+        // Frames of different submissions may be recorded on two threads at once.
+        std::scoped_lock lock{passes_mutex};
+        const auto pre_barrier = vk::ImageMemoryBarrier2{
+            .srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+            .srcAccessMask = vk::AccessFlagBits2::eColorAttachmentRead,
+            .dstStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+            .dstAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
+            .oldLayout = vk::ImageLayout::eUndefined,
+            .newLayout = vk::ImageLayout::eColorAttachmentOptimal,
+            .image = frame->image,
+            .subresourceRange{frame_subresources},
+        };
+        cmdbuf.pipelineBarrier2(vk::DependencyInfo{
+            .imageMemoryBarrierCount = 1,
+            .pImageMemoryBarriers = &pre_barrier,
+        });
+        if (fsr_crumb) {
+            Breadcrumbs::Mark(cmdbuf, stream, fsr_crumb, false);
+        }
+        const vk::ImageView input = fsr_pass.Render(cmdbuf, image_view, image_size,
+                                                    {frame->width, frame->height}, fsr,
+                                                    frame->is_hdr);
+        if (fsr_crumb) {
+            Breadcrumbs::Mark(cmdbuf, stream, fsr_crumb, true);
+            Breadcrumbs::Mark(cmdbuf, stream, pp_crumb, false);
+        }
+        pp_pass.Render(cmdbuf, input, image_size, *frame, pp);
+        if (pp_crumb) {
+            Breadcrumbs::Mark(cmdbuf, stream, pp_crumb, true);
+        }
+    });
 
     // Flush frame creation commands.
     BbStats::frame_number.fetch_add(1, std::memory_order_relaxed); // bbport: game frames shown
@@ -682,9 +557,19 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         }
     };
 
-    // Recreate the swapchain if the window was resized.
-    if (window.GetWidth() != swapchain.GetWidth() || window.GetHeight() != swapchain.GetHeight()) {
+    // bbport: nothing to present to while the window is minimised (a 0x0 surface, issue #31).
+    if (window.GetWidth() == 0 || window.GetHeight() == 0) {
+        free_frame();
+        return;
+    }
+    // Recreate the swapchain if the window was resized (or was minimised at the last try).
+    if (window.GetWidth() != swapchain.GetWidth() || window.GetHeight() != swapchain.GetHeight() ||
+        !swapchain.IsPresentable()) {
         swapchain.Recreate(window.GetWidth(), window.GetHeight());
+        if (!swapchain.IsPresentable()) {
+            free_frame();
+            return;
+        }
     }
 
     if (!swapchain.AcquireNextImage()) {
@@ -708,6 +593,8 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     const vk::Image swapchain_image = swapchain.Image();
     auto& scheduler = present_scheduler;
     const auto cmdbuf = scheduler.CommandBuffer();
+    DumpFinalFrameIfDue(instance, scheduler, cmdbuf, frame->image, frame->width, frame->height,
+                        swapchain.GetSurfaceFormat().format);
 
     if (EmulatorSettings.IsVkHostMarkersEnabled()) {
         cmdbuf.beginDebugUtilsLabelEXT(vk::DebugUtilsLabelEXT{
@@ -815,6 +702,11 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
 
     // Flush vulkan commands.
 
+    // bbport: the frame's submission goes out from a recording thread (BB_ASYNC_SUBMIT); this
+    // one, waiting for it on the same queue, must not get there first.
+    if (frame->ready_semaphore == draw_scheduler.GetWorkSemaphore()->Handle()) {
+        draw_scheduler.WaitSubmitted(frame->ready_tick);
+    }
     SubmitInfo info{};
     info.AddWait(swapchain.GetImageAcquiredSemaphore());
     info.AddWait(frame->ready_semaphore, frame->ready_tick);
@@ -879,6 +771,9 @@ Frame* Presenter::GetRenderFrame() {
 }
 
 void Presenter::SetExpectedGameSize(s32 width, s32 height) {
+    if (width <= 0 || height <= 0) {
+        return; // minimised: keep the last size (a 0x0 frame image cannot be made, issue #31)
+    }
     const float ratio = (float)width / (float)height;
 
     expected_frame_height = height;

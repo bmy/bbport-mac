@@ -241,11 +241,6 @@ private:
             handler(context, reinterpret_cast<const u8*>(header + 1), header->payload);
             busy_cycles.fetch_add(BbCpu::Ticks() - start, std::memory_order_relaxed);
             at += header->size;
-            // BB_FAST_FENCES: guest copies batched here go to the copy threads before a drain
-            // can see the pipe empty (a submission or a fence on stage A then covers them).
-            if (published.load(std::memory_order_acquire) == at && flush_when_idle) {
-                flush_when_idle();
-            }
             consumed_packets.fetch_add(1, std::memory_order_release);
             consumed.store(at, std::memory_order_release);
         }
@@ -253,11 +248,6 @@ private:
 
     static inline thread_local bool on_stage_b = false;
 
-public:
-    /// Run on stage B when it has caught up with stage A (set once, before the first packet).
-    static inline void (*flush_when_idle)() = nullptr;
-
-private:
     Handler handler;
     void* context;
     std::unique_ptr<u8[]> ring;

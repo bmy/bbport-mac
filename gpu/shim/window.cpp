@@ -189,11 +189,12 @@ bool WindowSDL::PollEvents() {
     return is_open;
 }
 
-// Issue #3: the OS cursor over the game. Hidden in fullscreen (the settings menu draws its own),
-// and in a window after 3 s without moving the mouse.
+// Issue #3: the OS cursor over the game. Hidden in fullscreen, and in a window after 3 s without
+// moving the mouse; always shown while the settings menu is open.
 void WindowSDL::UpdateCursor() {
     const bool fullscreen = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0;
-    const bool hide = fullscreen || SDL_GetTicks() - last_mouse_motion_ms > 3000;
+    const bool hide = !BbOverlay::MenuOpen() &&
+                      (fullscreen || SDL_GetTicks() - last_mouse_motion_ms > 3000);
     if (hide != cursor_hidden) {
         cursor_hidden = hide;
         hide ? SDL_HideCursor() : SDL_ShowCursor();

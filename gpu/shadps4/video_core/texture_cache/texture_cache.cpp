@@ -1027,6 +1027,13 @@ void TextureCache::GarbageCollectImages() {
         }();
         if (instance.IsIntegrated() || forced_budget) {
             const u64 budget = forced_budget ? forced_budget : instance.GetDeviceMemoryBudgetNow();
+            static bool budget_logged = false;
+            if (!budget_logged && budget != 0) {
+                budget_logged = true;
+                std::printf("Texture cache: GPU memory budget %llu MiB, collection from %llu MiB\n",
+                            (unsigned long long)(budget >> 20),
+                            (unsigned long long)((budget / 10 * 7) >> 20));
+            }
             if (budget != 0) {
                 trigger_gc_memory = budget / 10 * 7;
                 pressure_gc_memory = budget / 100 * 85;

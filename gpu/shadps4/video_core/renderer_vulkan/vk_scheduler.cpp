@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "bbport_cpu.h"
 #include <mutex>
 #include <string_view>
 #include <string>
@@ -691,7 +692,7 @@ void Scheduler::RecorderThread(std::stop_token stoken, u32 index) {
             for (u32 spins = 1; worker.queued.load(std::memory_order_acquire) == 0 &&
                                 ordered_queued.load(std::memory_order_acquire) == 0;
                  ++spins) {
-                __builtin_ia32_pause();
+                BbCpu::Pause();
                 // The clock is read every 256 pauses, not per iteration.
                 if (!(spins & 255) &&
                     (stoken.stop_requested() || std::chrono::steady_clock::now() >= spin_until)) {

@@ -13,7 +13,7 @@
 #include <ucontext.h>
 #endif
 #include <unistd.h>
-#include <x86intrin.h>
+#include "bbport_cpu.h"
 #include "bbport_threads.h"
 
 namespace BbWriteLog {
@@ -63,7 +63,7 @@ void Note(std::uint64_t address, const void* data, std::uint64_t size, Source so
 
 void Record(std::uint64_t address, const void* data, std::uint64_t size, Source source) {
     static thread_local const std::uint32_t tid = static_cast<std::uint32_t>(BbThreads::HostTid());
-    Entry e{address, size, 0, __rdtsc(), source, tid};
+    Entry e{address, size, 0, BbCpu::Ticks(), source, tid};
     std::memcpy(&e.first, data, size < 8 ? size : 8);
     Push(ring, head, e);
     // Only small writes are scanned: scanning downloads of megabytes delays them enough to hide
@@ -90,7 +90,7 @@ void DumpRange(std::uint64_t address, std::uint64_t size) {
     }
     const char* sources[] = {"backing",      "WriteData",           "fence",
                              "EOP (decoded)", "WriteData (decoded)", "EOS (decoded)", "DmaData"};
-    const std::uint64_t now = __rdtsc(), n = head.load();
+    const std::uint64_t now = BbCpu::Ticks(), n = head.load();
     int shown = 0;
     for (std::uint64_t i = n; i-- > (n > Size ? n - Size : 0) && shown < 64;) {
         const Entry& e = ring[i % Size];
@@ -111,7 +111,12 @@ void DumpRange(std::uint64_t address, std::uint64_t size) {
 extern "C" void bbgpu_dump_guest_writes(void* ucontext) {
     using namespace BbWriteLog;
     const auto* uc = static_cast<const ucontext_t*>(ucontext);
-#ifdef __APPLE__
+#if defined(__APPLE__) && defined(__aarch64__)
+    // The native GPU process sees no guest faults: host registers, for the dump's shape only.
+    const auto& g = uc->uc_mcontext->__ss;
+    const std::uint64_t regs[] = {g.__x[0], g.__x[1], g.__x[2], g.__x[3],
+                                  g.__x[4], g.__x[5], g.__x[6], g.__x[7]};
+#elif defined(__APPLE__)
     const auto& g = uc->uc_mcontext->__ss;
     const std::uint64_t regs[] = {g.__rax, g.__rbx, g.__rcx, g.__rdx, g.__rsi, g.__rdi, g.__r14, g.__r15};
 #else
@@ -131,7 +136,7 @@ extern "C" void bbgpu_dump_guest_writes(void* ucontext) {
     }
     const char* sources[] = {"backing",      "WriteData",           "fence",
                              "EOP (decoded)", "WriteData (decoded)", "EOS (decoded)", "DmaData"};
-    const std::uint64_t now = __rdtsc();
+    const std::uint64_t now = BbCpu::Ticks();
     const auto print = [&](const Entry& e, const char* what) {
         std::fprintf(stderr,
                      "Write log: %s %s %#llx +%llu first %#llx tid %u, %.3f s before the fault\n",

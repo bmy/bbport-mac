@@ -4,6 +4,7 @@
 // the live allocations are counted per call site in the game (the first two return addresses into
 // its code on the stack). Report() prints the sites whose live bytes grew since the last report:
 // what leaks when the guest heap runs out.
+#include "bbport_cpu.h"
 #include "bbport_heap_sites.h"
 
 #include <algorithm>
@@ -66,7 +67,7 @@ std::atomic<u64> release_ok{0}, release_busy{0}, release_missing{0}, release_oth
 struct Guard {
     Guard() {
         while (lock.test_and_set(std::memory_order_acquire)) {
-            __builtin_ia32_pause();
+            BbCpu::Pause();
         }
     }
     ~Guard() {

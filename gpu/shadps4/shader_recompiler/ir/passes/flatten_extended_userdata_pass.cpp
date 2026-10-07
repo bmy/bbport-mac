@@ -4,9 +4,18 @@
 #include <unordered_map>
 #include <boost/container/flat_map.hpp>
 #include <queue>
+#include "common/arch.h"
+#include <algorithm>
+#include <atomic>
+#include <cstdlib>
+#include <cstring>
+#include <memory>
+#include <mutex>
+#include <vector>
+#ifdef ARCH_X86_64
 #include <xbyak/xbyak.h>
 #include <xbyak/xbyak_util.h>
-#include "common/arch.h"
+#endif
 #include "common/decoder.h"
 #include "common/io_file.h"
 #include "common/logging/log.h"
@@ -22,6 +31,24 @@
 #include "shader_recompiler/ir/reg.h"
 #include "shader_recompiler/ir/srt_gvn_table.h"
 #include "shader_recompiler/ir/value.h"
+
+namespace Shader::Optimization {
+/// bbport: the portable SRT walker's instructions, three words each (op, a, b).
+enum class SrtOp : u32 {
+    End,
+    PushPtrImm, ///< pointer stack <- pointer; pointer = load64(pointer + a * 4) & 48 bits
+    PushPtrAcc, ///< the same at dword offset acc
+    PopPtr,
+    CopyImm,    ///< flat[b] = load32(pointer + a * 4)
+    CopyAcc,    ///< flat[b] = load32(pointer + acc * 4)
+    AccFlat,    ///< acc = flat[a] (user data, or a value flattened before)
+    AccImm,     ///< acc = a
+    Push,       ///< value stack <- acc
+    Add, Sub, Mul, Shl, Shr, And, Or, Xor, UMin, UMax, ///< acc = op(popped, acc)
+    Not,        ///< acc = ~acc
+    Bfe,        ///< acc = bitfield of value at offset, count (value, offset popped; count = acc)
+};
+} // namespace Shader::Optimization
 
 #ifdef ARCH_X86_64
 
@@ -120,6 +147,11 @@ static bool SrtWalkerSignalHandler(void* context, void* fault_address) {
     return true;
 }
 
+#else
+// bbport: the portable SRT walker (bytecode run by RunSrtWalker) needs none of the above.
+namespace {
+#endif // ARCH_X86_64
+
 using namespace Shader;
 
 struct PassInfo {
@@ -217,6 +249,7 @@ static inline void SetFlatbufOffset(IR::Inst* inst, u16 offset) {
     UNREACHABLE_MSG("Instruction not supported");
 }
 
+#ifdef ARCH_X86_64
 static bool ComputeOffset(Xbyak::CodeGenerator& c, Xbyak::Reg32 reg, PassInfo& pass_info,
                           const IR::Value& off_dw);
 
@@ -485,6 +518,8 @@ static bool EmitComputeOffsetBitFieldUExtract(Xbyak::CodeGenerator& c, Xbyak::Re
     return true;
 }
 
+#endif // ARCH_X86_64
+
 static bool IsAllowedOffsetInstruction(const IR::Inst* inst) {
     switch (inst->GetOpcode()) {
     case IR::Opcode::GetUserData:
@@ -508,6 +543,7 @@ static bool IsAllowedOffsetInstruction(const IR::Inst* inst) {
     }
 }
 
+#ifdef ARCH_X86_64
 static bool ComputeOffset(Xbyak::CodeGenerator& c, Xbyak::Reg32 reg, PassInfo& pass_info,
                           const IR::Value& off_dw) {
     ASSERT(reg != ecx && reg != edx);
@@ -669,6 +705,201 @@ static void GenerateSrtProgram(Info& info, PassInfo& pass_info) {
     }
 
     info.srt_info.flattened_bufsize_dw = pass_info.dst_off_dw;
+}
+
+#endif // ARCH_X86_64
+
+// bbport: the walk as bytecode instead of x86 code, for hosts other than x86-64 (the native
+// arm64 GPU process on macOS, docs/macos-native-gpu.md). On x86-64, BB_SRT_CHECK=1 also builds
+// it next to the x86 code, and every walk compares the two (RunSrtWalker). Same walk, same flattened layout: the
+// x86 code keeps the SRT pointer in rdi, the flat buffer in rsi, offsets in a 32-bit register
+// with a stack for the second operand; here a pointer stack, an accumulator and a value stack.
+// RunSrtWalker interprets it.
+
+static void Emit(std::vector<u32>& code, SrtOp op, u32 a = 0, u32 b = 0) {
+    code.push_back(static_cast<u32>(op));
+    code.push_back(a);
+    code.push_back(b);
+}
+
+static bool ComputeOffset(std::vector<u32>& code, PassInfo& pass_info, const IR::Value& off_dw);
+
+/// Leaves the value in the accumulator.
+static bool EmitValue(std::vector<u32>& code, PassInfo& pass_info, const IR::Value& value) {
+    if (value.IsImmediate()) {
+        Emit(code, SrtOp::AccImm, value.U32());
+        return true;
+    }
+    return ComputeOffset(code, pass_info, value);
+}
+
+/// acc = op(arg0, arg1): arg0 goes to the value stack while arg1 is computed.
+static bool EmitBinary(std::vector<u32>& code, PassInfo& pass_info, IR::Inst* inst, SrtOp op) {
+    ASSERT(!inst->AreAllArgsImmediates());
+    if (!EmitValue(code, pass_info, inst->Arg(0))) {
+        return false;
+    }
+    Emit(code, SrtOp::Push);
+    if (!EmitValue(code, pass_info, inst->Arg(1))) {
+        return false;
+    }
+    Emit(code, op);
+    return true;
+}
+
+static bool ComputeOffset(std::vector<u32>& code, PassInfo& pass_info, const IR::Value& off_dw) {
+    auto inst = off_dw.Inst();
+    switch (inst->GetOpcode()) {
+    case IR::Opcode::GetUserData:
+        // The flat buffer starts with the user data registers.
+        Emit(code, SrtOp::AccFlat, static_cast<u32>(inst->Arg(0).ScalarReg()));
+        return true;
+    case IR::Opcode::ReadConst:
+    case IR::Opcode::ReadConstBuffer:
+        if (u16 offset = GetFlatbufOffset(pass_info.DeduplicateInstruction(inst)); offset != 0) {
+            Emit(code, SrtOp::AccFlat, offset);
+            return true;
+        }
+        return false;
+    case IR::Opcode::IAdd32:
+        return EmitBinary(code, pass_info, inst, SrtOp::Add);
+    case IR::Opcode::ISub32:
+        return EmitBinary(code, pass_info, inst, SrtOp::Sub);
+    case IR::Opcode::IMul32:
+        return EmitBinary(code, pass_info, inst, SrtOp::Mul);
+    case IR::Opcode::ShiftLeftLogical32:
+        return EmitBinary(code, pass_info, inst, SrtOp::Shl);
+    case IR::Opcode::ShiftRightLogical32:
+        return EmitBinary(code, pass_info, inst, SrtOp::Shr);
+    case IR::Opcode::BitwiseAnd32:
+        return EmitBinary(code, pass_info, inst, SrtOp::And);
+    case IR::Opcode::BitwiseOr32:
+        return EmitBinary(code, pass_info, inst, SrtOp::Or);
+    case IR::Opcode::BitwiseXor32:
+        return EmitBinary(code, pass_info, inst, SrtOp::Xor);
+    case IR::Opcode::UMin32:
+        return EmitBinary(code, pass_info, inst, SrtOp::UMin);
+    case IR::Opcode::UMax32:
+        return EmitBinary(code, pass_info, inst, SrtOp::UMax);
+    case IR::Opcode::BitwiseNot32:
+        ASSERT(!inst->AreAllArgsImmediates());
+        if (!EmitValue(code, pass_info, inst->Arg(0))) {
+            return false;
+        }
+        Emit(code, SrtOp::Not);
+        return true;
+    case IR::Opcode::BitFieldUExtract:
+        ASSERT(!inst->AreAllArgsImmediates());
+        for (u32 arg = 0; arg < 3; ++arg) {
+            if (!EmitValue(code, pass_info, inst->Arg(arg))) {
+                return false;
+            }
+            if (arg < 2) {
+                Emit(code, SrtOp::Push);
+            }
+        }
+        Emit(code, SrtOp::Bfe);
+        return true;
+    default:
+        LOG_ERROR(Render_Recompiler, "Unexpected instruction for offset computation, {}",
+                  magic_enum::enum_name(inst->GetOpcode()));
+        return false;
+    }
+}
+
+static void VisitPointer(const IR::Value& off_dw, IR::Inst* subtree, PassInfo& pass_info,
+                         std::vector<u32>& code) {
+    if (subtree->GetOpcode() == IR::Opcode::ReadConst && subtree->Flags<u16>() == 0 ||
+        subtree->GetOpcode() == IR::Opcode::ReadConstBuffer &&
+            subtree->Flags<IR::BufferInstInfo>().flatbuf_off_dw == 0) {
+        return;
+    }
+    // A failed offset leaves nothing behind (the x86 path's push would stay unbalanced).
+    std::vector<u32> push;
+    if (off_dw.IsImmediate()) {
+        Emit(push, SrtOp::PushPtrImm, off_dw.U32());
+    } else if (ComputeOffset(push, pass_info, off_dw)) {
+        Emit(push, SrtOp::PushPtrAcc);
+    } else {
+        LOG_ERROR(Render_Recompiler, "Failed to compute offset for SRT walker");
+        return;
+    }
+    code.insert(code.end(), push.begin(), push.end());
+    PassInfo::PtrUserList* use_list = pass_info.GetUsesAsPointer(subtree);
+    ASSERT(use_list);
+
+    // As on x86: this level's data first, contiguous in the flattened buffer, then children.
+    for (auto [src_off_dw, use] : *use_list) {
+        if (src_off_dw.IsImmediate()) {
+            Emit(code, SrtOp::CopyImm, src_off_dw.U32(), pass_info.dst_off_dw);
+        } else {
+            std::vector<u32> offset;
+            if (!ComputeOffset(offset, pass_info, src_off_dw)) {
+                LOG_ERROR(Render_Recompiler, "Failed to compute offset for SRT walker");
+                continue;
+            }
+            code.insert(code.end(), offset.begin(), offset.end());
+            Emit(code, SrtOp::CopyAcc, 0, pass_info.dst_off_dw);
+        }
+        SetFlatbufOffset(use, pass_info.dst_off_dw);
+        pass_info.dst_off_dw++;
+    }
+    for (const auto [src_off_dw, use] : *use_list) {
+        if (pass_info.GetUsesAsPointer(use)) {
+            VisitPointer(src_off_dw, use, pass_info, code);
+        }
+    }
+    Emit(code, SrtOp::PopPtr);
+}
+
+/// The bytecode of the walk; assigns the flattened offsets exactly as the x86 generator does
+/// (same traversal), so running both on one program gives one layout.
+static std::vector<u32> GenerateSrtBytecode(PassInfo& pass_info) {
+    pass_info.dst_off_dw = NUM_USER_DATA_REGS;
+    std::vector<u32> code;
+    for (const auto& [sgpr_base, root] : pass_info.srt_roots) {
+        VisitPointer(IR::Value(static_cast<u32>(sgpr_base)), root, pass_info, code);
+    }
+    Emit(code, SrtOp::End);
+    return code;
+}
+
+static bool SrtCheckEnabled() {
+    static const bool on = [] {
+        const char* env = std::getenv("BB_SRT_CHECK");
+        return env && env[0] == '1';
+    }();
+    return on;
+}
+
+static void GenerateSrt(Info& info, PassInfo& pass_info) {
+    if (pass_info.srt_roots.empty()) {
+        return;
+    }
+#ifdef ARCH_X86_64
+    if (SrtCheckEnabled()) {
+        const u16 start = NUM_USER_DATA_REGS;
+        ASSERT(start == info.srt_info.flattened_bufsize_dw);
+        const auto code = GenerateSrtBytecode(pass_info);
+        const u16 bytecode_end = pass_info.dst_off_dw;
+        info.srt_info.check_code = RegisterSrtBytecode(code.data(), code.size());
+        GenerateSrtProgram(info, pass_info); // assigns the same offsets again
+        if (pass_info.dst_off_dw != bytecode_end) {
+            LOG_ERROR(Render_Recompiler, "SRT check: bytecode flattens {} dwords, x86 code {}",
+                      bytecode_end, pass_info.dst_off_dw);
+            info.srt_info.check_code = nullptr;
+        }
+        return;
+    }
+    GenerateSrtProgram(info, pass_info);
+#else
+    ASSERT(NUM_USER_DATA_REGS == info.srt_info.flattened_bufsize_dw);
+    const auto code = GenerateSrtBytecode(pass_info);
+    info.srt_info.walker_func = RegisterWalkerCode(reinterpret_cast<const u8*>(code.data()),
+                                                   code.size() * sizeof(u32));
+    info.srt_info.walker_func_size = code.size() * sizeof(u32);
+    info.srt_info.flattened_bufsize_dw = pass_info.dst_off_dw;
+#endif
 }
 
 static bool IsReadConstSource(const IR::Value base) {
@@ -846,7 +1077,7 @@ void FlattenExtendedUserdataPass(IR::Program& program) {
         }
     }
 
-    GenerateSrtProgram(program.info, pass_info);
+    GenerateSrt(program.info, pass_info);
 
     // Assign offsets to duplicate readconsts
     for (IR::Inst* readconst : all_readconsts) {
@@ -860,22 +1091,175 @@ void FlattenExtendedUserdataPass(IR::Program& program) {
 
 } // namespace Shader::Optimization
 
-#else
-
 namespace Shader {
 
+namespace {
+std::mutex g_walker_code_mutex;
+std::vector<std::unique_ptr<u32[]>> g_walker_code; // never freed, as the x86 code arena
+} // namespace
+
+const u32* RegisterSrtBytecode(const u32* words, size_t count) {
+    ASSERT(count % 3 == 0);
+    auto copy = std::make_unique<u32[]>(count);
+    std::memcpy(copy.get(), words, count * sizeof(u32));
+    std::scoped_lock lock{g_walker_code_mutex};
+    g_walker_code.push_back(std::move(copy));
+    return g_walker_code.back().get();
+}
+
+#ifndef ARCH_X86_64
 PFN_SrtWalker RegisterWalkerCode(const u8* ptr, size_t size) {
-    UNREACHABLE_MSG("RegisterWalkerCode unimplemented for target architecture.");
+    // Bytecode, not machine code: only RunSrtWalker uses the pointer.
+    ASSERT(size % (3 * sizeof(u32)) == 0);
+    std::vector<u32> words(size / sizeof(u32));
+    std::memcpy(words.data(), ptr, size);
+    return reinterpret_cast<PFN_SrtWalker>(
+        const_cast<u32*>(RegisterSrtBytecode(words.data(), words.size())));
+}
+#endif
+
+bool (*srt_guest_readable)(u64 address, u64 size) = nullptr;
+
+namespace {
+/// A table pointer can be stale or garbage: an unreadable load gives 0, as the x86 walker's
+/// fault handler makes it (that one patches the load for good; here each walk checks).
+template <typename T>
+T LoadGuest(u64 address) {
+    if (srt_guest_readable && !srt_guest_readable(address, sizeof(T))) {
+        return 0;
+    }
+    T value;
+    std::memcpy(&value, reinterpret_cast<const void*>(address), sizeof(T));
+    return value;
 }
 
-namespace Optimization {
-
-void FlattenExtendedUserdataPass(IR::Program& program) {
-    UNREACHABLE_MSG("FlattenExtendedUserdataPass unimplemented for target architecture.");
+void InterpretSrt(const u32* program, const u32* user_data, u32* flat) {
+    using Optimization::SrtOp;
+    constexpr u64 PointerMask = 0xFFFFFFFFFFFFULL;
+    constexpr u32 StackSize = 64;
+    // The first level reads the user data (host memory); deeper ones guest memory.
+    u64 pointer = reinterpret_cast<u64>(user_data);
+    u64 pointers[StackSize];
+    u32 values[StackSize];
+    u32 num_pointers = 0, num_values = 0, acc = 0;
+    const auto pop = [&] { return num_values ? values[--num_values] : 0u; };
+    for (const u32* code = program;; code += 3) {
+        switch (static_cast<SrtOp>(code[0])) {
+        case SrtOp::End:
+            return;
+        case SrtOp::PushPtrImm:
+        case SrtOp::PushPtrAcc: {
+            if (num_pointers == StackSize) {
+                return;
+            }
+            const u64 offset = code[0] == static_cast<u32>(SrtOp::PushPtrImm)
+                                   ? u64(code[1]) << 2
+                                   : u64(u32(acc << 2));
+            pointers[num_pointers++] = pointer;
+            const u64 address = pointer + offset;
+            pointer = (num_pointers == 1 ? *reinterpret_cast<const u64*>(address)
+                                         : LoadGuest<u64>(address)) &
+                      PointerMask;
+            break;
+        }
+        case SrtOp::PopPtr:
+            pointer = num_pointers ? pointers[--num_pointers] : pointer;
+            break;
+        case SrtOp::CopyImm:
+            flat[code[2]] = LoadGuest<u32>(pointer + (u64(code[1]) << 2));
+            break;
+        case SrtOp::CopyAcc:
+            flat[code[2]] = LoadGuest<u32>(pointer + u64(u32(acc << 2)));
+            break;
+        case SrtOp::AccFlat:
+            acc = flat[code[1]];
+            break;
+        case SrtOp::AccImm:
+            acc = code[1];
+            break;
+        case SrtOp::Push:
+            if (num_values == StackSize) {
+                return;
+            }
+            values[num_values++] = acc;
+            break;
+        case SrtOp::Add:
+            acc = pop() + acc;
+            break;
+        case SrtOp::Sub:
+            acc = pop() - acc;
+            break;
+        case SrtOp::Mul:
+            acc = pop() * acc;
+            break;
+        case SrtOp::Shl:
+            acc = pop() << (acc & 31);
+            break;
+        case SrtOp::Shr:
+            acc = pop() >> (acc & 31);
+            break;
+        case SrtOp::And:
+            acc = pop() & acc;
+            break;
+        case SrtOp::Or:
+            acc = pop() | acc;
+            break;
+        case SrtOp::Xor:
+            acc = pop() ^ acc;
+            break;
+        case SrtOp::UMin:
+            acc = std::min(pop(), acc);
+            break;
+        case SrtOp::UMax:
+            acc = std::max(pop(), acc);
+            break;
+        case SrtOp::Not:
+            acc = ~acc;
+            break;
+        case SrtOp::Bfe: {
+            const u32 count = acc, offset = pop(), value = pop();
+            acc = (value >> (offset & 31)) & (count >= 32 ? ~0u : (1u << count) - 1);
+            break;
+        }
+        default:
+            UNREACHABLE_MSG("Bad SRT walker opcode {}", code[0]);
+        }
+    }
 }
+} // namespace
 
-} // namespace Optimization
+void RunSrtWalker(const PersistentSrtInfo& srt, const u32* user_data, u32* flat) {
+#ifdef ARCH_X86_64
+    if (!srt.check_code) {
+        srt.walker_func(user_data, flat);
+        return;
+    }
+    // BB_SRT_CHECK: the bytecode on a copy, compared with the x86 code's result.
+    const u32 size = srt.flattened_bufsize_dw;
+    std::vector<u32> expected(flat, flat + size);
+    InterpretSrt(srt.check_code, user_data, expected.data());
+    srt.walker_func(user_data, flat);
+    static std::atomic<u64> walks{0}, mismatches{0};
+    const u64 walk = walks.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (std::memcmp(expected.data(), flat, size * sizeof(u32)) != 0) {
+        const u64 count = mismatches.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (count <= 16) {
+            u32 first = 0;
+            while (first < size && expected[first] == flat[first]) {
+                ++first;
+            }
+            LOG_ERROR(Render_Recompiler,
+                      "SRT check: walk {} differs at dword {} of {}: bytecode {:#x}, x86 {:#x}",
+                      walk, first, size, expected[first], flat[first]);
+        }
+    }
+    if ((walk & (walk - 1)) == 0 && walk >= 1024) {
+        LOG_INFO(Render_Recompiler, "SRT check: {} walks, {} differed", walk,
+                 mismatches.load(std::memory_order_relaxed));
+    }
+#else
+    InterpretSrt(reinterpret_cast<const u32*>(srt.walker_func), user_data, flat);
+#endif
+}
 
 } // namespace Shader
-
-#endif

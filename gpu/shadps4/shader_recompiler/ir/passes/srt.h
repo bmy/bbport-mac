@@ -26,10 +26,21 @@ struct PersistentSrtInfo {
 
     PFN_SrtWalker walker_func{};
     size_t walker_func_size{};
+    /// bbport BB_SRT_CHECK (x86-64): the same walk as portable bytecode, compared on every walk.
+    /// Not serialized: only shaders compiled in this run have it.
+    const u32* check_code{};
     u32 flattened_bufsize_dw = 16; // NumUserDataRegs
 
     void Serialize(Serialization::Archive& ar) const;
     bool Deserialize(Serialization::Archive& ar);
 };
+
+/// bbport: runs the walker: x86 code on x86-64, bytecode elsewhere (flatten pass).
+void RunSrtWalker(const PersistentSrtInfo& srt, const u32* user_data, u32* flat);
+
+/// bbport: set by the GPU library to check guest pointers the bytecode walker follows.
+extern bool (*srt_guest_readable)(u64 address, u64 size);
+/// bbport: keeps a copy of portable walker bytecode for the rest of the run.
+const u32* RegisterSrtBytecode(const u32* words, size_t count);
 
 } // namespace Shader

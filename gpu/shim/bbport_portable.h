@@ -57,7 +57,9 @@ inline std::size_t ReadSelfPrefix(void* out, const void* address, std::size_t si
 
 inline std::uint64_t Rip(const void* context) {
     const auto* uc = static_cast<const ucontext_t*>(context);
-#ifdef __APPLE__
+#if defined(__APPLE__) && defined(__aarch64__)
+    return uc->uc_mcontext->__ss.__pc; // the native GPU process: host faults only
+#elif defined(__APPLE__)
     return uc->uc_mcontext->__ss.__rip;
 #else
     return static_cast<std::uint64_t>(uc->uc_mcontext.gregs[REG_RIP]);
@@ -65,7 +67,9 @@ inline std::uint64_t Rip(const void* context) {
 }
 inline std::uint64_t Rsp(const void* context) {
     const auto* uc = static_cast<const ucontext_t*>(context);
-#ifdef __APPLE__
+#if defined(__APPLE__) && defined(__aarch64__)
+    return uc->uc_mcontext->__ss.__sp; // the native GPU process: host faults only
+#elif defined(__APPLE__)
     return uc->uc_mcontext->__ss.__rsp;
 #else
     return static_cast<std::uint64_t>(uc->uc_mcontext.gregs[REG_RSP]);
@@ -73,7 +77,9 @@ inline std::uint64_t Rsp(const void* context) {
 }
 inline std::uint64_t Rbp(const void* context) {
     const auto* uc = static_cast<const ucontext_t*>(context);
-#ifdef __APPLE__
+#if defined(__APPLE__) && defined(__aarch64__)
+    return uc->uc_mcontext->__ss.__fp; // the native GPU process: host faults only
+#elif defined(__APPLE__)
     return uc->uc_mcontext->__ss.__rbp;
 #else
     return static_cast<std::uint64_t>(uc->uc_mcontext.gregs[REG_RBP]);

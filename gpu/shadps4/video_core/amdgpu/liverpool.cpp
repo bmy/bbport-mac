@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "bbport_cpu.h"
 #include <chrono>
 #include <thread>
 #include <pthread.h>
@@ -170,7 +171,7 @@ void Liverpool::Process(std::stop_token stoken) {
                 for (u32 spins = 1; !(num_commands || num_submits || submit_done) &&
                                     !stoken.stop_requested();
                      ++spins) {
-                    __builtin_ia32_pause();
+                    BbCpu::Pause();
                     if (!(spins & 255) && std::chrono::steady_clock::now() >= spin_until) {
                         break;
                     }

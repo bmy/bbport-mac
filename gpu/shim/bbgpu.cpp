@@ -29,6 +29,7 @@
 #include "core/memory.h"
 #include "core/signals.h"
 #include "sdl_window.h"
+#include "shader_recompiler/ir/passes/srt.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 
 extern "C" {
@@ -282,6 +283,10 @@ extern "C" int bbgpu_init(const BbGpuConfig* config) {
     StartProfileWriter();
 #endif
     g_sdk_version = config->sdk_version;
+    // The portable SRT walker (arm64, BB_SRT_CHECK) checks the guest pointers it follows.
+    Shader::srt_guest_readable = [](u64 address, u64 size) {
+        return Core::CachedMapped(address, size);
+    };
     if (config->user_dir) setenv("BB_GPU_USER_DIR", config->user_dir, 0);
     Core::Emulator::FillElfInfo(*config);
     const std::string title = config->title ? config->title : "Bloodborne";

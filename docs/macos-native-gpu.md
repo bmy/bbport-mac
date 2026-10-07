@@ -105,7 +105,11 @@ Waits use `os_sync_wait_on_address` with `OS_SYNC_WAIT_ON_ADDRESS_SHARED` on the
    access in signal handlers (frontend only), and the shader recompiler's SRT walker, which JITs x86
    code with Xbyak and needs an arm64 path (an interpreter of the same walk is enough: it runs once per
    draw with extended user data).
-6. **Upstream churn.** Keep the split in new files; portability fixes are candidates to send upstream.
+6. **Guest memory outside the pool.** Shader resource tables can sit in the game image's own
+   data (found by the SRT check, 2026-10-07), which the loader maps privately, not from the
+   shared pool. bb-gpu needs those segments too: the loader has to place the image's writable
+   data in shared memory (or bb-gpu mirrors it), else the walker reads zeros.
+7. **Upstream churn.** Keep the split in new files; portability fixes are candidates to send upstream.
 
 ## Phases
 
@@ -134,7 +138,8 @@ files were not checked here. What changed:
 - The SRT walker: x86 code via Xbyak on x86-64, bytecode for the same walk elsewhere
   (`Shader::RunSrtWalker`). `BB_SRT_CHECK=1` on the x86-64 build runs both on every walk and logs
   any difference; with `BB_PIPELINE_CACHE=0` every shader gets checked. This verifies the bytecode
-  in the real game before any native build exists.
+  in the real game before any native build exists. Result on 0.4 (2026-10-07, shader cache off,
+  several areas): 8,388,608 walks, 0 differences.
 - A non-x86 build keeps its own pipeline cache folder (the cache stores the walkers' host code).
 - `BB_ARCH=arm64 bash tools/macos/setup_deps.sh` builds the native libraries into `deps-arm64`
   (including KosmicKrisp), and `bash tools/macos/build_gpu_native.sh` builds

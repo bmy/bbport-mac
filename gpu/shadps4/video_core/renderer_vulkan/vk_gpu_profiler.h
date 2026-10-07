@@ -62,7 +62,12 @@ private:
     void Print();
 
     static constexpr u32 NumSlices = 4;
+#ifdef __APPLE__
+    // Metal's timestamp counter heaps hold at most 4096 samples (all slices in one pool).
+    static constexpr u32 SliceQueries = 1024;
+#else
     static constexpr u32 SliceQueries = 4096;
+#endif
     static inline GpuProfiler* instance_ptr = nullptr;
 
     vk::Device device;

@@ -8,6 +8,7 @@
 //   c++ -std=c++20 -O2 -pthread -Igpu/shim tests/test_remote_memory.cpp -o /tmp/memory-test
 //   /tmp/memory-test
 #include <atomic>
+#include <cerrno>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -37,7 +38,8 @@ namespace {
 #define CHECK(x)                                                                                   \
     do {                                                                                           \
         if (!(x)) {                                                                                \
-            std::fprintf(stderr, "%s:%d: CHECK(%s) failed\n", __FILE__, __LINE__, #x);          \
+            std::fprintf(stderr, "%s:%d: CHECK(%s) failed (errno %d: %s)\n", __FILE__, __LINE__, \
+                         #x, errno, std::strerror(errno));                                        \
             std::_Exit(1);                                                                         \
         }                                                                                          \
     } while (0)
@@ -62,6 +64,8 @@ int CreateShared(const char* what, std::uint64_t bytes) {
     shm_unlink(name);
 #endif
     CHECK(fd >= 0 && ftruncate(fd, static_cast<off_t>(bytes)) == 0);
+    // shm_open sets close-on-exec (POSIX): the GPU process inherits the descriptor only without it.
+    CHECK(fcntl(fd, F_SETFD, 0) == 0);
     return fd;
 }
 

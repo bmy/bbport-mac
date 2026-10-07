@@ -109,7 +109,10 @@ Waits use `os_sync_wait_on_address` with `OS_SYNC_WAIT_ON_ADDRESS_SHARED` on the
    data (found by the SRT check, 2026-10-07), which the loader maps privately, not from the
    shared pool. bb-gpu needs those segments too: the loader has to place the image's writable
    data in shared memory (or bb-gpu mirrors it), else the walker reads zeros.
-7. **Upstream churn.** Keep the split in new files; portability fixes are candidates to send upstream.
+7. **Descriptor passing.** `shm_open` sets close-on-exec, so the pool's descriptor has to be
+   cleared of it (or duplicated into the child with posix_spawn file actions) for bb-gpu to
+   inherit it; the Mac test caught this.
+8. **Upstream churn.** Keep the split in new files; portability fixes are candidates to send upstream.
 
 ## Phases
 

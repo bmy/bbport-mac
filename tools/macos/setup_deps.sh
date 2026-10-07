@@ -234,7 +234,7 @@ if ! have lib/kosmickrisp/libvulkan_kosmickrisp.dylib || [[ $(cat "$kk_stamp" 2>
     rm -rf "$kk/build-x86_64"   # meson does not re-run a failed setup in place
     quiet "kosmickrisp configure" "${kk_env[@]}" cmake -S "$kk" -B "$kk/build-x86_64" -G Ninja \
         -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0
-    echo "building Mesa/KosmicKrisp (10-20 minutes)"
+    echo "building Mesa/KosmicKrisp (about a minute on an M5 Max)"
     quiet "kosmickrisp build" "${kk_env[@]}" cmake --build "$kk/build-x86_64" -j "$JOBS"
     mkdir -p "$PREFIX/lib/kosmickrisp"
     cp "$kk/build-x86_64/outputs/libvulkan_kosmickrisp.dylib" "$kk/build-x86_64/outputs/kosmickrisp_mesa_icd.json" \

@@ -61,6 +61,11 @@ static void fail(const char *message) { fprintf(stderr, "ERROR: %s\n", message);
 static void check_cpu(void) {
     const char *skip = getenv("BB_SKIP_CPU_CHECK");
     if (skip && !strcmp(skip, "1")) return;
+#ifdef __APPLE__
+    /* bbport (macOS): Rosetta 2 runs AVX, BMI1, MOVBE and LZCNT but does not report them in
+     * CPUID unless asked to (ROSETTA_ADVERTISE_AVX), so this check would always refuse. */
+    return;
+#endif
     unsigned a, b, c, d, leaf1_c = 0, leaf7_b = 0, ext1_c = 0;
     if (__get_cpuid(1, &a, &b, &c, &d)) leaf1_c = c;
     if (__get_cpuid_count(7, 0, &a, &b, &c, &d)) leaf7_b = b;

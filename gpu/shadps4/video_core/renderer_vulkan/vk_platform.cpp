@@ -277,7 +277,16 @@ vk::UniqueInstance CreateInstance(Frontend::WindowSystemType window_type, bool e
     setenv("VK_DRIVER_FILES", icd_path.c_str(), false);
 #endif
 
-    static vk::detail::DynamicLoader dl;
+    // bbport: BB_VULKAN_LIBRARY names the Vulkan loader by path. The release app (no
+    // DYLD_LIBRARY_PATH: macOS drops it when bash starts) loads its own copy this way; the
+    // default search only tries leaf names.
+    static vk::detail::DynamicLoader dl = [] {
+        const char* library = std::getenv("BB_VULKAN_LIBRARY");
+        if (library && library[0]) {
+            return vk::detail::DynamicLoader(library);
+        }
+        return vk::detail::DynamicLoader();
+    }();
     VULKAN_HPP_DEFAULT_DISPATCHER.init(
         dl.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr"));
 

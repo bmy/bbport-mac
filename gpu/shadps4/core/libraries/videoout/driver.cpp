@@ -687,6 +687,9 @@ void VideoOutDriver::Flip(const Request& req) {
                             BbStats::gnm_frame_waits.exchange(0) / double(frames),
                             BbStats::gnm_frame_wait_ns.exchange(0) / (1e6 * double(frames)),
                             BbStats::asc_submits.exchange(0) / double(frames));
+            } else {
+                std::printf("Gnm: %.1f compute queue submissions/frame\n",
+                            BbStats::asc_submits.exchange(0) / double(frames));
             }
             std::printf("EOP fences: %llu decoded, %llu labels written, %lld pending\n",
                         (unsigned long long)BbStats::eop_decoded.load(),

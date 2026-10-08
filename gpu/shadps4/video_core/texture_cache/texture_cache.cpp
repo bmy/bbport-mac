@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <ctime>
+#include <map>
 #include <unordered_map>
 #include <xxhash.h>
 
@@ -950,24 +952,89 @@ bool TextureCache::ImageTraceEnabled() {
     return on;
 }
 
+namespace {
+// BB_IMAGE_TRACE state: textures seen on quiet screens, and the writes over them.
+struct TraceWatched {
+    VAddr end;
+    u32 width, height, format;
+    std::unordered_map<const char*, u32> printed_frame; ///< per write source
+};
+std::mutex trace_mutex;
+std::multimap<VAddr, TraceWatched> trace_watched; ///< by guest address
+u64 trace_watched_max = 0;                        ///< the largest watched size
+u32 trace_frame_seen = ~0u, trace_lines = 0;
+u64 trace_draws_at_frame = 0, trace_draws_last_frame = ~0ull;
+constexpr u32 TraceMaxLines = 12000;
+
+/// CLOCK_MONOTONIC seconds: the game process's file trace uses the same clock.
+double TraceSeconds() {
+    timespec ts{};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return double(ts.tv_sec % 100000) + double(ts.tv_nsec) * 1e-9;
+}
+
+/// The frame number, and whether the last frame was quiet (few draws). Under trace_mutex.
+u32 TraceFrame(bool* quiet) {
+    const u32 frame = BbStats::frame_number.load(std::memory_order_relaxed);
+    const u64 draws = BbStats::draws.load(std::memory_order_relaxed);
+    if (frame != trace_frame_seen) {
+        trace_draws_last_frame = draws - trace_draws_at_frame;
+        trace_draws_at_frame = draws;
+        trace_frame_seen = frame;
+    }
+    *quiet = trace_draws_last_frame <= 60;
+    return frame;
+}
+} // namespace
+
+void TextureCache::TraceImageWrite(VAddr address, u64 size, const char* source) {
+    if (!ImageTraceEnabled() || size == 0) {
+        return;
+    }
+    std::scoped_lock lock{trace_mutex};
+    if (trace_watched.empty() || trace_lines >= TraceMaxLines) {
+        return;
+    }
+    bool quiet = false;
+    const u32 frame = TraceFrame(&quiet);
+    const VAddr from = address > trace_watched_max ? address - trace_watched_max : 0;
+    for (auto it = trace_watched.lower_bound(from);
+         it != trace_watched.end() && it->first < address + size; ++it) {
+        TraceWatched& watched = it->second;
+        if (watched.end <= address) {
+            continue;
+        }
+        auto [printed, inserted] = watched.printed_frame.try_emplace(source, frame);
+        if (!inserted) {
+            if (printed->second == frame) {
+                continue; // once a frame per image and source
+            }
+            printed->second = frame;
+        }
+        ++trace_lines;
+        const VAddr begin = std::max<VAddr>(address, it->first);
+        const VAddr end = std::min<VAddr>(address + size, watched.end);
+        std::printf("Image trace: t=%.3f frame %u (%llu draws) write by %s %#llx+%#llx over image "
+                    "%#llx %ux%u fmt %u at +%#llx (%llu of its bytes)\n",
+                    TraceSeconds(), frame,
+                    static_cast<unsigned long long>(trace_draws_last_frame), source,
+                    static_cast<unsigned long long>(address), static_cast<unsigned long long>(size),
+                    static_cast<unsigned long long>(it->first), watched.width, watched.height,
+                    watched.format, static_cast<unsigned long long>(begin - it->first),
+                    static_cast<unsigned long long>(end - begin));
+    }
+}
+
 void TextureCache::TraceImageUse(const Image& image) {
     struct Seen {
         u64 hash;
         u32 uploads, flags;
     };
-    static std::mutex trace_mutex;
     static std::unordered_map<u64, Seen> seen;
-    static u32 frame_seen = ~0u, lines = 0;
-    static u64 draws_at_frame = 0, draws_last_frame = ~0ull;
     std::scoped_lock lock{trace_mutex};
-    const u32 frame = BbStats::frame_number.load(std::memory_order_relaxed);
-    const u64 draws = BbStats::draws.load(std::memory_order_relaxed);
-    if (frame != frame_seen) {
-        draws_last_frame = draws - draws_at_frame;
-        draws_at_frame = draws;
-        frame_seen = frame;
-    }
-    if (draws_last_frame > 60 || lines >= 4000 || image.info.guest_address == 0) {
+    bool quiet = false;
+    const u32 frame = TraceFrame(&quiet);
+    if (!quiet || trace_lines >= TraceMaxLines || image.info.guest_address == 0) {
         return;
     }
     const auto* memory = reinterpret_cast<const u8*>(image.info.guest_address);
@@ -982,11 +1049,18 @@ void TextureCache::TraceImageUse(const Image& image) {
         it->second.flags == flags) {
         return;
     }
+    if (first) {
+        trace_watched.emplace(image.info.guest_address,
+                              TraceWatched{image.info.guest_address + image.info.guest_size,
+                                           image.info.size.width, image.info.size.height,
+                                           u32(image.info.pixel_format), {}});
+        trace_watched_max = std::max<u64>(trace_watched_max, image.info.guest_size);
+    }
     const bool zero = std::all_of(memory, memory + bytes, [](u8 b) { return b == 0; });
-    ++lines;
-    std::printf("Image trace: frame %u (%llu draws) image %#llx+%#llx %ux%u fmt %u tile %u "
+    ++trace_lines;
+    std::printf("Image trace: t=%.3f frame %u (%llu draws) image %#llx+%#llx %ux%u fmt %u tile %u "
                 "mips %u flags %#x uploads %u memory %016llx%s%s\n",
-                frame, static_cast<unsigned long long>(draws_last_frame),
+                TraceSeconds(), frame, static_cast<unsigned long long>(trace_draws_last_frame),
                 static_cast<unsigned long long>(image.info.guest_address),
                 static_cast<unsigned long long>(image.info.guest_size), image.info.size.width,
                 image.info.size.height, u32(image.info.pixel_format), u32(image.info.tile_mode),

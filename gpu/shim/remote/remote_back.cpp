@@ -820,6 +820,11 @@ void PublishWindowState() {
     }
 }
 
+void GameStats(double window_s, double frames) {
+    const StatsArgs args{window_s, frames};
+    g.channel->Send(MsgGameStats, &args, sizeof(args));
+}
+
 void RequestRestart() {
     // The game process restarts through run.sh; this process ends when it does (WatchParent).
     g.channel->Send(MsgRestart, nullptr, 0);

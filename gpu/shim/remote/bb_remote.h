@@ -101,6 +101,8 @@ u64* VideoOutLabels();
 /// From the window loop: state the game process reads directly (settings menu open...).
 void PublishWindowState();
 void RequestRestart();
+/// After the frame stats: the game process prints its threads' CPU time and the guest's waits.
+void GameStats(double window_s, double frames);
 
 // The runtime's GPU interface (runtime_memory_*, clocks), served from bb-gpu's own view.
 u64 MemoryClamp(uintptr_t address, u64 size);

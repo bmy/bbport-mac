@@ -11,7 +11,7 @@
 
 namespace BbRemote {
 
-inline constexpr std::uint32_t ProtocolVersion = 2;
+inline constexpr std::uint32_t ProtocolVersion = 3;
 
 enum Msg : std::uint32_t {
     // ---- game process -> GPU process ----
@@ -57,6 +57,7 @@ enum Msg : std::uint32_t {
     MsgVoVblank = 105,      ///< VoVblankArgs
     MsgRestart = 106,       ///< the settings menu asked for a restart
     MsgGpuFailed = 107,     ///< TextArgs: the GPU process is about to exit
+    MsgGameStats = 108,     ///< StatsArgs: frame stats were printed; print the game process's
 };
 
 /// Sizes of the guest structures carried as raw bytes (checked against the real types).
@@ -216,6 +217,10 @@ struct TextInputReply {
 struct TextArgs {
     char text[512];
 };
+struct StatsArgs {
+    double window_s; ///< seconds the frame stats covered
+    double frames;   ///< frames in them
+};
 
 static_assert(sizeof(HelloArgs) == 80 && sizeof(HelloReply) == 16 + 16 * MaxTakenRanges &&
               sizeof(MapArgs) == 40 &&
@@ -231,6 +236,6 @@ static_assert(sizeof(VoArgs) == 8 && sizeof(VoRegisterArgs) == 16 + 40 + 128 &&
               sizeof(VoStatusArgs) == 8 + 64 + 16 && sizeof(VoVblankArgs) == 48 &&
               sizeof(GammaArgs) == 8);
 static_assert(sizeof(TextInputArgs) <= 4096 && sizeof(TextInputReply) <= 4096 &&
-              sizeof(TextArgs) == 512);
+              sizeof(TextArgs) == 512 && sizeof(StatsArgs) == 16);
 
 } // namespace BbRemote

@@ -29,6 +29,7 @@
 #endif
 
 #include "bbport_portable.h"
+#include "bbport_threads.h"
 #include "common/rdtsc.h"
 #include "common/signal_context.h"
 #include "common/thread.h"
@@ -58,6 +59,7 @@ void runtime_memory_set_note_write_hook(RuntimeGpuRange note);
 uint64_t runtime_process_time_counter(void);
 uint64_t runtime_tsc_frequency(void);
 void runtime_restart(void);
+void runtime_wait_report(double frames);
 }
 
 namespace Libraries::GnmDriver {
@@ -272,6 +274,19 @@ void Handle(const Message& message, auto&& reply) {
         std::printf("GPU process: restart requested\n");
         runtime_restart();
         break;
+    case MsgGameStats: {
+        // The frame stats come from bb-gpu; the guest's threads and waits are this process's.
+        const auto args = Payload<StatsArgs>(message);
+        Libraries::Kernel::ReportEqueueWaits(args.frames);
+        runtime_wait_report(args.frames);
+#ifdef __APPLE__
+        if (const std::string threads = BbThreads::ReportProcessThreads(args.window_s);
+            !threads.empty()) {
+            std::printf("Game process: %s\n", threads.c_str());
+        }
+#endif
+        break;
+    }
     case MsgGpuFailed: {
         const auto args = Payload<TextArgs>(message);
         std::fprintf(stderr, "GPU process: %.*s\n", int(sizeof(args.text)), args.text);

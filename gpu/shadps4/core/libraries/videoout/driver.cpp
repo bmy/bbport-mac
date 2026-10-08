@@ -737,9 +737,13 @@ void VideoOutDriver::Flip(const Request& req) {
 #ifdef __APPLE__
             if (const std::string threads = BbThreads::ReportProcessThreads(window);
                 !threads.empty()) {
-                std::printf("%s\n", threads.c_str());
+                std::printf("%s%s\n", BbRemote::BackActive() ? "GPU process: " : "",
+                            threads.c_str());
             }
 #endif
+            if (BbRemote::BackActive()) {
+                BbRemote::Back::GameStats(window, frames);
+            }
             intervals.clear();
             window_start = now;
             frames = 0;

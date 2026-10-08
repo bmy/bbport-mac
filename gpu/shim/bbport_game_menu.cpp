@@ -181,11 +181,13 @@ void DefineTexts() {
     row(Upscaler, "Upscaler", "Апскейлер", "Temporal upscaler and anti-aliasing",
         "Временной апскейлер и сглаживание",
         {off, AddText("FSR 3.1", "FSR 3.1"), AddText("FSR 4", "FSR 4"), AddText("FSR 4.1.1", "FSR 4.1.1"),
-         AddText("TAA", "TAA"), AddText("DLSS", "DLSS")});
+         AddText("TAA", "TAA"), AddText("DLSS", "DLSS"), AddText("MetalFX", "MetalFX")});
     row(Preset, "Quality preset", "Пресет", "Scene resolution relative to the output",
         "Разрешение сцены относительно вывода",
         {AddText("Native AA", "Native AA"), AddText("Quality", "Quality"), AddText("Balanced", "Balanced"),
-         AddText("Performance", "Performance"), AddText("Ultra Performance", "Ultra Performance")});
+         AddText("Performance", "Performance"), AddText("Ultra Performance", "Ultra Performance"),
+         // bbport (macOS port): Ultra Quality is stored as 5 (after the others).
+         AddText("Ultra Quality", "Ultra Quality")});
     row(Sharpness, "Sharpness", "Резкость", "RCAS after the upscaler: 0 off, 10 strongest",
         "RCAS после апскейлера: 0 выкл, 10 сильнее всего", {}, Kind::Slider);
     row(ShowFps, "FPS counter", "Счётчик FPS", "Frame rate in the top right corner",
@@ -298,6 +300,7 @@ bool UpscalerAvailable(int i) {
     return i == BbSettings::UpscalerFsr4     ? s.fsr4_supported.load()
            : i == BbSettings::UpscalerFsr411 ? s.fsr411_supported.load()
            : i == BbSettings::UpscalerDlss   ? s.dlss_supported.load()
+           : i == BbSettings::UpscalerMetalFx ? s.metalfx_supported.load()
                                              : true;
 }
 

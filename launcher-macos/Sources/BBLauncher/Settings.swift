@@ -149,6 +149,12 @@ struct LauncherPrefs: Equatable {
     var gpuProfile = false
     var vkValidation = false
     var extraEnv = ""
+    /// bbport 0.5: the port's settings as pages of the game's System menu (BB_GAME_MENU).
+    var gameMenu = true
+    /// bbport 0.5: skip the game's online/offline choice at start (BB_SKIP_NETWORK_CHOICE).
+    var skipNetworkChoice = true
+    /// The monitor for the game's window (BB_DISPLAY: part of its name); empty: the main one.
+    var display = ""
 
     private enum Key {
         static let gameFolder = "gameFolder"
@@ -171,6 +177,9 @@ struct LauncherPrefs: Equatable {
         static let gpuProfile = "gpuProfile"
         static let vkValidation = "vkValidation"
         static let extraEnv = "extraEnv"
+        static let gameMenu = "gameMenu"
+        static let skipNetworkChoice = "skipNetworkChoice"
+        static let display = "display"
     }
 
     static func load(from defaults: UserDefaults) -> LauncherPrefs {
@@ -197,6 +206,9 @@ struct LauncherPrefs: Equatable {
         p.gpuProfile = flag(Key.gpuProfile, p.gpuProfile)
         p.vkValidation = flag(Key.vkValidation, p.vkValidation)
         p.extraEnv = text(Key.extraEnv, p.extraEnv)
+        p.gameMenu = flag(Key.gameMenu, p.gameMenu)
+        p.skipNetworkChoice = flag(Key.skipNetworkChoice, p.skipNetworkChoice)
+        p.display = text(Key.display, p.display)
         // Values from an older version that the pickers no longer offer.
         if !Catalog.contains(Catalog.languages, p.language) { p.language = "1" }
         if !Catalog.contains(Catalog.presentModes, p.presentMode) { p.presentMode = "Fifo" }
@@ -228,6 +240,9 @@ struct LauncherPrefs: Equatable {
         defaults.set(gpuProfile, forKey: Key.gpuProfile)
         defaults.set(vkValidation, forKey: Key.vkValidation)
         defaults.set(extraEnv, forKey: Key.extraEnv)
+        defaults.set(gameMenu, forKey: Key.gameMenu)
+        defaults.set(skipNetworkChoice, forKey: Key.skipNetworkChoice)
+        defaults.set(display, forKey: Key.display)
     }
 }
 

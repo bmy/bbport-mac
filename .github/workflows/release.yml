@@ -1,15 +1,23 @@
 # Builds the Mac release (tools/macos/package.sh) on a GitHub-hosted Apple Silicon runner.
-# - A tag like 0.4-mac.1 publishes a GitHub Release with dist/bbport-<tag>.zip, its checksum and
-#   the notes in docs/release/<tag>.md.
-# - "Run workflow" (Actions tab), or a push to a ci-* branch, builds the zip as a workflow
-#   artifact only, to try a build without releasing it.
+# A release (a pre-release on GitHub with dist/bbport-<version>.zip, its checksum and the notes in
+# docs/release/<version>.md, else docs/release/NEXT.md) is published by any of:
+# - "Run workflow" in the Actions tab, with a version such as 0.4-mac.2 (on the branch chosen);
+# - pushing a tag such as 0.4-mac.2;
+# - pushing a branch release/0.4-mac.2.
+# A push to a ci-* branch, or "Run workflow" without a version, only builds the zip (kept as a
+# workflow artifact), to try a build without releasing it.
 name: Mac release
 
 on:
   push:
     tags: ['*-mac*']
-    branches: ['ci-*']
+    branches: ['ci-*', 'release/*']
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version, e.g. 0.4-mac.2 (empty: a test build, nothing published)'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -37,15 +45,24 @@ jobs:
 
       - name: Version
         id: version
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
-          if [[ $GITHUB_REF == refs/tags/* ]]; then
+          publish=1
+          if [[ -n $INPUT_VERSION ]]; then
+            version=$INPUT_VERSION
+          elif [[ $GITHUB_REF == refs/tags/* ]]; then
             version=${GITHUB_REF#refs/tags/}
+          elif [[ $GITHUB_REF == refs/heads/release/* ]]; then
+            version=${GITHUB_REF#refs/heads/release/}
           else
             version=$(git describe --tags --always)-ci
+            publish=0
           fi
-          version=${version//\//-}
+          [[ $version =~ ^[A-Za-z0-9._-]+$ ]] || { echo "::error::version '$version': letters, digits, dot, dash or underscore only"; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Version: $version"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "Version: $version (publish: $publish)"
           sw_vers; uname -m; sysctl -n hw.ncpu machdep.cpu.brand_string
 
       # The x86-64 libraries and KosmicKrisp take most of the build; they are kept between runs
@@ -108,8 +125,9 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+      # Creates the tag at the commit built when it doesn't exist yet.
       - name: Publish the release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: steps.version.outputs.publish == '1'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.version }}
@@ -117,4 +135,4 @@ jobs:
           notes=docs/release/$TAG.md
           [[ -f $notes ]] || notes=docs/release/NEXT.md
           gh release create "$TAG" dist/bbport-"$TAG".zip dist/bbport-"$TAG".zip.sha256 \
-            --title "bbport for Mac $TAG" --notes-file "$notes" --prerelease --verify-tag
+            --target "$GITHUB_SHA" --title "bbport for Mac $TAG" --notes-file "$notes" --prerelease

@@ -1398,11 +1398,13 @@ bool Rasterizer::FilterDrawPasses() const {
 // raw blend/depth/stencil state. Comparing a frame where something shows with one where it does
 // not tells whether the game stopped drawing it or drew it differently.
 bool Rasterizer::DrawTraceActive() {
-    static const bool enabled = [] {
+    // BB_DRAW_TRACE=1: frames of 900 draws or fewer; a larger number sets that limit instead.
+    static const u64 max_draws = [] {
         const char* env = std::getenv("BB_DRAW_TRACE");
-        return env && env[0] == '1';
+        const u64 value = env ? std::strtoull(env, nullptr, 10) : 0;
+        return value == 1 ? 900 : value;
     }();
-    if (!enabled) {
+    if (max_draws == 0) {
         return false;
     }
     static u32 frame_seen = ~0u, lines = 0;
@@ -1414,7 +1416,7 @@ bool Rasterizer::DrawTraceActive() {
         draws_last_frame = draws - draws_at_frame;
         draws_at_frame = draws;
         frame_seen = frame;
-        active = draws_last_frame <= 900 && frame % 20 == 0 && lines < 150000;
+        active = draws_last_frame <= max_draws && frame % 20 == 0 && lines < 150000;
         if (active) {
             timespec ts{};
             clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -1483,6 +1485,34 @@ void Rasterizer::TraceDraw(const GraphicsPipeline* pipeline, bool bound) {
                                 u32(num_fmt), u32(tsharp.GetTileMode()), note,
                                 zero ? " zero" : "");
         }
+    }
+    // The data the shaders read: user data and the first words of each buffer (as floats).
+    const auto data = [&](Shader::SwStage which, const char* name) {
+        const auto& stage = pipeline->GetStage(which);
+        const auto ud = stage.UserData();
+        line += fmt::format(" | {} ud", name);
+        for (u32 i = 0; i < std::min<size_t>(ud.size(), 16); ++i) {
+            line += fmt::format(" {:08x}", ud[i]);
+        }
+        for (const auto& desc : stage.buffers) {
+            if (desc.IsSpecial()) {
+                continue;
+            }
+            const auto sharp = desc.GetSharp(stage);
+            const VAddr address = sharp.base_address;
+            line += fmt::format(" | {} buf {:#x}+{:#x}", name, address, sharp.GetSize());
+            if (address == 0 || !memory->IsValidGpuMapping(address, 0)) {
+                continue;
+            }
+            const auto* words = reinterpret_cast<const float*>(address);
+            for (u32 i = 0; i < std::min<u32>(sharp.GetSize() / 4, 12); ++i) {
+                line += fmt::format(" {:g}", words[i]);
+            }
+        }
+    };
+    data(Shader::SwStage::Vertex, "vs");
+    if (pipeline->GetGraphicsKey().mrt_mask) {
+        data(Shader::SwStage::Fragment, "ps");
     }
     std::printf("%s\n", line.c_str());
 }

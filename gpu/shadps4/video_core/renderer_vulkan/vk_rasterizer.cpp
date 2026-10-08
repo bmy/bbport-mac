@@ -40,6 +40,25 @@
 
 namespace Vulkan {
 
+namespace {
+// bbport BB_IMAGE_TRACE: what is writing on this thread, for the texture write trace.
+thread_local const char* trace_write_source = nullptr;
+struct TraceWriteSource {
+    const char* saved;
+    explicit TraceWriteSource(const char* source) : saved{trace_write_source} {
+        trace_write_source = source;
+    }
+    ~TraceWriteSource() {
+        trace_write_source = saved;
+    }
+};
+void TraceWrite(VAddr address, u64 size, const char* source) {
+    if (VideoCore::TextureCache::ImageTraceEnabled()) {
+        VideoCore::TextureCache::TraceImageWrite(address, size, source);
+    }
+}
+} // namespace
+
 static Shader::PushData MakeUserData(const AmdGpu::Regs& regs) {
     // TODO(roamic): Add support for multiple viewports and geometry shaders when ViewportIndex
     // is encountered and implemented in the recompiler.
@@ -2763,6 +2782,7 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                 bound_buffers.emplace_back(buffer, offset, size, desc.is_written);
                 if (desc.is_written) {
                     // Raw storage-buffer writes can also make an aliased cached image stale.
+                    TraceWrite(vsharp.base_address, size, "GPU storage write");
                     texture_cache.InvalidateMemoryFromGPU(vsharp.base_address, size);
                 }
                 needs_barrier |= runtime.IsBufferAccessed(buffer, offset, size, desc.is_written);
@@ -3709,6 +3729,8 @@ void Rasterizer::FillBuffer(VAddr address, u32 num_bytes, u32 value, bool is_gds
         if (!buffer_cache.IsAnyInPlace(address, num_bytes) &&
             !buffer_cache.IsRegionGpuModified(address, num_bytes)) {
             BbFreeCheck::Check(address, num_bytes, &value, BbFreeCheck::DmaFill);
+            TraceWrite(address, num_bytes, "DMA fill on the CPU");
+            const TraceWriteSource source{"DMA fill on the CPU"};
             u32* buffer = std::bit_cast<u32*>(address);
             std::fill(buffer, buffer + (num_bytes / sizeof(u32)), value);
             BbWriteLog::Note(address, buffer, num_bytes, BbWriteLog::Dma);
@@ -3724,6 +3746,9 @@ void Rasterizer::FillBuffer(VAddr address, u32 num_bytes, u32 value, bool is_gds
         }
         return buffer_cache.ObtainBuffer(address, num_bytes, true);
     }();
+    if (!is_gds) {
+        TraceWrite(address, num_bytes, "DMA fill on the GPU");
+    }
     runtime.FillBuffer(buffer, offset, num_bytes, value);
 }
 
@@ -3746,6 +3771,8 @@ void Rasterizer::CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, b
             !texture_cache.FindImageFromRange(src, num_bytes)) {
             // Both buffers were not transferred to GPU yet. Can safely copy in host memory.
             BbFreeCheck::Check(dst, num_bytes, std::bit_cast<const void*>(src), BbFreeCheck::DmaCopy);
+            TraceWrite(dst, num_bytes, "DMA copy on the CPU");
+            const TraceWriteSource source{"DMA copy on the CPU"};
             std::memcpy(std::bit_cast<void*>(dst), std::bit_cast<void*>(src), num_bytes);
             BbWriteLog::Note(dst, std::bit_cast<const void*>(dst), num_bytes, BbWriteLog::Dma);
             if (!VideoCore::WriteTracking()) {
@@ -3753,6 +3780,9 @@ void Rasterizer::CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, b
             }
             return;
         }
+    }
+    if (!dst_gds) {
+        TraceWrite(dst, num_bytes, "DMA copy on the GPU");
     }
     texture_cache.InvalidateMemoryFromGPU(dst, num_bytes);
     const auto* gds_buffer = buffer_cache.GetGdsBuffer();
@@ -3790,12 +3820,14 @@ bool Rasterizer::InvalidateMemory(VAddr addr, u64 size, bool assume_locks) {
         // Not GPU mapped memory, can skip invalidation logic entirely.
         return false;
     }
+    TraceWrite(addr, size, trace_write_source ? trace_write_source : "CPU write");
     buffer_cache.InvalidateMemory(addr, size, assume_locks);
     texture_cache.InvalidateMemory(addr, size);
     return true;
 }
 
 void Rasterizer::NoteAssetWrite(VAddr addr, u64 size) {
+    const TraceWriteSource source{"file read"};
     buffer_cache.NoteAssetWrite(addr, size);
     InvalidateAfterWrite(addr, size);
 }
@@ -3809,6 +3841,7 @@ void Rasterizer::InvalidateAfterWrite(VAddr addr, u64 size) {
     // (a 512 KiB window, whole pages) and upload pages over what the GPU writes meanwhile.
     // Exactly the CPU's bytes go into VRAM instead; images over them are refreshed.
     DrainDrawPipe();
+    TraceWrite(addr, size, trace_write_source ? trace_write_source : "CPU write");
     buffer_cache.NotePreciseUpload(addr, size);
     texture_cache.InvalidateMemory(addr, size);
 }
@@ -3821,6 +3854,7 @@ void Rasterizer::NoteCommandWrite(VAddr addr, const void* data, u64 size, bool r
         DrainDrawPipe();
     }
     buffer_cache.DropShadows(addr, size);
+    TraceWrite(addr, size, "GPU command write");
     // An invalidation would read the GPU's data back over these bytes first (a readback).
     if (!buffer_cache.UpdateGpuWritten(addr, std::span{static_cast<const u8*>(data), size})) {
         buffer_cache.InvalidateMemory(addr, size, recording_thread);
@@ -3829,6 +3863,7 @@ void Rasterizer::NoteCommandWrite(VAddr addr, const void* data, u64 size, bool r
 }
 
 void Rasterizer::OnCpuWrite(VAddr addr, u64 size) {
+    const TraceWriteSource source{"libc copy"};
     BbStats::cpu_write_notes.fetch_add(1, std::memory_order_relaxed);
     BbStats::cpu_write_note_bytes.fetch_add(size, std::memory_order_relaxed);
     if (IsMapped(addr, size)) {
@@ -3839,6 +3874,7 @@ void Rasterizer::OnCpuWrite(VAddr addr, u64 size) {
 
 bool Rasterizer::OnWriteFault(VAddr addr, bool assume_locks, u64 guest_rip) {
     DrainDrawPipe();
+    const TraceWriteSource source{"write fault"};
     if (!InvalidateMemory(addr, 8, assume_locks)) {
         return false;
     }

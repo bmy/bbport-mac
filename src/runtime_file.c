@@ -15,6 +15,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <pthread.h>
+#include <time.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #define ERR(n) ((int32_t)(UINT32_C(0x80020000)|(n)))
@@ -35,7 +36,10 @@ typedef struct {
 _Static_assert(sizeof(GuestStat)==120,"FreeBSD stat layout");
 
 typedef struct { char *names; size_t count, *offsets; unsigned char *types; } Listing;
-typedef struct { int used, host; Listing *dir; size_t position; char path[512]; } File;
+typedef struct {
+    int used, host; Listing *dir; size_t position; char path[512];
+    uint64_t trace_reads, trace_bytes; double trace_first, trace_last; /* BB_FILE_TRACE */
+} File;
 typedef struct { char guest[64]; char host[512]; } Mount;
 static File files[MAX_FILES];
 static Mount mounts[MAX_MOUNTS];
@@ -157,6 +161,35 @@ static File *get(int fd) {
     return &files[fd];
 }
 /* BB_AUDIO_TRACE=1: sound file opens and failed reads (missing game sounds). */
+/* BB_FILE_TRACE=1 (also on with BB_IMAGE_TRACE=1): game file opens and closes, with what was
+ * read in between, on CLOCK_MONOTONIC seconds (the texture trace's clock, in either process). */
+static int file_trace(void) {
+    static int v=-1;
+    if (v<0) { const char *e=getenv("BB_FILE_TRACE"), *i=getenv("BB_IMAGE_TRACE"); v=(e && e[0]=='1') || (i && i[0]=='1'); }
+    return v;
+}
+static double trace_seconds(void) {
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC,&ts);
+    return (double)(ts.tv_sec%100000)+(double)ts.tv_nsec*1e-9;
+}
+static const char *trace_thread(char *out,size_t size) {
+    out[0]=0;
+#if defined(__APPLE__) || defined(__linux__)
+    pthread_getname_np(pthread_self(),out,size);
+#endif
+    return out[0] ? out : "?";
+}
+static void trace_read(int fd,int64_t n) {
+    if (!file_trace() || n<=0) return;
+    pthread_mutex_lock(&lock);
+    File *f=(fd>=3 && fd<MAX_FILES && files[fd].used) ? &files[fd] : NULL;
+    if (f) {
+        double t=trace_seconds();
+        if (!f->trace_reads) f->trace_first=t;
+        f->trace_last=t; ++f->trace_reads; f->trace_bytes+=(uint64_t)n;
+    }
+    pthread_mutex_unlock(&lock);
+}
 static int audio_trace(void) { static int v=-1; if (v<0) { const char *e=getenv("BB_AUDIO_TRACE"); v=e && e[0]=='1'; } return v; }
 /* Game mounts (including linked mod overlays) are read-only. Saves use other mounts. */
 static int game_path(const char *p) {
@@ -174,7 +207,11 @@ static int64_t do_open(const char *guest,int flags,int mode) {
     int host=open(path,host_flags(flags),mode ? mode : 0644);
     if (host<0) {
         e=errno;
-        if (e==ENOENT) { ++missing; printf("Runtime: open(%s) -> not found\n",guest); }
+        if (e==ENOENT) {
+            ++missing;
+            if (file_trace()) printf("File trace: t=%.3f open %s -> not found\n",trace_seconds(),guest);
+            else printf("Runtime: open(%s) -> not found\n",guest);
+        }
         return -e;
     }
     struct stat s;
@@ -188,6 +225,11 @@ static int64_t do_open(const char *guest,int flags,int mode) {
     snprintf(files[fd].path,sizeof(files[fd].path),"%s",guest);
     ++opens;
     pthread_mutex_unlock(&lock);
+    if (file_trace() && !dir) {
+        char thread[64];
+        printf("File trace: t=%.3f open %s -> fd %d, %lld bytes (thread %s)\n",trace_seconds(),guest,fd,
+               (long long)s.st_size,trace_thread(thread,sizeof(thread)));
+    }
     if (audio_trace() && strstr(guest,"sound/")) printf("Audio trace: open(%s) -> fd %d, %lld bytes\n",guest,fd,(long long)s.st_size);
     const char *mod_trace=getenv("BB_MOD_TRACE"), *mod_root=getenv("BB_MODS_DIR");
     if (mod_trace && mod_trace[0]=='1' && mod_root) {
@@ -207,6 +249,10 @@ static int64_t do_close(int fd) {
     pthread_mutex_lock(&lock);
     File *f=get(fd);
     if (!f) { pthread_mutex_unlock(&lock); return -EBADF; }
+    if (file_trace() && !f->dir)
+        printf("File trace: t=%.3f close fd %d %s: %llu reads, %llu bytes, read from t=%.3f to t=%.3f\n",
+               trace_seconds(),fd,f->path,(unsigned long long)f->trace_reads,(unsigned long long)f->trace_bytes,
+               f->trace_first,f->trace_last);
     close(f->host); free_listing(f->dir);
     *f=(File){0};
     pthread_mutex_unlock(&lock);
@@ -237,6 +283,7 @@ static int64_t do_read(int fd,void *buffer,uint64_t size) {
     if (n<0) { if (audio_trace()) printf("Audio trace: read(fd %d, %llu) failed, errno %d\n",fd,(unsigned long long)size,errno); return -errno; }
     if (n>0) runtime_memory_note_write((uintptr_t)buffer,(uint64_t)n); /* and once the data is there */
     __atomic_add_fetch(&reads,1,__ATOMIC_RELAXED); __atomic_add_fetch(&bytes_read,(uint64_t)n,__ATOMIC_RELAXED);
+    trace_read(fd,n);
     return n;
 }
 static int64_t do_pread(int fd,void *buffer,uint64_t size,int64_t offset) {
@@ -248,6 +295,7 @@ static int64_t do_pread(int fd,void *buffer,uint64_t size,int64_t offset) {
     if (n<0) { if (audio_trace()) printf("Audio trace: pread(fd %d, %llu @%lld) failed, errno %d\n",fd,(unsigned long long)size,(long long)offset,errno); return -errno; }
     if (n>0) runtime_memory_note_write((uintptr_t)buffer,(uint64_t)n); /* and once the data is there */
     __atomic_add_fetch(&reads,1,__ATOMIC_RELAXED); __atomic_add_fetch(&bytes_read,(uint64_t)n,__ATOMIC_RELAXED);
+    trace_read(fd,n);
     return n;
 }
 static int64_t do_write(int fd,const void *buffer,uint64_t size) {

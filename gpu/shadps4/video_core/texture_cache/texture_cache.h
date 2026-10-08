@@ -203,8 +203,11 @@ public:
 
     /// bbport BB_IMAGE_TRACE=1 (diagnostic): on quiet screens (loading screens, menus: few draws
     /// a frame) every texture use whose guest memory, upload count or flags changed is printed.
-    static bool ImageTraceEnabled();
     void TraceImageUse(const Image& image);
+    static bool ImageTraceEnabled();
+    /// BB_IMAGE_TRACE=1: something wrote guest memory under a texture the trace has seen used.
+    /// source names the writer: a file read, a CPU write fault, the game's libc, a GPU copy...
+    static void TraceImageWrite(VAddr address, u64 size, const char* source);
 
     /// Retrieves the sampler that matches the provided S# descriptor.
     /// extra_lod_bias: bbport, added to the S#'s bias (reduced scene rendering).

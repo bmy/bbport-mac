@@ -130,7 +130,7 @@ Waits use `os_sync_wait_on_address` with `OS_SYNC_WAIT_ON_ADDRESS_SHARED` on the
    MetalFX native, compare against the in-process path in the same spots.
 7. **Default** once faster and stable; `BB_NATIVE_GPU=0` keeps the in-process path.
 
-## Status (2026-10-07)
+## Status (2026-10-08)
 
 **Phase 2 (libbbgpu builds for arm64).** An arm64 syntax pass over the GPU library's sources
 (macOS 26.1 SDK, `--target=arm64-apple-macosx14`) compiles 150 of 152 cleanly; the other two only
@@ -208,14 +208,45 @@ cleared (or be passed explicitly) before bb-gpu is spawned.
 - Lifetime: bb-gpu ends when the game process exits or restarts (kqueue on its parent); the game
   process ends when bb-gpu does (its window closed, or a crash, reported with the signal).
 
-Not yet: the game threads' wait statistics in the frame stats (bb-gpu
-prints its own threads), ThreadSanitizer runs and the release/acquire audit (phase 6). The first
-native run compiles every shader again: the arm64 build keeps its own pipeline cache and KosmicKrisp
-its own shader cache.
+- Frame stats: bb-gpu prints them; after each block it asks the game process
+  (`MsgGameStats`) for the parts that live there, which it prints itself: its threads' CPU time
+  (`Game process: CPU by thread ...`; bb-gpu's line is `GPU process: CPU by thread ...`), the
+  guest's waits, event-queue waits and the Gnm call counts.
+- Diagnostics switches: bb-gpu reads `BB_TOGGLES` at start and watches `BB_TOGGLE_FILE` like the
+  game process, so live A/B changes reach the GPU code in both.
+
+The first native run compiles every shader again: the arm64 build keeps its own pipeline cache and
+KosmicKrisp its own shader cache.
+
+**Phase 6, started (2026-10-08).**
+
+- ThreadSanitizer (GCC 13, Linux) on the channel, memory and table tests and on
+  `tests/test_remote_concurrent.cpp`, where four guest threads map, unmap and protect overlapping
+  memory at once and the GPU process's table must then answer as the runtime does: no reports, and
+  the table matches every time (six runs).
+- Ordering at the process boundary, reviewed: the channel publishes a message with a release store
+  of `head` after its payload and the reader takes it with an acquire load; the wait/wake handshake
+  is seq_cst on both words (no lost wake-up); reply slots are release/acquire; EOP and EOS labels
+  are single release stores (`StoreLabel`). The VideoOut buffer label resets were plain stores and
+  are now release stores (the guest polls them from the other process).
+- `BB_GPU_QOS=1` (experiment, both branches): the command processor, recording, draw preparation,
+  present and remote-channel threads ask for the user-interactive QoS class.
+
+Still to do: a side-by-side comparison with the in-process path in the same spots, and the GPU
+waits on the Great Bridge (`BB_WAIT_TRACE=1` shows where they come from).
 
 Tests, on Linux and on the Mac:
 
 ```
 cc -c -std=c11 -D_GNU_SOURCE -w -Isrc -I. src/runtime_memory.c -o /tmp/rm.o
 c++ -std=c++20 -O1 -Igpu/shim tests/test_remote_table.cpp /tmp/rm.o -lpthread -o /tmp/table-test && /tmp/table-test
+c++ -std=c++20 -O1 -Igpu/shim tests/test_remote_concurrent.cpp /tmp/rm.o -lpthread -o /tmp/concurrent-test && /tmp/concurrent-test
+```
+
+With ThreadSanitizer (Linux, GCC; `setarch -R` where ASLR and TSan disagree):
+
+```
+gcc -c -std=c11 -D_GNU_SOURCE -w -O1 -g -fsanitize=thread -Isrc -I. src/runtime_memory.c -o /tmp/rm-tsan.o
+g++ -std=c++20 -O1 -g -fsanitize=thread -Igpu/shim tests/test_remote_concurrent.cpp /tmp/rm-tsan.o -lpthread -o /tmp/concurrent-tsan && setarch -R /tmp/concurrent-tsan
+g++ -std=c++20 -O1 -g -fsanitize=thread -pthread -Igpu/shim tests/test_remote_channel.cpp -o /tmp/channel-tsan && setarch -R /tmp/channel-tsan
 ```

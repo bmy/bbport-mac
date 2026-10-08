@@ -77,9 +77,22 @@ jobs:
       - name: Package
         run: bash tools/macos/package.sh "${{ steps.version.outputs.version }}"
 
+      # The package report as annotations (readable through the checks API, unlike the logs).
+      - name: Report
+        if: always()
+        run: |
+          report=out/package/report.txt
+          [[ -f $report ]] || exit 0
+          encode() { python3 -c 'import sys; print(sys.stdin.read().replace("%","%25").replace("\r","%0D").replace("\n","%0A"), end="")'; }
+          echo "::notice title=Smoke test::$(sed -n '1,/^Files:/p' "$report" | encode)"
+          echo "::notice title=App contents::$(sed -n '/^Files:/,$p' "$report" | head -150 | encode)"
+
       - name: Logs on failure
         if: failure()
         run: |
+          for log in out/gpu-errors.txt out/loader-build.log; do
+            [[ -f $log ]] && echo "::error title=$log::$(tail -60 "$log" | python3 -c 'import sys; print(sys.stdin.read().replace("%","%25").replace("\n","%0A"), end="")')"
+          done
           for log in out/gpu-errors.txt out/loader-build.log deps-x86_64/setup.log; do
             [[ -f $log ]] && { echo "=== $log"; tail -150 "$log"; }
           done

@@ -193,6 +193,7 @@ public:
     u64 lru_id{};
     u64 hash{};
     u64 corner_hash{}; ///< bbport: diagnostics (TextureCache::RefreshImage)
+    u32 uploads{};     ///< bbport: BB_IMAGE_TRACE
 
 private:
     static Common::IncrementalIdProvider<u64> global_image_uid;

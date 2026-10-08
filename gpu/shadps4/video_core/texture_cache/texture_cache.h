@@ -159,6 +159,9 @@ public:
 
     /// Updates image contents if it was modified by CPU.
     void UpdateImage(ImageId image_id) {
+        if (ImageTraceEnabled()) {
+            TraceImageUse(slot_images[image_id]);
+        }
         // bbport: a clean image already tracked and touched in this GC period needs nothing.
         // Every texture binding comes here; the mutex (shared with the fault handlers of the
         // guest threads) was ~3% of the GPU thread. Flags are read atomically: an invalidation
@@ -197,6 +200,11 @@ public:
 
     /// Reuploads image contents.
     void RefreshImage(Image& image);
+
+    /// bbport BB_IMAGE_TRACE=1 (diagnostic): on quiet screens (loading screens, menus: few draws
+    /// a frame) every texture use whose guest memory, upload count or flags changed is printed.
+    static bool ImageTraceEnabled();
+    void TraceImageUse(const Image& image);
 
     /// Retrieves the sampler that matches the provided S# descriptor.
     /// extra_lod_bias: bbport, added to the S#'s bias (reduced scene rendering).

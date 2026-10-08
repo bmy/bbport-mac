@@ -102,15 +102,16 @@ libraries and KosmicKrisp, ad-hoc signed) with a read-me. The packaged app runs 
 engine and keeps its data in `~/Library/Application Support/bbport` (`tools/macos/run.sh`
 recognises the layout by the `.packaged` file); bbport ▸ Settings can point it at a checkout.
 
-Versions are `<upstream bbport version>-v<build>`: `0.4-v1`, then `0.4-v2` for our next
-build on the same upstream, and `0.4.1-v1` or `0.5-v1` once a new upstream version is merged.
-The zip is `bbport-mac-<version>.zip`.
+Versions are `<upstream bbport version>-v<build>`, and the zip is `bbport-mac-<version>.zip`.
+There is a release for each new upstream bbport version (`0.4-v1`, then `0.4.1-v1` or
+`0.5-v1` once it is merged), and another build of the same version (`0.4-v2`, `0.4-v3`) only
+to ship a fix for something broken.
 
 Releases are made by GitHub Actions (`.github/workflows/release.yml`) on a GitHub-hosted Apple
 Silicon runner. Write the notes as `docs/release/<version>.md` (otherwise `NEXT.md` is used),
 then in the Actions tab choose **Mac release ▸ Run workflow**, pick the branch and type the
 version (for example `0.4-v2`). The workflow builds everything, tags the commit and publishes
-a pre-release with the zip and its SHA-256. Pushing a tag `<version>` or a branch
+it as the latest release, with the zip and its SHA-256. Pushing a tag `<version>` or a branch
 `release/<version>` does the same. *Run workflow* without a version, or a push to a `ci-*`
 branch, only builds the zip (as a workflow artifact) to try a build.
 

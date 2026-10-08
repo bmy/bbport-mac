@@ -934,6 +934,11 @@ public:
     void WaitDeferredSignals();
 
     /// Whether a render pass with exactly this state is open.
+    /// bbport (BB_DRAW_TRACE): render passes begun so far.
+    [[nodiscard]] u64 PassCount() const noexcept {
+        return pass_count;
+    }
+
     [[nodiscard]] bool IsRenderingWith(const RenderState& state) const {
         return is_rendering && render_state == state;
     }
@@ -1102,6 +1107,7 @@ private:
     std::jthread priority_pending_ops_thread;
     RenderState render_state;
     bool is_rendering = false;
+    u64 pass_count = 0; ///< bbport: render passes begun (BB_DRAW_TRACE)
     /// bbport (BB_FRAME_STATS): the state of the pass ended last, to count passes reopened with
     /// identical attachments (merge candidates).
     RenderState last_ended_state;

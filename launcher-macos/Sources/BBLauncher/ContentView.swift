@@ -520,6 +520,10 @@ struct DeveloperSection: View {
 
     var body: some View {
         Section {
+            Toggle(isOn: $model.prefs.nativeGpu) {
+                Text("Native GPU process")
+                Text("Experimental: the GPU work runs as native Apple Silicon code (BB_NATIVE_GPU)")
+            }
             Toggle(isOn: $model.prefs.frameStats) {
                 Text("Frame statistics in the log")
                 Text("BB_FRAME_STATS")

@@ -281,7 +281,7 @@ static void sample_host(PadData *d) {
     SDL_Gamepad *g=current_gamepad();
     if (!bindings_ready) { load_bindings(); bindings_ready=1; }
     if (bbgpu_overlay_captures_input()) return; /* settings menu open: neutral input */
-    const bool *k=SDL_WasInit(SDL_INIT_VIDEO) ? SDL_GetKeyboardState(NULL) : NULL;
+    const bool *k=bbgpu_keyboard_state();
     if (g) {
         int touch_right=0;
         for (int i=IN_CROSS;i<=IN_RIGHT;++i) {
@@ -368,7 +368,7 @@ static void record_sample(const PadData *d) {
     static const char *path; static int checked, f9_was_down;
     if (!checked) { path=getenv("BB_PAD_RECORD"); checked=1; }
     if (!path || !*path || !sdl_ready) return;
-    const bool *k=SDL_GetKeyboardState(NULL);
+    const bool *k=bbgpu_keyboard_state();
     const int f9=k && k[SDL_SCANCODE_F9];
     if (f9 && !f9_was_down) {
         if (record_file) {

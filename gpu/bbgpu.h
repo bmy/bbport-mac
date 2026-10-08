@@ -2,6 +2,7 @@
  * GnmDriver, VideoOut and kernel event queues, adapted to the native loader. */
 #ifndef BBGPU_H
 #define BBGPU_H
+#include <stdbool.h>
 #include <stdint.h>
 #ifdef __cplusplus
 extern "C" {
@@ -28,6 +29,8 @@ void bbgpu_dump_guest_writes(void *ucontext);
  * no window exists; poll returns 0 typing, 1 confirmed, 2 cancelled (UTF-8 text). */
 int bbgpu_text_input_begin(const char *initial_utf8, const char *prompt_utf8);
 int bbgpu_text_input_poll(char *out_utf8, uint64_t size);
+/* The keyboard (SDL scancodes, true while held) of the game window, or NULL without one. */
+const bool *bbgpu_keyboard_state(void);
 /* 1 while the in-game settings menu is open: the game's pad input is held neutral. */
 int bbgpu_overlay_captures_input(void);
 /* Patches the loaded image before the game runs (image still writable): libGnm entry hooks. */

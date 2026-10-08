@@ -306,6 +306,9 @@ private:
     void UpdateColorBlendingState(const GraphicsPipeline* pipeline) const;
 
     bool FilterDraw();
+    /// bbport BB_DRAW_TRACE=1: the draws of one light frame in 20 (diagnostic).
+    bool DrawTraceActive();
+    void TraceDraw(const GraphicsPipeline* pipeline, bool bound);
     bool FilterDrawPasses() const;
     /// Everything of a direct draw after the pipeline selection (GPU thread or stage B).
     void DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw* used_prepared,

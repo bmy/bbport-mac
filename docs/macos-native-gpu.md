@@ -202,12 +202,13 @@ cleared (or be passed explicitly) before bb-gpu is spawned.
   newer one) and triggers the guest's flip and vblank events when bb-gpu reports them. EOP flips are
   registered in bb-gpu, whose command processor raises the flip interrupt in stream order.
 - Gamepads stay in the game process (`runtime_pad.c`), whose main thread now keeps SDL's gamepad
-  events going; the window, the settings menu and keyboard shortcuts are bb-gpu's. Keyboard input
-  for the game itself does not cross yet.
+  events going; the window, the settings menu and keyboard shortcuts are bb-gpu's. The game's
+  keyboard is bb-gpu's window's: its window loop copies SDL's key state into the control block,
+  and `bbgpu_keyboard_state` reads it there.
 - Lifetime: bb-gpu ends when the game process exits or restarts (kqueue on its parent); the game
   process ends when bb-gpu does (its window closed, or a crash, reported with the signal).
 
-Not yet: keyboard input for the game, the game threads' wait statistics in the frame stats (bb-gpu
+Not yet: the game threads' wait statistics in the frame stats (bb-gpu
 prints its own threads), ThreadSanitizer runs and the release/acquire audit (phase 6). The first
 native run compiles every shader again: the arm64 build keeps its own pipeline cache and KosmicKrisp
 its own shader cache.

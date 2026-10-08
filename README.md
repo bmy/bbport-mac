@@ -36,7 +36,7 @@ experimental **native arm64 renderer process** (below).
 You need an Apple Silicon Mac with **macOS 26 or later**, **Rosetta 2**, and the **Command Line
 Tools** (for Python 3). Then:
 
-1. Download `bbport-….zip` from [Releases](https://github.com/bmy/bbport-mac/releases), open
+1. Download `bbport-mac-….zip` from [Releases](https://github.com/bmy/bbport-mac/releases), open
    it, and drag **bbport.app** into Applications.
 2. Open it (the first time: **System Settings ▸ Privacy & Security ▸ Open Anyway**, since the
    app isn't notarised).

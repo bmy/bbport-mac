@@ -1,21 +1,21 @@
 # Builds the Mac release (tools/macos/package.sh) on a GitHub-hosted Apple Silicon runner.
 # A release (a pre-release on GitHub with dist/bbport-<version>.zip, its checksum and the notes in
 # docs/release/<version>.md, else docs/release/NEXT.md) is published by any of:
-# - "Run workflow" in the Actions tab, with a version such as 0.4-mac.2 (on the branch chosen);
-# - pushing a tag such as 0.4-mac.2;
-# - pushing a branch release/0.4-mac.2.
+# - "Run workflow" in the Actions tab, with a version such as v0.2.0 (on the branch chosen);
+# - pushing a tag such as v0.2.0;
+# - pushing a branch release/v0.2.0.
 # A push to a ci-* branch, or "Run workflow" without a version, only builds the zip (kept as a
 # workflow artifact), to try a build without releasing it.
 name: Mac release
 
 on:
   push:
-    tags: ['*-mac*']
+    tags: ['v*']
     branches: ['ci-*', 'release/*']
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version, e.g. 0.4-mac.2 (empty: a test build, nothing published)'
+        description: 'Release version, e.g. v0.2.0 (empty: a test build, nothing published)'
         required: false
         default: ''
 
@@ -134,5 +134,5 @@ jobs:
         run: |
           notes=docs/release/$TAG.md
           [[ -f $notes ]] || notes=docs/release/NEXT.md
-          gh release create "$TAG" dist/bbport-"$TAG".zip dist/bbport-"$TAG".zip.sha256 \
-            --target "$GITHUB_SHA" --title "bbport for Mac $TAG" --notes-file "$notes" --prerelease
+          gh release create "$TAG" dist/*.zip dist/*.zip.sha256 \
+            --target "$GITHUB_SHA" --title "bbport for Mac ${TAG#v}" --notes-file "$notes" --prerelease

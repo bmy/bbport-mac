@@ -117,6 +117,9 @@ MemoryMirror& MirrorFor(u64 address) {
 
 /// Private (executable) memory of the game process: readable zeros here.
 bool MapZeros(u64 address, u64 size) {
+    if (MirrorFor(address).Overlaps(address, size)) {
+        return false;
+    }
     void* at = mmap(reinterpret_cast<void*>(address), size, PROT_READ | PROT_WRITE,
                     MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
     return at != MAP_FAILED;
@@ -191,6 +194,13 @@ void Hello(const Message& message, auto&& reply) {
                args.pool_size != g.pool_bytes) {
         out.error = 2; // built from different sources
     } else {
+        for (const auto& [begin, end] : g.guest.Taken()) {
+            if (out.taken_count < MaxTakenRanges && begin < GuestEnd) {
+                out.taken[out.taken_count][0] = begin;
+                out.taken[out.taken_count][1] = std::min(end, GuestEnd);
+                ++out.taken_count;
+            }
+        }
         g.start_ns = args.start_monotonic_ns;
         g.tsc_sample = args.tsc_sample;
         g.tsc_sample_ns = args.tsc_sample_monotonic_ns;
@@ -574,7 +584,8 @@ void ReportMappings(u64 begin, u64 end) {
             address >= end) {
             break;
         }
-        std::fprintf(stderr, "GPU process:   in use %#llx-%#llx (%llu MiB), protection %d, tag %u\n",
+        std::fprintf(stderr,
+                     "GPU process:   in use %#llx-%#llx (%llu MiB), protection %d, tag %u\n",
                      static_cast<unsigned long long>(address),
                      static_cast<unsigned long long>(address + size),
                      static_cast<unsigned long long>(size >> 20), info.protection, info.user_tag);
@@ -613,7 +624,7 @@ int Main(int argc, char** argv) {
     // low region only the part the game image is loaded into (its shared data segments).
     const auto reserve = [](MemoryMirror& mirror, u64 begin, u64 end, const char* what) {
         std::string_view error;
-        if (mirror.Reserve(begin, end, error)) {
+        if (mirror.ReserveAround(begin, end, error)) {
             return true;
         }
         std::fprintf(stderr, "GPU process: cannot reserve the %s %#llx-%#llx: %.*s\n", what,
@@ -624,6 +635,27 @@ int Main(int argc, char** argv) {
     };
     if (!reserve(g.guest, GuestBegin, GuestEnd + ControlBytes, "guest range") ||
         !reserve(g.low, LowBegin, LowBegin + LowReserveBytes, "game image range")) {
+        return 3;
+    }
+    // This process's allocator took parts of them before main: the game's mappings avoid those
+    // in the guest range (HelloReply); the control block and the game image cannot move.
+    for (const auto& [begin, end] : g.guest.Taken()) {
+        std::printf("GPU process: its own memory at %#llx-%#llx (%llu MiB)\n",
+                    static_cast<unsigned long long>(begin), static_cast<unsigned long long>(end),
+                    static_cast<unsigned long long>((end - begin) >> 20));
+    }
+    for (const auto& [begin, end] : g.low.Taken()) {
+        std::fprintf(stderr, "GPU process: its own memory at %#llx-%#llx, where the game image "
+                     "goes\n", static_cast<unsigned long long>(begin),
+                     static_cast<unsigned long long>(end));
+    }
+    if (g.guest.Overlaps(ControlAddress, ControlBytes)) {
+        std::fprintf(stderr, "GPU process: the control block's address is in use here\n");
+        return 3;
+    }
+    if (g.guest.Taken().size() > MaxTakenRanges) {
+        std::fprintf(stderr, "GPU process: its own memory is in too many parts of the guest "
+                             "range\n");
         return 3;
     }
     void* at = mmap(reinterpret_cast<void*>(ControlAddress), ControlBytes, PROT_READ | PROT_WRITE,

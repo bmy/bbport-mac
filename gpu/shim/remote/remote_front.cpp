@@ -49,6 +49,7 @@ typedef void (*RuntimeMirrorHook)(int op, uintptr_t address, uint64_t size, uint
 void runtime_memory_set_mirror_hook(RuntimeMirrorHook hook);
 int runtime_memory_is_mapped(uintptr_t address, uint64_t size);
 int runtime_memory_lock_held(void);
+int runtime_memory_exclude(uintptr_t start, uintptr_t end);
 void runtime_memory_gpu_protect(uintptr_t address, uint64_t size, int read, int write);
 typedef void (*RuntimeGpuRange)(uintptr_t address, uint64_t size);
 void runtime_memory_set_gpu_hooks(RuntimeGpuRange map, RuntimeGpuRange unmap,
@@ -472,6 +473,22 @@ bool Init(const BbGpuConfig& config) {
         std::fprintf(stderr, "GPU process: refused to start (error %d, protocol %u)\n",
                      welcome.error, welcome.protocol);
         return false;
+    }
+    // bb-gpu's own memory inside the guest range: the guest's mappings go around it.
+    u64 taken_bytes = 0;
+    for (u32 i = 0; i < std::min(welcome.taken_count, MaxTakenRanges); ++i) {
+        const u64 begin = welcome.taken[i][0], end = welcome.taken[i][1];
+        if (runtime_memory_exclude(begin, end) != 0) {
+            std::fprintf(stderr, "GPU process: the game has memory at %#llx-%#llx already\n",
+                         static_cast<unsigned long long>(begin),
+                         static_cast<unsigned long long>(end));
+            return false;
+        }
+        taken_bytes += end - begin;
+    }
+    if (taken_bytes) {
+        std::printf("GPU process: %llu MiB of the guest range kept for its own memory\n",
+                    static_cast<unsigned long long>(taken_bytes >> 20));
     }
 
     // From here on bb-gpu follows the guest's mappings (the existing ones first).

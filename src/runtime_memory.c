@@ -844,6 +844,20 @@ int runtime_memory_host_pool(uint64_t host_bytes, int *fd, uint64_t *host_offset
     write_unlock();
     return ok ? 0 : -1;
 }
+/* bbport (native GPU process): [start, end) of the user range is the GPU process's own memory
+ * (its allocator's): reserved here, so the guest's mappings go elsewhere. Before the game maps
+ * anything; -1 when something is mapped there already. */
+int runtime_memory_exclude(uintptr_t start, uintptr_t end) {
+    start&=~(uintptr_t)(PAGE-1);
+    end=align_up(end,PAGE);
+    if (start<USER_MIN) start=USER_MIN;
+    if (end>USER_MAX) end=USER_MAX;
+    if (start>=end) return 0;
+    write_lock();
+    const int ok=!overlaps(start,end,0) && !vma_insert(vma_index(start),(Vma){start,end,KIND_RESERVED,0,0,0,0});
+    write_unlock();
+    return ok ? 0 : -1;
+}
 /* bbport (native GPU process): every change to the mapping table from now on (and the mappings
  * that exist, as maps) goes to `hook`, in order, outside the lock. */
 void runtime_memory_set_mirror_hook(MirrorHook hook) {

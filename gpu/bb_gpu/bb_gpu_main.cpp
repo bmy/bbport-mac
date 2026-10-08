@@ -85,6 +85,9 @@ void runtime_memory_set_mirror_hook(void (*)(int, uintptr_t, uint64_t, uint64_t,
 int runtime_memory_lock_held(void) {
     return 0;
 }
+int runtime_memory_exclude(uintptr_t, uintptr_t) {
+    return -1;
+}
 
 uint64_t runtime_process_time_us(void) {
     return Back::ProcessTimeUs();

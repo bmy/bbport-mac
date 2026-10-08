@@ -78,11 +78,15 @@ struct HelloArgs {
     std::uint64_t start_monotonic_ns;
     std::uint64_t tsc_sample, tsc_sample_monotonic_ns, tsc_frequency;
 };
+inline constexpr std::uint32_t MaxTakenRanges = 32;
 struct HelloReply {
     std::uint32_t protocol;
     std::uint32_t page_size; ///< the GPU process's (16384 on Apple Silicon)
     std::int32_t error;      ///< 0, or why the GPU process cannot run (reservation failed...)
-    std::uint32_t pad;
+    std::uint32_t taken_count;
+    /// Parts of the guest range the GPU process's own memory occupies (its allocator sets them
+    /// aside before it can reserve anything): the game's mappings must stay out of them.
+    std::uint64_t taken[MaxTakenRanges][2];
 };
 
 enum MapKind : std::uint32_t { MapDirect = 1, MapFlexible = 2, MapShared = 3 };
@@ -213,7 +217,8 @@ struct TextArgs {
     char text[512];
 };
 
-static_assert(sizeof(HelloArgs) == 80 && sizeof(HelloReply) == 16 && sizeof(MapArgs) == 40 &&
+static_assert(sizeof(HelloArgs) == 80 && sizeof(HelloReply) == 16 + 16 * MaxTakenRanges &&
+              sizeof(MapArgs) == 40 &&
               sizeof(RangeArgs) == 16 && sizeof(MirrorProtectArgs) == 24 &&
               sizeof(ProtectArgs) == 24 && sizeof(ResultReply) == 8 && sizeof(ValueArgs) == 8);
 static_assert(sizeof(FaultArgs) == 24 && sizeof(FaultReply) == 8 + 24 * MaxFaultProtects &&

@@ -198,6 +198,13 @@ TemporalUpscaler::TemporalUpscaler(const Instance& instance_, Scheduler& schedul
     PublishMetalFxProblem(metalfx->Problem());
 #endif
     fsr4 = std::make_unique<Fsr4Upscaler>(instance, scheduler);
+    {
+        const Dlss* dlss = Dlss::Get();
+        static std::string problem;
+        problem = !dlss ? "the DLSS bridge and NVIDIA's DLSS library are not installed"
+                        : dlss->Problem();
+        BbSettings::ConfigureDlssSupport(dlss && dlss->Available(), problem.c_str());
+    }
     // Available unless BB_UPSCALER=none; on/off and the parameters are the menu's settings.
     const char* env = std::getenv("BB_UPSCALER");
     enabled = !(env && std::strcmp(env, "none") == 0);
@@ -258,14 +265,15 @@ bool TemporalUpscaler::Active() const {
            (BbSettings::Get().upscaler == BbSettings::UpscalerFsr3 ||
             BbSettings::IsFsr4(BbSettings::Get().upscaler) ||
             BbSettings::Get().upscaler == BbSettings::UpscalerTaa ||
+            BbSettings::Get().upscaler == BbSettings::UpscalerDlss ||
             BbSettings::Get().upscaler == BbSettings::UpscalerMetalFx) &&
            !BbToggle::Disabled(1u << 24);
 }
 
 bool TemporalUpscaler::ReactiveOn() const {
     // FSR 4 takes no reactive mask itself: the mask blends its output afterwards
-    // (RecordFsr4Reactive). MetalFX takes none.
-    return BbSettings::Get().reactive && !BbToggle::Disabled(1u << 27) &&
+    // (RecordFsr4Reactive). DLSS and MetalFX take none.
+    return BbSettings::Get().reactive && !BbToggle::Disabled(1u << 27) && !UseDlss() &&
            BbSettings::Get().upscaler != BbSettings::UpscalerTaa &&
            BbSettings::Get().upscaler != BbSettings::UpscalerMetalFx;
 }
@@ -440,7 +448,8 @@ void TemporalUpscaler::OnDispatch(u64 cs_hash) {
 }
 
 bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
-    const bool use_fsr4 = UseFsr4();
+    // DLSS, like FSR 4, has its own context: no portable FSR 3 context is made.
+    const bool use_fsr4 = UseFsr4() || UseDlss();
     const bool use_taa = BbSettings::Get().upscaler == BbSettings::UpscalerTaa;
     const bool use_metalfx = UseMetalFx();
     if (use_taa && (w != ow || h != oh)) {
@@ -1247,6 +1256,12 @@ void TemporalUpscaler::Run() {
                                    {input_depth, depth_format, vk::ImageAspectFlagBits::eDepth}, w,
                                    h, ow, oh, true);
         cmdbuf = scheduler.CommandBuffer();
+    } else if (UseDlss()) {
+        dispatched = RecordDlss(
+            cmdbuf,
+            {input_color, input_color_view, color.info.pixel_format, vk::ImageAspectFlagBits::eColor, w, h},
+            {input_depth, input_depth_view, depth_format, vk::ImageAspectFlagBits::eDepth, w, h}, w, h,
+            ow, oh, frame_ms, true);
     } else {
         FfxVkPortableUpscaleDispatchInfo info{};
         info.structSize = sizeof(info);
@@ -1479,11 +1494,11 @@ void TemporalUpscaler::OnColorTarget(VideoCore::ImageId color) {
 void TemporalUpscaler::OnDraw(u64 vs_hash, VideoCore::ImageId color,
                               VideoCore::ImageId depth, bool native_viewport) {
     if (!Scaled() && vs_hash == ui_trigger_vs) done_this_frame = true;
-    // bbport: a UI draw without a color target (a Scaleform mask: color writes off) writes the
-    // stencil that the UI's next draws test. It must go into the UI's output-size depth like
-    // them: drawn into the guest depth, the mask was lost when the next UI draw switched to the
-    // UI depth (PrepareUiDepth clears its stencil), and masked images (the loading screen's item
-    // picture, cut out of a sheet of item pictures) vanished.
+    // bbport (issue #67, patch by bmy): a UI draw without a color target (a Scaleform mask, color
+    // writes off) writes the stencil the UI's next draws test, so it must go into the UI's
+    // output-size depth like them. Left in the guest depth, the mask was lost when the next UI
+    // draw switched to the UI depth (PrepareUiDepth clears its stencil): masked images (the
+    // loading screen's item picture, cut out of a sheet) vanished.
     if (ui_phase && !color && depth && depth != ui_depth && ui_color) {
         const auto& depth_image = texture_cache.GetImage(depth);
         const auto& ui_target = texture_cache.GetImage(ui_color);
@@ -1819,11 +1834,12 @@ void TemporalUpscaler::RunScaled() {
     }
     last_frame = now;
 
-    // bbport: FSR 4 and MetalFX write their HDR-format output, copied into the output-size UI
-    // image. Both record directly (MetalFX also submits the frame so far and continues in a new
-    // command buffer).
+    // bbport: FSR 4, DLSS and MetalFX write their HDR-format output, copied into the output-size
+    // UI image. They record directly (MetalFX also submits the frame so far and continues in a
+    // new command buffer).
     const bool use_metalfx = UseMetalFx();
-    if (UseFsr4() || use_metalfx || BbSettings::Get().upscaler == BbSettings::UpscalerTaa) {
+    if (UseFsr4() || UseDlss() || use_metalfx ||
+        BbSettings::Get().upscaler == BbSettings::UpscalerTaa) {
         auto cmdbuf = scheduler.CommandBuffer(); // after the commands recorded above
         barrier(vk::Image(output_image), vk::ImageAspectFlagBits::eColor,
                 vk::ImageLayout::eUndefined, all, vk::AccessFlagBits2::eNone,
@@ -1832,11 +1848,20 @@ void TemporalUpscaler::RunScaled() {
         if (BbSettings::Get().upscaler == BbSettings::UpscalerTaa) {
             RecordTaa(cmdbuf, color_view, depth_view);
         } else if (use_metalfx) {
+            fsr4_linear_frame = false;
             ok4 = RecordMetalFx({color_image, color.info.pixel_format,
                                  vk::ImageAspectFlagBits::eColor},
                                 {depth_image, depth_format, vk::ImageAspectFlagBits::eDepth}, w, h,
                                 ow, oh, false);
             cmdbuf = scheduler.CommandBuffer();
+        } else if (UseDlss()) {
+            fsr4_linear_frame = false;
+            ok4 = RecordDlss(cmdbuf,
+                             {color_image, color_view, color.info.pixel_format,
+                              vk::ImageAspectFlagBits::eColor, source_width, source_height},
+                             {depth_image, depth_view, depth_format, vk::ImageAspectFlagBits::eDepth,
+                              source_width, source_height},
+                             w, h, ow, oh, frame_ms, false);
         } else {
             // bbport: FSR 4 treats its colour as linear light; this frame is the game's
             // tonemapped, sRGB-encoded one. Decoded first, the output encoded again below.
@@ -2327,6 +2352,52 @@ bool TemporalUpscaler::RecordMetalFx(const MetalFxUpscaler::Input& color,
         // Off rather than FSR 3.1: neither is proven on this driver. The menu shows the reason.
         std::printf("Upscaler: MetalFX failed; upscaler off (select it again to retry)\n");
         BbSettings::Get().upscaler = BbSettings::UpscalerOff;
+        reset = true;
+    }
+    return ok;
+}
+
+bool TemporalUpscaler::UseDlss() const {
+    const Dlss* dlss = Dlss::Get();
+    return BbSettings::Get().upscaler == BbSettings::UpscalerDlss && dlss && dlss->Available() &&
+           !dlss_failed;
+}
+
+bool TemporalUpscaler::RecordDlss(vk::CommandBuffer cmdbuf, const Dlss::Resource& color,
+                                  const Dlss::Resource& depth, u32 w, u32 h, u32 ow, u32 oh,
+                                  float frame_ms, bool hdr) {
+    Dlss* dlss = Dlss::Get();
+    const Dlss::FeatureDesc desc{w, h, ow, oh, Dlss::QualityForScale(float(ow) / float(w)), hdr};
+    bool ok = true;
+    if (!dlss->HasFeature(desc)) {
+        // The previous feature may still be in use by submitted work; `cmdbuf` stays open.
+        scheduler.WaitSubmittedWork();
+        dlss->ReleaseFeature();
+        ok = dlss->CreateFeature(cmdbuf, desc);
+        reset = true;
+    }
+    if (ok) {
+        // The jitter and motion vectors FSR 3 gets: render pixels, current to previous.
+        const float sign = BbToggle::Disabled(1u << 26) ? -1.0f : 1.0f;
+        const auto& settings = BbSettings::Get();
+        ok = dlss->Evaluate(cmdbuf, {
+            .color = color,
+            .depth = depth,
+            .motion = {vk::Image(motion_image), *motion_view, vk::Format::eR16G16Sfloat,
+                       vk::ImageAspectFlagBits::eColor, w, h},
+            .output = {vk::Image(output_image), *output_view, vk::Format::eR16G16B16A16Sfloat,
+                       vk::ImageAspectFlagBits::eColor, ow, oh},
+            .jitter_x = sign * jitter[0],
+            .jitter_y = sign * jitter[1],
+            .reset = reset,
+            .frame_ms = frame_ms,
+            .sharpness = settings.sharpen ? std::min(settings.sharpness.load(), 1.0f) : 0.0f,
+        });
+    }
+    if (!ok) {
+        std::printf("Upscaler: DLSS failed; falling back to FSR 3.1\n");
+        BbSettings::Get().upscaler = BbSettings::UpscalerFsr3;
+        dlss_failed = true; // EnsureResources creates the FSR 3 context next frame
         reset = true;
     }
     return ok;

@@ -1,7 +1,9 @@
 /* Check whether native-size depth/stencil images can be blitted to reduced
  * renderer targets. The renderer needs both directions for live presets.
  * --gamepads: the connected gamepads, "GUID<tab>name" per line (the launcher's controller list,
- * BB_GAMEPAD). --read-input: one key or button for the launcher's controls (below). */
+ * BB_GAMEPAD). --displays: the monitors, "name<tab>WxH<tab>primary (1 or 0)" per line in SDL's
+ * order (the launcher's monitor list, BB_DISPLAY; issue #69). --read-input: one key or button for the
+ * launcher's controls (below). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -90,6 +92,25 @@ static int list_gamepads(void) {
     return 0;
 }
 
+static int list_displays(void) {
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
+        fprintf(stderr, "displays: %s\n", SDL_GetError());
+        return 1;
+    }
+    const SDL_DisplayID primary = SDL_GetPrimaryDisplay();
+    int count = 0;
+    SDL_DisplayID *ids = SDL_GetDisplays(&count);
+    for (int i = 0; ids && i < count; ++i) {
+        const char *name = SDL_GetDisplayName(ids[i]);
+        const SDL_DisplayMode *mode = SDL_GetDesktopDisplayMode(ids[i]);
+        printf("%s\t%dx%d\t%d\n", name && *name ? name : "?", mode ? mode->w : 0,
+               mode ? mode->h : 0, ids[i] == primary);
+    }
+    SDL_free(ids);
+    SDL_Quit();
+    return 0;
+}
+
 /* --read-input key|pad: a small window; prints "key <SDL key name>" or "pad <SDL button name>"
  * (lefttrigger/righttrigger for the triggers) for the first key or gamepad button pressed, the
  * names bbport.ini's key.* and pad.* lines take. Escape, closing it or 15 s: nothing. */
@@ -171,6 +192,9 @@ int main(int argc, char **argv) {
     }
     if (argc > 1 && !strcmp(argv[1], "--gamepads")) {
         return list_gamepads();
+    }
+    if (argc > 1 && !strcmp(argv[1], "--displays")) {
+        return list_displays();
     }
     const int live_mode = argc > 1 && !strcmp(argv[1], "--live-resolution");
     const VkApplicationInfo app = {

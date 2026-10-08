@@ -271,6 +271,28 @@ private:
     u32 num_counter_pairs{};
     u64 pixel_counter{};
 
+    /// bbport: SET_PREDICATION. Draws and dispatches with the predicate bit in their header are
+    /// skipped while it fails; it is evaluated at the first such packet, once the GPU has done
+    /// the work before it (the results are GPU-written).
+    struct Predication {
+        struct Test {
+            u32 op; ///< PM4CmdSetPredication::Op
+            VAddr address;
+        };
+        std::vector<Test> tests; ///< ORed (CONTINUE)
+        bool active = false;
+        bool evaluated = false;
+        bool skip = false;
+        bool draw_if_true = true;
+        bool hint_no_wait = false;
+        u64 skipped = 0; ///< packets skipped so far (BB_PM4_SELFTEST)
+    } predication;
+    bool PredicationSkips(const PM4Header* header);
+    /// bbport: waits until the GPU has done the work recorded before this point and its writes
+    /// to [address, address + size) are in the game's memory (CP reads of GPU-written data:
+    /// COND_EXEC, predication, COPY_DATA into a register).
+    void SyncForCpuRead(VAddr address, u64 size);
+
     struct ConstantEngine {
         void Reset() {
             ce_count = 0;

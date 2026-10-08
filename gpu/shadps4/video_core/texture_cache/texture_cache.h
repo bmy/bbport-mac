@@ -181,6 +181,7 @@ public:
         std::scoped_lock lock{mutex};
         Image& image = slot_images[image_id];
         TrackImage(image_id);
+        WatchImage(image, "update image (slow path)");
         TouchImage(image);
         RefreshImage(image);
     }
@@ -200,6 +201,7 @@ public:
 
     /// Reuploads image contents.
     void RefreshImage(Image& image);
+    void WatchImage(const Image& image, const char* what);
 
     /// bbport BB_IMAGE_TRACE=1 (diagnostic): on quiet screens (loading screens, menus: few draws
     /// a frame) every texture use whose guest memory, upload count or flags changed is printed.

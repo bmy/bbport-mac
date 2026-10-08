@@ -119,6 +119,8 @@ public:
     void NewPacket() noexcept {
         ++packet_epoch;
     }
+    /// bbport: GPU writes of the bindings resolved now stay in the game's memory (no VRAM copy).
+    bool force_writes_in_place = false;
 
     /// Finds a buffer for the specified region.
     [[nodiscard]] std::pair<const Buffer*, u64> ObtainBuffer(VAddr device_addr, u32 size,
@@ -192,6 +194,10 @@ public:
     /// bbport: the CPU wrote [addr, addr + size) where the GPU side asked to hear of it (no write
     /// tracking): counted per block like a write fault, for moving per-frame data in place.
     void NoteCpuWriteRange(VAddr addr, u64 size);
+    /// BB_CHUNK_TEXTURES: texture data read by the GPU straight from the guest memory chunk it is
+    /// in (no CPU copy, no VRAM buffer copy), when the range is contiguous there. Also the target
+    /// of labels the GPU writes (Rasterizer::WriteLabelOnGpu). GPU side threads.
+    std::optional<std::pair<const Buffer*, u64>> GuestChunkSource(VAddr address, u64 size);
     /// Whether any part of the range is.
     [[nodiscard]] bool IsAnyInPlace(VAddr addr, u64 size) const {
         return GuestInPlace() && size != 0 &&
@@ -248,6 +254,7 @@ private:
     /// GPU side: moves the requested blocks once the submission that may still upload into their
     /// VRAM copy was submitted; the rebind waits for it on the GPU (bind_wait_tick).
     void ProcessDemotions();
+    u64 demotions_scanned_tick = ~0ULL;
     void ProcessPendingAssets();
     void ProcessLateWrites();
     /// BB_FRAME_STATS: GPU-written bindings over 64 KiB, reported every 5 s (where they are bound,
@@ -310,10 +317,6 @@ private:
     /// Unbinds a VRAM block of memory the game unmapped (uploaded again if mapped and used).
     void EvictVramBlock(u64 block);
     [[nodiscard]] static u32 VramIdleSeconds();
-    /// BB_CHUNK_TEXTURES: texture data read by the GPU straight from the guest memory chunk it is
-    /// in (no CPU copy, no VRAM buffer copy), when the range is contiguous there.
-    std::optional<std::pair<const Buffer*, u64>> GuestChunkSource(VAddr address, u64 size);
-
     void DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size);
 
     bool SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 size, bool is_written,
@@ -417,6 +420,8 @@ private:
     std::array<std::unique_ptr<Buffer>, 256> chunk_buffers{}; ///< per guest memory chunk (Chunk::index)
 
     u32 arena_memory_type_index{};
+    /// bbport: system memory for residency when VRAM is full (4 GB cards), if sparse binding takes it
+    std::optional<u32> arena_fallback_type_index;
     vk::DeviceMemory residency_memory{}; ///< bbport: the 64 MiB block arena residency comes from
     u64 residency_size = 0, residency_used = 0;
     std::future<vk::DeviceMemory> spare_residency; ///< the next block, allocated in the background

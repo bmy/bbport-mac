@@ -119,7 +119,7 @@ inline std::atomic<std::uint64_t> shadow_copies{0}, shadow_bytes{0};
 /// BB_HONEST_LABELS: submissions sent early because the GPU had finished everything before them.
 inline std::atomic<std::uint64_t> idle_flushes{0};
 /// EOP fences with data: decoded, and their labels written (a growing gap: lost fences, guest leaks).
-inline std::atomic<std::uint64_t> eop_decoded{0}, eop_written{0};
+inline std::atomic<std::uint64_t> eop_decoded{0}, eop_written{0}, gpu_labels{0};
 /// sceGnmAreSubmitsAllowed calls, and those that answered no (submission lock held).
 inline std::atomic<std::uint64_t> submits_allowed_queries{0}, submits_refused{0}, submit_done_calls{0};
 /// Guest time blocked in Gnm submissions on the previous frame (submission lock or BB_SUBMIT_LOCK=frame).

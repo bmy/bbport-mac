@@ -1393,6 +1393,100 @@ bool Rasterizer::FilterDrawPasses() const {
     return !(mode == Mode::Disable && (depth_copy || stencil_copy));
 }
 
+// bbport BB_DRAW_TRACE=1 (diagnostic): every draw of one frame in 20 is printed while frames are
+// light (menus, loading screens: 900 draws or fewer): shaders, targets, textures, viewport, the
+// raw blend/depth/stencil state. Comparing a frame where something shows with one where it does
+// not tells whether the game stopped drawing it or drew it differently.
+bool Rasterizer::DrawTraceActive() {
+    static const bool enabled = [] {
+        const char* env = std::getenv("BB_DRAW_TRACE");
+        return env && env[0] == '1';
+    }();
+    if (!enabled) {
+        return false;
+    }
+    static u32 frame_seen = ~0u, lines = 0;
+    static u64 draws_at_frame = 0, draws_last_frame = ~0ull;
+    static bool active = false;
+    const u32 frame = BbStats::frame_number.load(std::memory_order_relaxed);
+    if (frame != frame_seen) {
+        const u64 draws = BbStats::draws.load(std::memory_order_relaxed);
+        draws_last_frame = draws - draws_at_frame;
+        draws_at_frame = draws;
+        frame_seen = frame;
+        active = draws_last_frame <= 900 && frame % 20 == 0 && lines < 150000;
+        if (active) {
+            timespec ts{};
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+            std::printf("Draw trace: t=%.3f frame %u begins (%llu draws last frame)\n",
+                        double(ts.tv_sec % 100000) + double(ts.tv_nsec) * 1e-9, frame,
+                        static_cast<unsigned long long>(draws_last_frame));
+        }
+    }
+    if (active) {
+        ++lines;
+    }
+    return active;
+}
+
+void Rasterizer::TraceDraw(const GraphicsPipeline* pipeline, bool bound) {
+    const auto& regs = Regs();
+    const auto raw = [](const auto& reg) {
+        u32 value = 0;
+        std::memcpy(&value, &reg, std::min(sizeof(value), sizeof(reg)));
+        return value;
+    };
+    std::string line = fmt::format(
+        "Draw trace: vs {:016x} ps {:016x} prim {} count {}{}", 
+        pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash,
+        pipeline->GetGraphicsKey().mrt_mask
+            ? pipeline->GetStage(Shader::SwStage::Fragment).pgm_hash
+            : 0,
+        u32(regs.primitive_type), regs.num_indices, bound ? "" : " NOT BOUND (skipped)");
+    for (u32 cb = 0; cb < AmdGpu::NUM_COLOR_BUFFERS; ++cb) {
+        if ((pipeline->GetGraphicsKey().mrt_mask >> cb) & 1) {
+            const auto& col = regs.color_buffers[cb];
+            line += fmt::format(" | rt{} {:#x} {}x{} blend {:08x}", cb, col.Address(),
+                                col.Pitch(), col.Height(), raw(regs.blend_control[cb]));
+        }
+    }
+    line += fmt::format(" | mask {:08x} depth {:#x} dctl {:08x} sctl {:08x}",
+                        raw(regs.color_target_mask),
+                        regs.depth_buffer.DepthValid() ? regs.depth_buffer.DepthAddress() : 0,
+                        raw(regs.depth_control), raw(regs.stencil_control));
+    const auto& vp = regs.viewports[0];
+    line += fmt::format(" | vp {:.1f},{:.1f} {:.1f}x{:.1f} scissor {},{}-{},{}", vp.xoffset - vp.xscale,
+                        vp.yoffset - vp.yscale, vp.xscale * 2, vp.yscale * 2,
+                        regs.screen_scissor.top_left_x, regs.screen_scissor.top_left_y,
+                        regs.screen_scissor.bottom_right_x, regs.screen_scissor.bottom_right_y);
+    if (pipeline->GetGraphicsKey().mrt_mask) {
+        const auto& stage = pipeline->GetStage(Shader::SwStage::Fragment);
+        for (const auto& image_desc : stage.images) {
+            const auto tsharp = image_desc.GetSharp(stage);
+            const VAddr address = tsharp.Address();
+            const auto data_fmt = tsharp.GetDataFmt();
+            const auto num_fmt = tsharp.GetNumberFmt();
+            const char* note = "";
+            bool zero = false;
+            if (address == 0 || data_fmt == AmdGpu::DataFormat::FormatInvalid) {
+                note = " null";
+            } else if (!memory->IsValidGpuMapping(address, 0)) {
+                note = " UNMAPPED";
+            } else if (!IsKnownFormat(data_fmt, num_fmt)) {
+                note = " UNKNOWN-FORMAT";
+            } else {
+                const auto* bytes = reinterpret_cast<const u8*>(address);
+                zero = std::all_of(bytes, bytes + 64, [](u8 b) { return b == 0; });
+            }
+            line += fmt::format(" | tex {:#x} {}x{} fmt {}/{} tile {}{}{}", address,
+                                u32(tsharp.width) + 1, u32(tsharp.height) + 1, u32(data_fmt),
+                                u32(num_fmt), u32(tsharp.GetTileMode()), note,
+                                zero ? " zero" : "");
+        }
+    }
+    std::printf("%s\n", line.c_str());
+}
+
 void Rasterizer::Draw(bool is_indexed, u32 index_offset, const PreparedDraw* prepared) {
     RENDERER_TRACE;
     BbStats::draws.fetch_add(1, std::memory_order_relaxed);
@@ -1484,6 +1578,9 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     // commands are recorded after BeginRendering, as before).
     draw_inputs = {pipeline, draw_prepared, index_offset, is_indexed, true, false};
     const bool bound = BindResources(pipeline);
+    if (DrawTraceActive()) {
+        TraceDraw(pipeline, bound);
+    }
     bind_prepared = nullptr; // indirect draws and dispatches bind without prepared sharps
     const bool inputs_resolved = draw_inputs.resolved;
     draw_inputs.pending = false;

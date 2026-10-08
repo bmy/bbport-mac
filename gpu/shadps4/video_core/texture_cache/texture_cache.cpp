@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <unordered_map>
 #include <xxhash.h>
 
 #include "bbport_toggles.h"
@@ -936,7 +938,63 @@ void TextureCache::RefreshImage(Image& image) {
         copy.bufferOffset += offset;
     }
 
+    ++image.uploads;
     runtime.UploadImage(&image, buffer, image_copies);
+}
+
+bool TextureCache::ImageTraceEnabled() {
+    static const bool on = [] {
+        const char* env = std::getenv("BB_IMAGE_TRACE");
+        return env && env[0] == '1';
+    }();
+    return on;
+}
+
+void TextureCache::TraceImageUse(const Image& image) {
+    struct Seen {
+        u64 hash;
+        u32 uploads, flags;
+    };
+    static std::mutex trace_mutex;
+    static std::unordered_map<u64, Seen> seen;
+    static u32 frame_seen = ~0u, lines = 0;
+    static u64 draws_at_frame = 0, draws_last_frame = ~0ull;
+    std::scoped_lock lock{trace_mutex};
+    const u32 frame = BbStats::frame_number.load(std::memory_order_relaxed);
+    const u64 draws = BbStats::draws.load(std::memory_order_relaxed);
+    if (frame != frame_seen) {
+        draws_last_frame = draws - draws_at_frame;
+        draws_at_frame = draws;
+        frame_seen = frame;
+    }
+    if (draws_last_frame > 60 || lines >= 4000 || image.info.guest_address == 0) {
+        return;
+    }
+    const auto* memory = reinterpret_cast<const u8*>(image.info.guest_address);
+    const u64 bytes = std::min<u64>(image.info.guest_size, 4ull << 20);
+    const u64 hash = XXH3_64bits(memory, bytes);
+    const u64 key = image.info.guest_address ^ (u64(image.info.size.width) << 40) ^
+                    (u64(image.info.size.height) << 52) ^ (u64(image.info.pixel_format) << 20);
+    const u32 flags = static_cast<u32>(image.flags);
+    const auto it = seen.find(key);
+    const bool first = it == seen.end();
+    if (!first && it->second.hash == hash && it->second.uploads == image.uploads &&
+        it->second.flags == flags) {
+        return;
+    }
+    const bool zero = std::all_of(memory, memory + bytes, [](u8 b) { return b == 0; });
+    ++lines;
+    std::printf("Image trace: frame %u (%llu draws) image %#llx+%#llx %ux%u fmt %u tile %u "
+                "mips %u flags %#x uploads %u memory %016llx%s%s\n",
+                frame, static_cast<unsigned long long>(draws_last_frame),
+                static_cast<unsigned long long>(image.info.guest_address),
+                static_cast<unsigned long long>(image.info.guest_size), image.info.size.width,
+                image.info.size.height, u32(image.info.pixel_format), u32(image.info.tile_mode),
+                image.info.resources.levels, flags, image.uploads,
+                static_cast<unsigned long long>(hash), zero ? " zero" : "",
+                first ? " (first use)"
+                      : it->second.hash != hash ? " (memory changed)" : "");
+    seen[key] = {hash, image.uploads, flags};
 }
 
 vk::Sampler TextureCache::GetSampler(const AmdGpu::Sampler& sampler,

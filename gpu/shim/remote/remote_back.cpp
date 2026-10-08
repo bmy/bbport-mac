@@ -644,10 +644,33 @@ int Main(int argc, char** argv) {
                     static_cast<unsigned long long>(begin), static_cast<unsigned long long>(end),
                     static_cast<unsigned long long>((end - begin) >> 20));
     }
-    for (const auto& [begin, end] : g.low.Taken()) {
-        std::fprintf(stderr, "GPU process: its own memory at %#llx-%#llx, where the game image "
-                     "goes\n", static_cast<unsigned long long>(begin),
-                     static_cast<unsigned long long>(end));
+    // The game image's data cannot move. The system allocator places its ranges at random each
+    // start: when they fall there, start again (the same pid, descriptors and arguments).
+    if (!g.low.Taken().empty()) {
+        bool has_attempt = false;
+        const u64 attempt = ArgValue(argc, argv, "--attempt", has_attempt);
+        ReportMappings(LowBegin, LowBegin + LowReserveBytes);
+        if (attempt < 8) {
+            std::printf("GPU process: its memory allocator is where the game image goes; starting "
+                        "again\n");
+            std::fflush(stdout);
+            std::vector<char*> next;
+            for (int i = 0; i < argc; ++i) {
+                if (std::strcmp(argv[i], "--attempt") == 0) {
+                    ++i; // replaced below
+                    continue;
+                }
+                next.push_back(argv[i]);
+            }
+            std::string count = std::to_string(attempt + 1);
+            next.push_back(const_cast<char*>("--attempt"));
+            next.push_back(count.data());
+            next.push_back(nullptr);
+            execv(argv[0], next.data());
+            std::perror("GPU process: starting again");
+        }
+        std::fprintf(stderr, "GPU process: the game image's data is not shared (the GPU reads "
+                     "its resource tables there)\n");
     }
     if (g.guest.Overlaps(ControlAddress, ControlBytes)) {
         std::fprintf(stderr, "GPU process: the control block's address is in use here\n");

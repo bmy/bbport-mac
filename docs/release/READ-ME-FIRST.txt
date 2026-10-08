@@ -1,0 +1,40 @@
+bbport for Mac
+==============
+
+Bloodborne (PS4) running natively on Apple Silicon Macs. Experimental.
+No game files are included: you need your own decrypted copy of Bloodborne
+(CUSA03173) merged with the 1.09 update.
+
+Before the first launch
+-----------------------
+1. Install Rosetta 2 and the Command Line Tools (for Python 3). In Terminal:
+
+       softwareupdate --install-rosetta --agree-to-license
+       xcode-select --install
+
+2. Drag bbport.app into your Applications folder.
+
+3. Open it. The app isn't notarised by Apple, so macOS stops it the first
+   time: click Done, then go to System Settings > Privacy & Security, scroll
+   down and click "Open Anyway" next to the message about bbport.
+
+   If macOS says the app "is damaged and can't be opened", run this in
+   Terminal and open it again:
+
+       xattr -dr com.apple.quarantine /Applications/bbport.app
+
+Playing
+-------
+Choose the game folder (the one with eboot.bin) and press Play. The first
+launch compiles shaders: a black window for a few minutes is normal.
+In game, the settings menu is on F1, ` or § (L3+R3 on a controller).
+
+The full guide: Help > bbport User Guide in the app, or
+https://github.com/bmy/bbport-mac/blob/macos-0.4/docs/USER_GUIDE.md
+
+Problems: https://github.com/bmy/bbport-mac/issues
+(attach the log: Help > Show the Last Run's Log)
+
+bbport for Mac is free software under the GNU GPL v2 or later (LICENSE.txt).
+It is not affiliated with Sony Interactive Entertainment, FromSoftware, AMD,
+Apple, shadPS4 or the upstream bbport project.

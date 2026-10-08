@@ -1,4 +1,9 @@
-# bbport on macOS (Apple Silicon)
+# bbport on macOS (Apple Silicon): building from source
+
+Most people should download the app from the
+[Releases page](https://github.com/bmy/bbport-mac/releases) instead; see the
+[user guide](../../docs/USER_GUIDE.md). This page is for building from a checkout: to test a
+branch, or to work on the port.
 
 The game code runs as x86-64 under Rosetta 2. Vulkan runs on Metal through KosmicKrisp.
 MoltenVK can't run bbport, because it has no sparse buffers. You need the game folder: Bloodborne CUSA03173, merged with
@@ -6,11 +11,19 @@ update 1.09, the one with `eboot.bin` in it.
 
 ## One-time setup
 
+Clone the repository (the main branch is `macos-0.4`; `macos-native` has the experimental native
+GPU process):
+
+```
+git clone --recursive -b macos-0.4 https://github.com/bmy/bbport-mac.git ~/Projects/bbport-mac/src
+cd ~/Projects/bbport-mac/src
+```
+
 1. Install the Command Line Tools (`xcode-select --install`), Rosetta 2
    (`softwareupdate --install-rosetta --agree-to-license`) and Apple Silicon Homebrew
    (https://brew.sh).
-2. Build the x86-64 dependencies into `deps-x86_64/`. This takes a while, and KosmicKrisp
-   alone takes 10 to 20 minutes:
+2. Build the x86-64 dependencies into `deps-x86_64/`. This takes a while (KosmicKrisp is
+   the longest part):
 
    ```
    bash tools/macos/setup_deps.sh
@@ -80,6 +93,19 @@ A DualSense works over USB or Bluetooth. Keyboard layout:
 
 The overlay menu (upscaler, FPS counter, effects) opens with **F1**, **`` ` ``** or **§**, or
 **L3+R3** on a controller.
+
+## Release builds
+
+`bash tools/macos/package.sh <version>` turns a finished build into the release download,
+`dist/bbport-<version>.zip`: one self-contained `bbport.app` (launcher, engine, the x86-64
+libraries and KosmicKrisp, ad-hoc signed) with a read-me. The packaged app runs its built-in
+engine and keeps its data in `~/Library/Application Support/bbport` (`tools/macos/run.sh`
+recognises the layout by the `.packaged` file); bbport ▸ Settings can point it at a checkout.
+
+Releases are made by GitHub Actions (`.github/workflows/release.yml`) on a GitHub-hosted Apple
+Silicon runner: pushing a tag such as `0.4-mac.2` builds the release and publishes a
+pre-release with the zip, its SHA-256 and the notes in `docs/release/<tag>.md`. A push to a
+`ci-*` branch, or *Run workflow* in the Actions tab, builds the zip without releasing it.
 
 ## Troubleshooting
 

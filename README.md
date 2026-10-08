@@ -1,204 +1,130 @@
-# bbport-mac — Bloodborne on Apple Silicon Macs
+# bbport for Mac: Bloodborne on Apple Silicon
 
-A macOS port of [bbport](https://github.com/deadinside28/bloodborne_pc) (release 0.4),
-deadinside28's native port of *Bloodborne* (PS4, CUSA03173, game version 1.09). It runs the game's original
-executable on an Apple Silicon Mac and renders it through Vulkan on Metal, with temporal
-upscaling (AMD FSR 3.1) up to 4K.
+A macOS port of [bbport](https://github.com/deadinside28/bloodborne_pc), deadinside28's native
+port of *Bloodborne* (PS4, CUSA03173, game version 1.09). It runs the game's original
+executable on an Apple Silicon Mac and renders it through Vulkan on Metal, with FSR 3.1
+upscaling up to 4K.
 
-> **No game files are included.** You need your own dump of Bloodborne (CUSA03173) with the
-> 1.09 update. This project is not affiliated with Sony Interactive Entertainment,
-> FromSoftware, AMD, Apple, shadPS4 or the upstream bbport project. Please report problems
-> with the Mac port **here**, not to shadPS4 or to upstream bbport.
+**[Download the latest release](https://github.com/bmy/bbport-mac/releases)** ·
+**[User guide](docs/USER_GUIDE.md)** ·
+**[Report a problem](https://github.com/bmy/bbport-mac/issues)**
 
-**Status: experimental, playable.** The game boots, plays, saves and loads, with sound and a
-DualSense or keyboard. It has been tested on one machine so far: a MacBook Pro with an M5 Max,
-macOS 27.
+> **No game files are included.** You need your own decrypted copy of Bloodborne (CUSA03173)
+> with the 1.09 update merged in. This project is not affiliated with Sony Interactive
+> Entertainment, FromSoftware, AMD, Apple, shadPS4 or the upstream bbport project. Please report
+> problems with the Mac port **here**, not to shadPS4 or to upstream bbport.
 
-## Performance
+## Status (October 2026)
 
-On the M5 Max, at 1440p output with FSR 3.1 (Native AA): **45–60 FPS**, depending on how busy
-the scene is. A 30 FPS lock holds everywhere.
+**Experimental, playable.** Based on bbport 0.4.
 
-The limit is not the GPU: resolution and upscaling are nearly free. The limit is the CPU cost
-of each Vulkan call. The game's code is x86-64, so the whole process, including the Vulkan
-driver and Apple's Metal driver, runs under Rosetta 2. Every draw passes through that
-translated stack, so scenes with many draws per frame run slower. See *Known limitations*
-and *Roadmap*.
+- The whole game boots, plays, saves and loads, with sound, cutscenes, a DualSense or other
+  controller, or the keyboard.
+- **About 45–60 FPS** at 1440p with FSR 3.1 (Native AA) on an M5 Max; a 30 FPS lock holds
+  everywhere. Busy areas are the slow ones.
+- 60 FPS (community patch), output up to 4K, FSR 3.1, TAA and experimental MetalFX, the in-game
+  settings menu, mods and shadPS4-format patches.
+- Tested on **one machine** so far (MacBook Pro, M5 Max, macOS 27). Reports from other Macs are
+  very welcome.
 
-Make sure **Low Power Mode is off** (battery menu, or System Settings → Battery), and keep the
-Mac plugged in for consistent results.
+Recent work: a self-contained app download; the loading screens' item picture, which vanished
+for most of each loading screen on every platform; keyboard input; a Retina window; and an
+experimental **native arm64 renderer process** (below).
+
+## Play
+
+You need an Apple Silicon Mac with **macOS 26 or later**, **Rosetta 2**, and the **Command Line
+Tools** (for Python 3). Then:
+
+1. Download `bbport-….zip` from [Releases](https://github.com/bmy/bbport-mac/releases), open
+   it, and drag **bbport.app** into Applications.
+2. Open it (the first time: **System Settings ▸ Privacy & Security ▸ Open Anyway**, since the
+   app isn't notarised).
+3. Choose your game folder (the one with `eboot.bin`) and press **Play**.
+
+The **[user guide](docs/USER_GUIDE.md)** covers each step, the commands to install Rosetta 2
+and the Command Line Tools, every setting, the controls, where your saves are, and what to do
+when something goes wrong. In the app it's under **Help ▸ bbport User Guide**.
+
+Recommended: 2560×1440 output, frame rate 60, FSR 3.1 at Native AA, Model detail Highest. Keep
+**Low Power Mode off**.
 
 ## How it works on the Mac
 
-- **Rosetta 2.** The game code, the loader and every library they load are built as x86-64 and
-  run under Rosetta 2. The build tools themselves run natively.
-- **KosmicKrisp.** Vulkan is provided by Mesa's Vulkan-on-Metal driver, built from source as
-  x86-64 by the setup script, with a small patch that adds an on-disk shader cache. MoltenVK
-  can't run bbport, because bbport's buffer cache relies on sparse buffers.
-- **Mac-specific runtime work.** On top of upstream bbport:
+- **Rosetta 2.** The game's code is x86-64, so the game, the loader and every library they load
+  run as x86-64 under Rosetta 2.
+- **KosmicKrisp.** Vulkan runs on Mesa's Vulkan-on-Metal driver, built from source as x86-64,
+  with small patches (an on-disk shader cache among them). MoltenVK can't run bbport, because
+  bbport's buffer cache relies on sparse buffers.
+- **Mac-specific runtime work** on top of upstream bbport:
   - guest thread-local storage through the pthread TSD slot (macOS has no `fs`/`gs` base API);
   - a low heap for host objects the game sees, which must sit below 1 TiB;
   - Mach/BSD differences in memory, signals, timers and threads;
-  - Cocoa on the main thread;
-  - Core Audio output;
-  - native text input.
+  - Cocoa on the main thread, Core Audio output, native text input.
 - **Graphics extras.** Parallel shader warm-up at startup, the FPS counter, an English in-game
   menu, and FSR 3.1 and MetalFX on Apple GPUs.
-
-## Requirements
-
-- An Apple Silicon Mac with **macOS 26 or later** (KosmicKrisp needs macOS 26+).
-- **Rosetta 2:** `softwareupdate --install-rosetta --agree-to-license`.
-- **Command Line Tools:** `xcode-select --install`. Full Xcode isn't needed.
-- **[Homebrew](https://brew.sh)** for Apple Silicon.
-- **Your game folder:** Bloodborne CUSA03173 *with the 1.09 update merged in*, meaning the
-  update's files have replaced the base game's files. The folder with `eboot.bin` in it is the
-  one you point bbport at. An unmerged 1.00 `eboot.bin` won't work with the 60 FPS patches.
-  The dump must be decrypted; `eboot.bin` can be either a decrypted SELF or a plain ELF.
-
-## Setup and build
-
-```
-git clone --recursive -b macos-port https://github.com/bmy/bbport-mac.git ~/Projects/bbport-mac/src
-cd ~/Projects/bbport-mac/src
-bash tools/macos/setup_deps.sh       # one-time: x86-64 dependencies and KosmicKrisp (~20-40 min)
-bash tools/macos/build.sh            # the port: out/bb-probe and out/gpu/libbbgpu.dylib
-bash tools/macos/build_launcher.sh   # the Mac app: out/bbport.app
-open out/bbport.app
-```
-
-After that, the app's **Update** button keeps everything current: it fetches the latest
-version from GitHub and rebuilds only what changed. From Terminal, the same is
-`bash tools/macos/update.sh`.
-
-## Playing
-
-**From the app** (recommended): open `out/bbport.app` (drag it to the Dock to keep it handy),
-choose the game folder, and press **Play**. Recommended settings:
-
-- **Frame rate:** mode 60, no FPS limit, present mode FIFO.
-- **Upscaler:** FSR 3.1, with either 1440p output at Native AA (sharpest) or 4K output at
-  Balanced or Quality.
-- **Live resolution changes:** off. Everything then renders at full resolution, and resolution
-  or preset changes apply after **Apply and restart game** in the in-game menu. On, they apply
-  instantly, but the game's post-processing stays at 1080p.
-
-The app's log window shows the game's output, and every run is also saved to
-`out/last-run.log` (the one before it to `out/previous-run.log`).
-
-**From Terminal:**
-
-```
-cd ~/Projects/bbport-mac/src
-BB_FPS=60 BB_UPSCALER=fsr3 BB_GAME_DIR=~/path/to/CUSA03173 bash tools/macos/run.sh
-```
-
-**First launch:** the game compiles its shaders, so the first session after a build stutters
-whenever something new appears. From the second launch on, everything seen before is compiled
-in parallel during a short black screen at startup.
-
-**In-game menu:** press **F1**, **`** or **§**, or **L3+R3** on a controller. From the menu you
-can:
-
-- choose the upscaler and preset;
-- set sharpening;
-- set the output resolution, up to 4K;
-- turn the FPS counter on or off;
-- turn game effects on or off.
-
-Settings are saved to `bbport.ini`.
-
-**Remapping controls:** add lines to `bbport.ini`, one per PS4 input, with SDL names for keys and
-gamepad buttons, for example `key.cross=Space` or `pad.circle=b` (several bindings separated by
-commas). Inputs without a line keep the defaults below. To pick one of several controllers, set
-`BB_GAMEPAD` to part of its name or its GUID.
-
-| Keyboard | PS4 |
-|---|---|
-| W A S D | left stick |
-| arrow keys | right stick |
-| I J K L | D-pad |
-| Space / Left Shift / E / Q | Cross / Circle / Square / Triangle |
-| Enter | Options |
-| 1 / 3 | L1 / R1 |
-| R / F | L2 / R2 |
-| Z / C | L3 / R3 |
-| Tab / Backspace | touchpad |
-
-More detail, including troubleshooting: [tools/macos/README-macos.md](tools/macos/README-macos.md).
-
-### Useful settings
-
-For Terminal runs; in the app, most are regular settings and the rest go in
-**Developer → Extra variables**.
-
-| Variable | Values |
-|---|---|
-| `BB_FPS` | `30`, `60` (recommended), `uncap` |
-| `BB_UPSCALER` | `fsr3` (recommended), `taa`, `metalfx`, `off`. If unset, the in-game menu's choice applies. |
-| `BB_FRAME_STATS=1` | Prints frame rate and timing breakdowns to `out/last-run.log` every 5 s |
-| `BB_OBJECT_MOTION=0` | Turns off character motion vectors (on by default; without them FSR smears animated characters) |
-| `BB_VK_RECORD_THREADS` | Threads recording Vulkan commands (default: 3 on this class of Mac; `1` records on one thread) |
-| `BB_GAMEPAD` | Which controller to use: part of its name or its GUID |
-| `BB_CAMERA_Y` | `up` or `down` forces which way the camera motion vectors treat vertical. By default it follows each frame's G-buffer viewport (the wrong one makes FSR shimmer on floors) |
-| `BB_HOST_COPY_WAITS=all` | Waits for every pending guest memory copy before each WRITE_DATA/DMA packet, as before. By default only copies reading the memory written are waited for (faster) |
-| `BB_BREADCRUMBS=1` | Turns on bbport's GPU crash breadcrumbs (off on the Mac: with KosmicKrisp they blank the picture) |
-| `BB_PRELOAD_THREADS` | Threads for the startup shader warm-up (default: all cores) |
-
-## Upscalers on the Mac
-
-- **FSR 3.1** works and is recommended. Use Native AA for anti-aliasing only, or
-  Quality/Balanced to render below the output resolution and upscale.
-- **TAA** works: cheaper than FSR 3.1, but softer.
-- **MetalFX** (Apple) is experimental, and it doesn't support the Native AA preset. It runs on
-  the thread that submits work to the GPU, so the game's own GPU thread doesn't wait for it;
-  `BB_METALFX_SYNC=1` brings back the older, slower synchronous version.
-- **FSR 4 / 4.1.1** need GPU features that KosmicKrisp doesn't expose. They're hidden on the Mac.
-- **DLSS** requires NVIDIA hardware and isn't possible on a Mac.
+- **The app** (`launcher-macos/`, SwiftUI) is native arm64. The release zip carries the engine,
+  its libraries and the driver inside the app; nothing else needs installing.
 
 ## Known limitations
 
 - **Geometry shaders.** Metal has no geometry shader stage, so draws that need one are skipped
-  and a few effects may be missing. The newer KosmicKrisp that emulates them (the version
-  upstream shadPS4 moved to in October 2026) ran clearly slower in testing, even with them
-  switched off, and drew blood on characters wrongly. The port stays on the previous version
-  for now.
-- **Dense scenes.** These drop below 60 FPS. The cause is CPU cost under Rosetta (see
-  *Performance*), not the GPU.
-- **Single test machine.** Everything so far has been tested on one Mac.
+  and a few effects are missing. A newer KosmicKrisp emulates them, but it ran clearly slower in
+  testing and drew blood on characters wrongly, so the port stays on the previous version.
+- **Busy scenes run below 60 FPS.** The limit is the CPU cost of each draw going through
+  bbport's renderer, KosmicKrisp and Metal, all translated by Rosetta. Resolution and upscaling
+  are nearly free.
+- **Occasional pop-in** of objects while an area streams in.
+- **Shader compilation** on the first launch (and after updates): a few minutes of black screen
+  and some stutter; later launches are quick.
 
 ## Roadmap
 
-1. **Dense scenes closer to 60.** Measured in October 2026: the number of recording threads
-   (2, 3 or 4) makes no difference, and removing bbport's own waits only moves the time
-   elsewhere. The cost is the Vulkan-to-Metal path running under Rosetta (item 3).
-2. **Geometry shaders:** find what makes the newer KosmicKrisp slower, report it upstream, and
+1. **Native renderer process** (branch `macos-native`, experimental, source builds only). The
+   renderer (bbport's GPU library, KosmicKrisp and Metal's driver) runs in a separate native
+   arm64 process, `bb-gpu`, sharing the game's memory with the x86-64 game process. It works,
+   including keyboard, controllers, the overlay and statistics. Making it faster than the
+   in-process path in busy scenes is the current work; then it becomes the default. Design and
+   status: `docs/macos-native-gpu.md` on that branch.
+2. **Geometry shaders**: find what makes the newer KosmicKrisp slower, report it upstream, and
    move to it once it's as fast.
-3. **Move the renderer into a separate native arm64 process.** The renderer is the shadPS4-based
-   GPU library plus KosmicKrisp and Metal. It would share guest memory with the game process
-   through the existing shared-memory pool. This removes Rosetta from the frame-rate bottleneck,
-   and it is also the first step towards a Rosetta-free port (below). A benchmark of native
-   versus Rosetta KosmicKrisp decides when it's worth doing.
+3. **Pop-in**: measure whether it comes from streaming or from draw distance, and fix what can be
+   fixed.
+4. **More Macs**: results from M1–M4 machines and smaller GPUs.
 
 ### Planning for the end of Rosetta
 
-Apple has said macOS 27 is the last release with Rosetta for general use. From macOS 28 it
-remains only for certain older, unmaintained games that rely on Intel-based frameworks, and
-it's unclear whether bbport would qualify. Apple's statements on this differ in detail. The
-game's code is x86-64, so a long-term Mac port needs its own translation:
+Apple has said macOS 27 is the last release with Rosetta for general use; from macOS 28 it
+remains only for certain older games, and it's unclear whether bbport would qualify. Since the
+game's code is x86-64, a long-term Mac port needs its own translation:
 
-- **Renderer.** After roadmap item 3, the renderer no longer needs Rosetta. Only the game code
-  and bbport's small runtime remain x86-64.
-- **Game code.** bbport targets a single, fixed executable (Bloodborne 1.09), which it already
-  analyses and relinks offline. It also already bundles the Zydis x86 disassembler. That makes
-  ahead-of-time recompilation of that one binary to arm64 feasible, with a small runtime
-  fallback for indirect jumps that can't be resolved in advance. The main difficulty is memory
-  ordering: x86 has stronger guarantees than arm64, and the hardware mode Rosetta uses for this
-  isn't available to ordinary apps, so translated code needs barriers. This is a research-sized
-  project.
-- **Fallbacks.** An existing x86-to-arm64 translator, if one gains macOS support, or running the
-  Linux build in an arm64 Linux virtual machine with such a translator. Both would likely be
-  slower than today.
+- **Renderer.** With roadmap item 1, the renderer no longer needs Rosetta. Only the game code and
+  bbport's small runtime remain x86-64.
+- **Game code.** bbport targets one fixed executable (Bloodborne 1.09), which it already analyses
+  and relinks offline, and it bundles the Zydis x86 disassembler. Ahead-of-time recompilation of
+  that one binary to arm64 is feasible, with a runtime fallback for indirect jumps. The hard part
+  is memory ordering: x86 guarantees more than arm64, and the hardware mode Rosetta uses for this
+  isn't available to ordinary apps. This is a research-sized project.
+- **Fallbacks.** An existing x86-to-arm64 translator, if one gains macOS support, or the Linux
+  build in an arm64 Linux virtual machine with such a translator. Both would likely be slower.
+
+## Building from source
+
+For testing branches and development: [tools/macos/README-macos.md](tools/macos/README-macos.md).
+In short:
+
+```
+git clone --recursive -b macos-0.4 https://github.com/bmy/bbport-mac.git ~/Projects/bbport-mac/src
+cd ~/Projects/bbport-mac/src
+bash tools/macos/setup_deps.sh
+bash tools/macos/build.sh
+bash tools/macos/build_launcher.sh
+open out/bbport.app
+```
+
+A source build's app has an **Update** button that fetches and rebuilds the branch set in
+bbport ▸ Settings. Releases are built by GitHub Actions from a tag
+(`.github/workflows/release.yml`, `tools/macos/package.sh`).
 
 ## Credits and licence
 

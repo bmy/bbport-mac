@@ -13,6 +13,8 @@ namespace Back = BbRemote::Back;
 extern "C" {
 // Diagnostics switches (BB_TOGGLES), as runtime_memory.c.
 uint64_t runtime_disabled_optimizations;
+// Experiment bits: the second number in BB_TOGGLE_FILE (remote_back.cpp watches it).
+uint64_t runtime_experiment_bits;
 // Speculative guest reads (draw preparation): a fault there jumps back (remote_back.cpp).
 __thread sigjmp_buf* runtime_fault_recover;
 volatile int runtime_restarting;

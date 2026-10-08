@@ -22,6 +22,7 @@
 #include <shared_mutex>
 #include <string>
 #include <sys/mman.h>
+#include <chrono>
 #include <thread>
 #include <unistd.h>
 #include <vector>
@@ -726,6 +727,31 @@ int Main(int argc, char** argv) {
     WatchParent();
     if (const char* toggles = std::getenv("BB_TOGGLES")) {
         runtime_disabled_optimizations = std::strtoull(toggles, nullptr, 0);
+    }
+    // BB_TOGGLE_FILE: the switches this process's GPU code reads are its own copies; it watches
+    // the file as the game process does (runtime_memory.c), every 250 ms.
+    if (const char* path = std::getenv("BB_TOGGLE_FILE")) {
+        std::thread([file = std::string(path)] {
+            const char* fixed = std::getenv("BB_TOGGLES");
+            const unsigned long long always = fixed ? std::strtoull(fixed, nullptr, 0) : 0;
+            for (unsigned long long last = ~0ull;;) {
+                unsigned long long value = 0, experiment = 0;
+                if (FILE* f = std::fopen(file.c_str(), "r")) {
+                    if (std::fscanf(f, "%llu %llu", &value, &experiment) < 1) {
+                        value = 0;
+                    }
+                    std::fclose(f);
+                }
+                __atomic_store_n(&runtime_experiment_bits, u64(experiment), __ATOMIC_RELEASE);
+                if (value != last) {
+                    __atomic_store_n(&runtime_disabled_optimizations, u64(value | always),
+                                     __ATOMIC_RELEASE);
+                    std::printf("GPU process: disabled optimizations mask=%llu\n", value);
+                    last = value;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(250));
+            }
+        }).detach();
     }
     Platform::IrqController::forward = [](Platform::InterruptId irq) { Irq(u32(irq)); };
     std::printf("GPU process: native (page size %ld), guest memory reserved\n",

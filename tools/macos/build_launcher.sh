@@ -6,12 +6,15 @@
 #   open out/bbport.app
 # The repository path is embedded in the app (Info.plist BBRepoPath; Settings can override it).
 # The icon comes from the game's sce_sys/icon0.png: BB_GAME_DIR, else the folder chosen in the app.
+# Release builds (tools/macos/package.sh): BB_RELEASE=<version> embeds no repository path and no
+# game icon (the game's artwork is not ours to distribute); BB_APP sets where the app goes.
 set -euo pipefail
 cd -- "$(dirname -- "$0")/../.."
 repo=$PWD
 pkg=launcher-macos
-app=out/bbport.app
+app=${BB_APP:-out/bbport.app}
 work=out/launcher-build
+release=${BB_RELEASE:-}
 
 [[ $(uname -s) == Darwin ]] || { echo "STOP: run this on the Mac" >&2; exit 1; }
 command -v swift >/dev/null || { echo "STOP: swift missing: xcode-select --install" >&2; exit 1; }
@@ -31,6 +34,10 @@ rm -rf "$app" "$work"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$work"
 cp "$bin" "$app/Contents/MacOS/bbport"
 version=$(git rev-list --count HEAD 2>/dev/null || echo 1)
+short_version=${release:-0.1}
+# KosmicKrisp needs macOS 26; a checkout build keeps the old minimum so its own checks explain.
+min_system=14.0
+[[ -n $release ]] && min_system=26.0
 cat > "$app/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -51,13 +58,13 @@ cat > "$app/Contents/Info.plist" <<EOF
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1</string>
+    <string>$short_version</string>
     <key>CFBundleVersion</key>
     <string>$version</string>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.games</string>
     <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
+    <string>$min_system</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSPrincipalClass</key>
@@ -66,7 +73,7 @@ cat > "$app/Contents/Info.plist" <<EOF
 </plist>
 EOF
 # plutil escapes the path for XML.
-plutil -insert BBRepoPath -string "$repo" "$app/Contents/Info.plist"
+[[ -n $release ]] || plutil -insert BBRepoPath -string "$repo" "$app/Contents/Info.plist"
 
 make_icon() {
     local source=$1 iconset=$work/AppIcon.iconset size
@@ -81,7 +88,9 @@ make_icon() {
 }
 game=${BB_GAME_DIR:-$(defaults read io.github.bbport.mac gameFolder 2>/dev/null || true)}
 icon=${game:+$game/sce_sys/icon0.png}
-if [[ -n $icon && -f $icon ]]; then
+if [[ -n $release ]]; then
+    echo "release build: no icon from the game (the app shows the game's icon in the Dock anyway)"
+elif [[ -n $icon && -f $icon ]]; then
     if make_icon "$icon"; then
         plutil -insert CFBundleIconFile -string AppIcon "$app/Contents/Info.plist"
         echo "icon: $icon"
@@ -93,8 +102,10 @@ else
 fi
 plutil -lint "$app/Contents/Info.plist" >/dev/null
 
-# Ad-hoc signature: Apple Silicon refuses unsigned arm64 code.
+# Ad-hoc signature: Apple Silicon refuses unsigned arm64 code. Release builds are signed again
+# by tools/macos/package.sh once the game engine is inside.
 codesign --force --sign - --deep "$app"
+[[ -z $release ]] || exit 0
 echo
 echo "Built $app ($(lipo -archs "$app/Contents/MacOS/bbport"))."
 echo "Open it with:  open $app"

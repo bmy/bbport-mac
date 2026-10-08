@@ -64,6 +64,10 @@ final class LauncherModel: ObservableObject {
 
     /// BBRepoPath from Info.plist, written by tools/macos/build_launcher.sh.
     let embeddedRepoPath: String?
+    /// The release app's own game engine (Contents/Resources/bbport, tools/macos/package.sh).
+    let engineURL: URL?
+    /// The release's version (CFBundleShortVersionString).
+    let appVersion: String
 
     private var process: Process?
     private var collector: OutputCollector?
@@ -77,6 +81,9 @@ final class LauncherModel: ObservableObject {
 
     private init() {
         embeddedRepoPath = Bundle.main.object(forInfoDictionaryKey: "BBRepoPath") as? String
+        engineURL = Bundle.main.resourceURL.map { $0.appendingPathComponent("bbport", isDirectory: true) }
+            .flatMap { FileManager.default.fileExists(atPath: $0.appendingPathComponent(".packaged").path) ? $0 : nil }
+        appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
         prefs = LauncherPrefs.load(from: UserDefaults.standard)
         refreshChecks()
         reloadRepositoryFiles()
@@ -84,11 +91,16 @@ final class LauncherModel: ObservableObject {
 
     // MARK: - Paths
 
-    /// Settings override, else the path embedded at build time, else a repository above the app.
+    /// The release app runs its built-in engine unless Settings name a checkout.
+    var usesBuiltInEngine: Bool { engineURL != nil && prefs.repoOverride.isEmpty }
+
+    /// Settings override, else the release app's engine, else the path embedded at build time,
+    /// else a repository above the app.
     var repoURL: URL? {
         if !prefs.repoOverride.isEmpty {
             return URL(fileURLWithPath: (prefs.repoOverride as NSString).expandingTildeInPath, isDirectory: true)
         }
+        if let engineURL { return engineURL }
         if let embeddedRepoPath, !embeddedRepoPath.isEmpty {
             let url = URL(fileURLWithPath: embeddedRepoPath, isDirectory: true)
             if isRepository(url) { return url }
@@ -97,11 +109,22 @@ final class LauncherModel: ObservableObject {
     }
 
     /// Generated files, saves, bbport.ini, mods.json and patches.json live in the repository
-    /// (run.sh's data directory when BB_DATA_DIR is unset).
-    private var dataURL: URL { repoURL ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true) }
+    /// (run.sh's data directory when BB_DATA_DIR is unset). The release app keeps them in
+    /// ~/Library/Application Support/bbport (BB_DATA_DIR): nothing is written into the app.
+    var dataURL: URL {
+        if usesBuiltInEngine { return Self.applicationSupportURL }
+        return repoURL ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+    }
 
-    /// Nothing is written outside a real checkout (a mistyped override, no embedded path).
-    private var hasRepository: Bool { repoURL.map(isRepository) ?? false }
+    static var applicationSupportURL: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
+        return base.appendingPathComponent("bbport", isDirectory: true)
+    }
+
+    /// Nothing is written outside a real checkout (a mistyped override, no embedded path) or the
+    /// release app's data folder.
+    private var hasRepository: Bool { usesBuiltInEngine || (repoURL.map(isRepository) ?? false) }
 
     var iniURL: URL { dataURL.appendingPathComponent("bbport.ini") }
     var lastRunLogURL: URL { dataURL.appendingPathComponent("out/last-run.log") }
@@ -126,7 +149,7 @@ final class LauncherModel: ObservableObject {
     }
 
     var canUpdate: Bool {
-        !isRunning && hasRepository
+        usesBuiltInEngine || (!isRunning && hasRepository)
     }
 
     var statusText: String {
@@ -172,7 +195,7 @@ final class LauncherModel: ObservableObject {
 
     /// Cheap checks, also run when the app becomes active (a build may have finished meanwhile).
     func refreshChecks() {
-        repoCheck = checkRepository(repoURL)
+        repoCheck = usesBuiltInEngine ? checkEngine(engineURL, version: appVersion) : checkRepository(repoURL)
         refreshGameCheck()
     }
 
@@ -197,6 +220,7 @@ final class LauncherModel: ObservableObject {
         guard hasRepository else { return }
         ini = IniFile.load(iniURL)  // the in-game menu may have rewritten it
         let text = ini.text(applying: game.iniValues)
+        try FileManager.default.createDirectory(at: iniURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try text.write(to: iniURL, atomically: true, encoding: .utf8)
         ini = IniFile.load(iniURL)
     }
@@ -294,7 +318,7 @@ final class LauncherModel: ObservableObject {
         let profile = readJSON(patchesConfigURL)
         let enabled = Set(profile["enabled"] as? [String] ?? [])
         let disabled = Set(profile["disabled"] as? [String] ?? [])
-        let builtIn = dataURL.appendingPathComponent("patches/Bloodborne.xml")
+        let builtIn = (repoURL ?? dataURL).appendingPathComponent("patches/Bloodborne.xml")
         patches = discoverPatches(in: patchesFolderURL, builtIn: builtIn).map { meta in
             var subtitle = String(meta.key.split(separator: "/", maxSplits: 1).first ?? "")
             if let author = meta.author { subtitle += " · Author: \(author)" }
@@ -342,11 +366,13 @@ final class LauncherModel: ObservableObject {
         let path = env["PATH"].flatMap { $0.isEmpty ? nil : $0 } ?? "/usr/bin:/bin:/usr/sbin:/sbin"
         env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + path
         env["PYTHONUNBUFFERED"] = "1"
+        if env["PYTHON"] == nil, let python = findPython() { env["PYTHON"] = python }
         // run.sh derives these from bbport.ini (output_res, live_resolution).
         for key in ["BB_RENDER_RES", "BB_OUTPUT_RES", "BB_AUTO_RENDER_RES"] {
             env.removeValue(forKey: key)
         }
         env["BB_CONFIG"] = iniURL.path
+        if usesBuiltInEngine { env["BB_DATA_DIR"] = dataURL.path } else { env.removeValue(forKey: "BB_DATA_DIR") }
         env["BB_GAME_DIR"] = (p.gameFolder as NSString).expandingTildeInPath
         env["BB_USER_DIR"] = userFolderURL.path
         env["BB_MODS_DIR"] = modsFolderURL.path
@@ -393,6 +419,7 @@ final class LauncherModel: ObservableObject {
             return
         }
 
+        if usesBuiltInEngine, let engineURL { clearQuarantine(engineURL) }
         let env = environment()
         let summary = ["BB_GAME_DIR", "BB_FPS", "BB_UPSCALER", "BB_FULLSCREEN", "BB_PRESENT_MODE"]
             .map { "\($0)=\(env[$0] ?? "")" }.joined(separator: " ")
@@ -400,9 +427,27 @@ final class LauncherModel: ObservableObject {
               echo: "$ \(summary) bash tools/macos/run.sh")
     }
 
+    /// A downloaded app's files carry the quarantine flag, and macOS would stop the engine's
+    /// programs and libraries one by one when the game starts. Opening the app approved it.
+    private func clearQuarantine(_ url: URL) {
+        let xattr = Process()
+        xattr.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
+        xattr.arguments = ["-dr", "com.apple.quarantine", url.path]
+        xattr.standardOutput = FileHandle.nullDevice
+        xattr.standardError = FileHandle.nullDevice
+        do {
+            try xattr.run()
+            xattr.waitUntilExit()
+        } catch {}
+    }
+
     /// Fetches the branch from GitHub and rebuilds what changed (tools/macos/update.sh). An empty
-    /// branch preference keeps the current one.
+    /// branch preference keeps the current one. The release app opens the downloads page instead.
     func update() {
+        if usesBuiltInEngine {
+            Links.open(Links.releases)
+            return
+        }
         guard process == nil, let repo = repoURL, hasRepository else { return }
         let branch = prefs.branch.trimmingCharacters(in: .whitespaces)
         var arguments = ["tools/macos/update.sh"]
@@ -530,6 +575,15 @@ final class LauncherModel: ObservableObject {
         logLines = all
     }
 
+    /// Help menu: the last run's log in Finder.
+    func revealLastLog() {
+        if FileManager.default.fileExists(atPath: lastRunLogURL.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([lastRunLogURL])
+        } else {
+            reveal(lastRunLogURL.deletingLastPathComponent())
+        }
+    }
+
     func clearLog() {
         logLines = []
     }
@@ -538,5 +592,17 @@ final class LauncherModel: ObservableObject {
         let text = logLines.map(\.text).joined(separator: "\n")
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+    }
+}
+
+/// Web pages the app links to (Help menu, Updates).
+enum Links {
+    static let home = "https://github.com/bmy/bbport-mac"
+    static let userGuide = "https://github.com/bmy/bbport-mac/blob/macos-0.4/docs/USER_GUIDE.md"
+    static let releases = "https://github.com/bmy/bbport-mac/releases"
+    static let issues = "https://github.com/bmy/bbport-mac/issues"
+
+    @MainActor static func open(_ address: String) {
+        if let url = URL(string: address) { NSWorkspace.shared.open(url) }
     }
 }

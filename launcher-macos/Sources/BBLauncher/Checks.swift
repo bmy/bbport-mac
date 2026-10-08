@@ -131,6 +131,41 @@ func checkRepository(_ url: URL?) -> Check {
     return Check(level: .ok, message: url.path)
 }
 
+// MARK: - Release app
+
+/// Where Rosetta 2 lives once installed.
+private let rosettaPath = "/Library/Apple/usr/share/rosetta/rosetta"
+
+/// The python3 run.sh would find: Homebrew's, python.org's, or the Command Line Tools' or
+/// Xcode's (/usr/bin/python3 only asks to install the Command Line Tools without them).
+func findPython() -> String? {
+    let candidates = ["/opt/homebrew/bin/python3", "/usr/local/bin/python3",
+                      "/Library/Developer/CommandLineTools/usr/bin/python3",
+                      "/Applications/Xcode.app/Contents/Developer/usr/bin/python3"]
+    return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+}
+
+/// The game engine inside the release app (tools/macos/package.sh) and what it needs from macOS.
+func checkEngine(_ url: URL?, version: String) -> Check {
+    guard let url, FileManager.default.isExecutableFile(atPath: url.appendingPathComponent("bin/bb-probe").path) else {
+        return Check(level: .error, message: "The app is incomplete: download it again")
+    }
+    // Opened straight from Downloads, macOS runs a read-only copy of the app from a random place.
+    if Bundle.main.bundlePath.contains("/AppTranslocation/") {
+        return Check(level: .error,
+                     message: "Move bbport into the Applications folder (drag it there in Finder), then open it again")
+    }
+    if !FileManager.default.fileExists(atPath: rosettaPath) {
+        return Check(level: .warning,
+                     message: "Rosetta 2 seems to be missing. In Terminal: softwareupdate --install-rosetta --agree-to-license")
+    }
+    if findPython() == nil {
+        return Check(level: .warning,
+                     message: "Python 3 seems to be missing. In Terminal: xcode-select --install")
+    }
+    return Check(level: .ok, message: version.isEmpty ? "Built-in engine" : "Built-in engine, version \(version)")
+}
+
 // MARK: - Mods (scripts/mods.py)
 
 /// Top-level folders of the game's dvdroot_ps4.

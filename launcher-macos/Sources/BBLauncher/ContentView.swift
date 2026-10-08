@@ -11,7 +11,7 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             Form {
-                if !model.repoCheck.allowsPlay {
+                if model.repoCheck.level != .ok {
                     RepositoryProblemSection()
                 }
                 GameSection()
@@ -68,11 +68,12 @@ struct PlayBar: View {
                 model.update()
                 if model.isRunning { showLog() }
             } label: {
-                Label("Update", systemImage: "arrow.down.circle")
+                Label(model.usesBuiltInEngine ? "Updates" : "Update", systemImage: "arrow.down.circle")
             }
             .controlSize(.large)
             .disabled(!model.canUpdate)
-            .help("Get the latest version from GitHub and rebuild what changed")
+            .help(model.usesBuiltInEngine ? "Open the downloads page on GitHub"
+                                          : "Get the latest version from GitHub and rebuild what changed")
             Button(action: showLog) {
                 Label("Log", systemImage: "text.alignleft")
             }
@@ -111,8 +112,7 @@ struct PlayBar: View {
     private var detail: String {
         switch model.state {
         case .running where model.job == .update, .stopping where model.job == .update:
-            return "Fetching from GitHub and rebuilding. A new graphics driver takes 15–25 minutes; "
-                + "otherwise a minute or two."
+            return "Fetching from GitHub and rebuilding what changed. A new graphics driver takes longest."
         case let .exited(status, bySignal) where model.job == .update:
             if status == 0 && !bySignal {
                 return "Up to date. If the log says the Mac app was rebuilt, quit and reopen it."
@@ -122,7 +122,7 @@ struct PlayBar: View {
             return "The first launch after a build or a shader-cache reset compiles shaders: "
                 + "a black window for a few minutes is expected."
         case let .exited(status, bySignal) where status != 0 && !bySignal:
-            return model.lastProblem ?? "Details are in the log and in out/last-run.log."
+            return model.lastProblem ?? "Details are in the log (Help ▸ Show the Last Run's Log)."
         default:
             return "Settings are saved when the game starts. In game, the overlay menu is on F1, ` or § (L3+R3 on a controller)."
         }
@@ -222,12 +222,12 @@ struct RepositoryProblemSection: View {
             CheckLabel(check: model.repoCheck)
             HStack {
                 SettingsLink {
-                    Text("Set the Repository…")
+                    Text(model.engineURL != nil ? "Settings…" : "Set the Repository…")
                 }
                 Button("Check Again") { model.refreshChecks() }
             }
         } header: {
-            Text("bbport repository")
+            Text(model.engineURL != nil ? "Before you play" : "bbport repository")
         }
     }
 }
@@ -317,7 +317,7 @@ struct FrameRateSection: View {
         } header: {
             Text("Frame rate")
         } footer: {
-            Text("30 is the setting validated on macOS so far; 60, 90 and unlocked apply the community frame-rate patches.")
+            Text("60 is recommended. 30 is the game's own rate; 60, 90 and unlocked apply the community frame-rate patches.")
                 .foregroundStyle(.secondary)
         }
     }
@@ -373,7 +373,7 @@ struct UpscalerSection: View {
         switch upscaler {
         case "fsr3": return "AMD FSR 3.1 temporal upscaling"
         case "taa": return "Anti-aliasing at the output resolution, no FSR model"
-        case "metalfx": return "Apple MetalFX temporal upscaling. Being added on a separate branch: a build without it runs with the upscaler off."
+        case "metalfx": return "Apple MetalFX temporal upscaling (experimental; no Native AA preset)"
         default: return "No upscaling or temporal anti-aliasing"
         }
     }

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # tools/macos/update.sh: brings this checkout up to date with GitHub and rebuilds what changed.
 #   bash tools/macos/update.sh            # the current branch
-#   bash tools/macos/update.sh <branch>   # switch to a test branch (macos-port is the main one)
+#   bash tools/macos/update.sh <branch>   # switch to a test branch (macos-0.4 is the main one)
 # Local changes to tracked files are discarded (the branch matches GitHub exactly); bbport.ini,
 # saves, deps-x86_64 and out/ are untracked and stay. The Mac app's Update button runs this.
 set -euo pipefail
 cd -- "$(dirname -- "$0")/../.."
 branch=${1:-$(git branch --show-current)}
-[[ -n $branch ]] || { echo "STOP: no branch checked out; name one: bash tools/macos/update.sh macos-port" >&2; exit 1; }
+[[ -n $branch ]] || { echo "STOP: no branch checked out; name one: bash tools/macos/update.sh macos-0.4" >&2; exit 1; }
 old=$(git rev-parse HEAD)
 
 echo "=== Fetching $branch from GitHub"

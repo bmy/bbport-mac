@@ -97,7 +97,7 @@ The overlay menu (upscaler, FPS counter, effects) opens with **F1**, **`` ` ``**
 ## Release builds
 
 `bash tools/macos/package.sh <version>` turns a finished build into the release download,
-`dist/bbport-<version>.zip`: one self-contained `bbport.app` (launcher, engine, the x86-64
+`dist/bbport-mac-<version>.zip`: one self-contained `bbport.app` (launcher, engine, the x86-64
 libraries and KosmicKrisp, ad-hoc signed) with a read-me. The packaged app runs its built-in
 engine and keeps its data in `~/Library/Application Support/bbport` (`tools/macos/run.sh`
 recognises the layout by the `.packaged` file); bbport ▸ Settings can point it at a checkout.
@@ -105,7 +105,7 @@ recognises the layout by the `.packaged` file); bbport ▸ Settings can point it
 Releases are made by GitHub Actions (`.github/workflows/release.yml`) on a GitHub-hosted Apple
 Silicon runner. Write the notes as `docs/release/<version>.md` (otherwise `NEXT.md` is used),
 then in the Actions tab choose **Mac release ▸ Run workflow**, pick the branch and type the
-version (for example `0.4-mac.2`). The workflow builds everything, tags the commit and publishes
+version (for example `v0.2.0`). The workflow builds everything, tags the commit and publishes
 a pre-release with the zip and its SHA-256. Pushing a tag `<version>` or a branch
 `release/<version>` does the same. *Run workflow* without a version, or a push to a `ci-*`
 branch, only builds the zip (as a workflow artifact) to try a build.

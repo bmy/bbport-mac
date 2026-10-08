@@ -39,7 +39,7 @@ xcode-select --install
 
 ## Install
 
-1. Download the latest `bbport-….zip` from the
+1. Download the latest `bbport-mac-….zip` from the
    [Releases page](https://github.com/bmy/bbport-mac/releases).
 2. Open the zip. You get a folder with **bbport.app**, a short read-me and the licence.
 3. Drag **bbport.app** into your **Applications** folder. Opened straight from Downloads, macOS

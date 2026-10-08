@@ -1452,10 +1452,13 @@ void Rasterizer::TraceDraw(const GraphicsPipeline* pipeline, bool bound) {
                                 col.Pitch(), col.Height(), raw(regs.blend_control[cb]));
         }
     }
-    line += fmt::format(" | mask {:08x} depth {:#x} dctl {:08x} sctl {:08x}",
+    line += fmt::format(" | mask {:08x} depth {:#x} dctl {:08x} sctl {:08x} sref {:08x}/{:08x} "
+                        "stencil {:#x}",
                         raw(regs.color_target_mask),
                         regs.depth_buffer.DepthValid() ? regs.depth_buffer.DepthAddress() : 0,
-                        raw(regs.depth_control), raw(regs.stencil_control));
+                        raw(regs.depth_control), raw(regs.stencil_control),
+                        raw(regs.stencil_ref_front), raw(regs.stencil_ref_back),
+                        regs.depth_buffer.StencilValid() ? regs.depth_buffer.StencilAddress() : 0);
     const auto& vp = regs.viewports[0];
     line += fmt::format(" | vp {:.1f},{:.1f} {:.1f}x{:.1f} scissor {},{}-{},{}", vp.xoffset - vp.xscale,
                         vp.yoffset - vp.yscale, vp.xscale * 2, vp.yscale * 2,

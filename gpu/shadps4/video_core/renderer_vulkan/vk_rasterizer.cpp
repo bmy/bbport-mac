@@ -1505,12 +1505,33 @@ void Rasterizer::TraceDraw(const GraphicsPipeline* pipeline, bool bound) {
                 continue;
             }
             const auto* words = reinterpret_cast<const float*>(address);
-            for (u32 i = 0; i < std::min<u32>(sharp.GetSize() / 4, 12); ++i) {
+            for (u32 i = 0; i < std::min<u32>(sharp.GetSize() / 4, 24); ++i) {
                 line += fmt::format(" {:g}", words[i]);
             }
         }
     };
     data(Shader::SwStage::Vertex, "vs");
+    // Vertex attributes as the fetch shader reads them, and the first two vertices' bytes.
+    if (const auto& fetch = pipeline->GetFetchShader(); fetch) {
+        const auto& vs = pipeline->GetStage(Shader::SwStage::Vertex);
+        for (const auto& attrib : fetch->attributes) {
+            const auto buffer = attrib.GetSharp(vs);
+            line += fmt::format(" | attr {} v{} x{} fmt {}/{} {:#x} stride {} records {}",
+                                u32(attrib.semantic), u32(attrib.dest_vgpr),
+                                u32(attrib.num_elements), u32(buffer.GetDataFmt()),
+                                u32(buffer.GetNumberFmt()), VAddr(buffer.base_address),
+                                u32(buffer.GetStride()), u32(buffer.num_records));
+            const VAddr address = buffer.base_address;
+            if (address != 0 && memory->IsValidGpuMapping(address, 0)) {
+                const auto* bytes = reinterpret_cast<const u8*>(address);
+                const u32 count = std::min<u32>(std::max<u32>(buffer.GetStride(), 4) * 2, 32);
+                line += " =";
+                for (u32 i = 0; i < count; ++i) {
+                    line += fmt::format("{}{:02x}", i % 4 == 0 ? " " : "", bytes[i]);
+                }
+            }
+        }
+    }
     if (pipeline->GetGraphicsKey().mrt_mask) {
         data(Shader::SwStage::Fragment, "ps");
     }

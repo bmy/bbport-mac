@@ -1,0 +1,107 @@
+# Builds the Mac release (tools/macos/package.sh) on a GitHub-hosted Apple Silicon runner.
+# - A tag like 0.4-mac.1 publishes a GitHub Release with dist/bbport-<tag>.zip, its checksum and
+#   the notes in docs/release/<tag>.md.
+# - "Run workflow" (Actions tab), or a push to a ci-* branch, builds the zip as a workflow
+#   artifact only, to try a build without releasing it.
+name: Mac release
+
+on:
+  push:
+    tags: ['*-mac*']
+    branches: ['ci-*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 240
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Rosetta 2
+        run: |
+          /usr/bin/arch -x86_64 /usr/bin/true 2>/dev/null ||
+            sudo softwareupdate --install-rosetta --agree-to-license
+          /usr/bin/arch -x86_64 /usr/bin/true
+
+      - name: Version
+        id: version
+        run: |
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            version=${GITHUB_REF#refs/tags/}
+          else
+            version=$(git describe --tags --always)-ci
+          fi
+          version=${version//\//-}
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Version: $version"
+          sw_vers; uname -m; sysctl -n hw.ncpu machdep.cpu.brand_string
+
+      # The x86-64 libraries and KosmicKrisp take most of the build; they are kept between runs
+      # until their recipe changes (their sources are not kept).
+      - name: Restore dependencies
+        id: deps
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            deps-x86_64
+            !deps-x86_64/src
+          key: deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/macos/setup_deps.sh', 'tools/macos/kosmickrisp-patches/**') }}
+
+      - name: Dependencies
+        run: bash tools/macos/setup_deps.sh
+
+      - name: Save dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            deps-x86_64
+            !deps-x86_64/src
+          key: ${{ steps.deps.outputs.cache-primary-key }}
+
+      - name: Build
+        run: bash tools/macos/build.sh
+
+      - name: Package
+        run: bash tools/macos/package.sh "${{ steps.version.outputs.version }}"
+
+      - name: Logs on failure
+        if: failure()
+        run: |
+          for log in out/gpu-errors.txt out/loader-build.log deps-x86_64/setup.log; do
+            [[ -f $log ]] && { echo "=== $log"; tail -150 "$log"; }
+          done
+          ls deps-x86_64/logs 2>/dev/null | while read -r log; do
+            echo "=== deps-x86_64/logs/$log"; tail -40 "deps-x86_64/logs/$log"
+          done
+          true
+
+      - name: Upload the zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: bbport-${{ steps.version.outputs.version }}
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.version }}
+        run: |
+          notes=docs/release/$TAG.md
+          [[ -f $notes ]] || notes=docs/release/NEXT.md
+          gh release create "$TAG" dist/bbport-"$TAG".zip dist/bbport-"$TAG".zip.sha256 \
+            --title "bbport for Mac $TAG" --notes-file "$notes" --prerelease --verify-tag

@@ -676,14 +676,18 @@ void VideoOutDriver::Flip(const Request& req) {
             if (BbStats::range_allocators[0].load()) {
                 std::printf("\n");
             }
-            std::printf("Gnm: %.1f sceGnmSubmitDone/frame, %.1f sceGnmAreSubmitsAllowed/frame, %.1f refused/frame; "
-                        "guest waited for the previous frame %.1fx %.2f ms/frame; %.1f compute queue submissions/frame\n",
-                        BbStats::submit_done_calls.exchange(0) / double(frames),
-                        BbStats::submits_allowed_queries.exchange(0) / double(frames),
-                        BbStats::submits_refused.exchange(0) / double(frames),
-                        BbStats::gnm_frame_waits.exchange(0) / double(frames),
-                        BbStats::gnm_frame_wait_ns.exchange(0) / (1e6 * double(frames)),
-                        BbStats::asc_submits.exchange(0) / double(frames));
+            // Native GPU process: the guest's Gnm calls are counted in the game process
+            // (MsgGameStats prints them there).
+            if (!BbRemote::BackActive()) {
+                std::printf("Gnm: %.1f sceGnmSubmitDone/frame, %.1f sceGnmAreSubmitsAllowed/frame, %.1f refused/frame; "
+                            "guest waited for the previous frame %.1fx %.2f ms/frame; %.1f compute queue submissions/frame\n",
+                            BbStats::submit_done_calls.exchange(0) / double(frames),
+                            BbStats::submits_allowed_queries.exchange(0) / double(frames),
+                            BbStats::submits_refused.exchange(0) / double(frames),
+                            BbStats::gnm_frame_waits.exchange(0) / double(frames),
+                            BbStats::gnm_frame_wait_ns.exchange(0) / (1e6 * double(frames)),
+                            BbStats::asc_submits.exchange(0) / double(frames));
+            }
             std::printf("EOP fences: %llu decoded, %llu labels written, %lld pending\n",
                         (unsigned long long)BbStats::eop_decoded.load(),
                         (unsigned long long)BbStats::eop_written.load(),

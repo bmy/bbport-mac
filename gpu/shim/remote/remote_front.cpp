@@ -30,6 +30,7 @@
 
 #include "bbport_portable.h"
 #include "bbport_threads.h"
+#include "bbport_toggles.h"
 #include "common/rdtsc.h"
 #include "common/signal_context.h"
 #include "common/thread.h"
@@ -277,6 +278,18 @@ void Handle(const Message& message, auto&& reply) {
     case MsgGameStats: {
         // The frame stats come from bb-gpu; the guest's threads and waits are this process's.
         const auto args = Payload<StatsArgs>(message);
+        if (args.frames > 0) {
+            const double frames = args.frames;
+            std::printf("Gnm: %.1f sceGnmSubmitDone/frame, %.1f sceGnmAreSubmitsAllowed/frame, "
+                        "%.1f refused/frame; guest waited for the previous frame %.1fx %.2f "
+                        "ms/frame; %.1f compute queue submissions/frame\n",
+                        BbStats::submit_done_calls.exchange(0) / frames,
+                        BbStats::submits_allowed_queries.exchange(0) / frames,
+                        BbStats::submits_refused.exchange(0) / frames,
+                        BbStats::gnm_frame_waits.exchange(0) / frames,
+                        BbStats::gnm_frame_wait_ns.exchange(0) / (1e6 * frames),
+                        BbStats::asc_submits.exchange(0) / frames);
+        }
         Libraries::Kernel::ReportEqueueWaits(args.frames);
         runtime_wait_report(args.frames);
 #ifdef __APPLE__

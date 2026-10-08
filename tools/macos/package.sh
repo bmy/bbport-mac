@@ -189,6 +189,36 @@ done
 codesign --force --sign - "$app"
 codesign --verify "$app"
 
+echo "=== Smoke test"
+# Started with an empty environment, as from the app: dyld stops bb-probe before its usage line
+# if any library doesn't resolve inside the app.
+run_bare() {  # run_bare <seconds> <command...>: no inherited environment, killed after <seconds>
+    local seconds=$1
+    shift
+    env -i HOME="$HOME" PATH=/usr/bin:/bin VK_DRIVER_FILES="$engine/lib/kosmickrisp/kosmickrisp_mesa_icd.json" \
+        BB_VULKAN_LIBRARY="$engine/lib/libvulkan.1.dylib" perl -e 'alarm shift; exec @ARGV' "$seconds" "$@" 2>&1
+}
+probe_output=$(run_bare 30 "$engine/bin/bb-probe" || true)
+printf '%s\n' "$probe_output" | head -5
+[[ $probe_output == *Usage:* ]] || die "bb-probe does not start from the app (above)"
+# The Vulkan loader finds KosmicKrisp through the app's manifest. Informational: a build machine
+# may have no GPU the driver accepts.
+vulkan_output=$(run_bare 60 "$engine/bin/bb-probe" --vulkan-only || true)
+printf '%s\n' "$vulkan_output" | tail -8
+report=$stage/report.txt
+{
+    echo "bbport $version, $(sw_vers -productVersion), $(uname -m)"
+    echo
+    echo "bb-probe without arguments:"
+    printf '%s\n' "$probe_output" | head -5
+    echo
+    echo "bb-probe --vulkan-only:"
+    printf '%s\n' "$vulkan_output" | tail -12
+    echo
+    echo "Files:"
+    (cd "$app/Contents" && find . -type f -print0 | xargs -0 ls -l | awk '{ printf "%10d  %s\n", $5, $9 }' | sort -k2)
+} > "$report"
+
 echo "=== Archive"
 cp docs/release/READ-ME-FIRST.txt "$top/Read Me First.txt"
 cp LICENSE "$top/LICENSE.txt"

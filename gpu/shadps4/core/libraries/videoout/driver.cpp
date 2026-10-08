@@ -259,7 +259,9 @@ int VideoOutDriver::RegisterBuffers(VideoOutPort* port, s32 startIndex, void* co
         Vulkan::FrameCapture::AddDisplayBuffer(address);
 
         // Reset flip label also when registering buffer
-        port->buffer_labels[startIndex + i] = 0;
+        // bbport: one release store: the guest polls these (in the game process, with the
+        // native GPU process), and what came before must be visible first.
+        __atomic_store_n(&port->buffer_labels[startIndex + i], u64(0), __ATOMIC_RELEASE);
         port->SignalVoLabel();
 
         presenter->RegisterVideoOutSurface(group, address);
@@ -792,7 +794,7 @@ void VideoOutDriver::Flip(const Request& req) {
 
     // Reset prev flip label
     if (port->prev_index != -1) {
-        port->buffer_labels[port->prev_index] = 0;
+        __atomic_store_n(&port->buffer_labels[port->prev_index], u64(0), __ATOMIC_RELEASE);
         port->SignalVoLabel();
     }
     // save to prev buf index

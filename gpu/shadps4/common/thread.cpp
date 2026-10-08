@@ -16,6 +16,9 @@
 #include <mach/mach.h>
 #include <mach/mach_time.h>
 #include <pthread.h>
+#include <pthread/qos.h>
+#include <cstdlib>
+#include <cstring>
 #elif defined(_WIN32)
 #include <windows.h>
 #include "common/string_util.h"
@@ -189,6 +192,24 @@ void SetCurrentThreadName(const char* name) {
     // bbport: guest thread names are kept by the C runtime.
 #ifdef __APPLE__
     pthread_setname_np(name);
+    // bbport BB_GPU_QOS=1 (experiment): the threads every frame waits on run as user-interactive
+    // work, so macOS keeps them on performance cores and ahead of other work.
+    static const bool interactive = [] {
+        const char* env = std::getenv("BB_GPU_QOS");
+        return env && env[0] == '1';
+    }();
+    if (interactive) {
+        static constexpr const char* critical[] = {
+            "shadPS4:GpuCommandProcessor", "bb:VkRecorder", "bb:DrawRec", "bb:DrawPrep",
+            "bb:DrawScan", "bb:Present", "bb:remote",
+        };
+        for (const char* prefix : critical) {
+            if (std::strncmp(name, prefix, std::strlen(prefix)) == 0) {
+                pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+                break;
+            }
+        }
+    }
 #elif defined(__Bitrig__) || defined(__DragonFly__) || defined(__FreeBSD__) || defined(__OpenBSD__)
     pthread_set_name_np(pthread_self(), name);
 #elif defined(__NetBSD__)

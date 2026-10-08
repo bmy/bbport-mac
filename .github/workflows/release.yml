@@ -1,5 +1,5 @@
 # Builds the Mac release (tools/macos/package.sh) on a GitHub-hosted Apple Silicon runner.
-# A release (a pre-release on GitHub with dist/bbport-mac-<version>.zip, its checksum and the notes in
+# A release (the latest release on GitHub, with dist/bbport-mac-<version>.zip, its checksum and the notes in
 # docs/release/<version>.md, else docs/release/NEXT.md) is published by any of:
 # - "Run workflow" in the Actions tab, with a version such as 0.4-v2 (on the branch chosen);
 # - pushing a tag such as 0.4-v2;
@@ -136,4 +136,4 @@ jobs:
           notes=docs/release/$TAG.md
           [[ -f $notes ]] || notes=docs/release/NEXT.md
           gh release create "$TAG" dist/*.zip dist/*.zip.sha256 \
-            --target "$GITHUB_SHA" --title "bbport-mac-$TAG" --notes-file "$notes" --prerelease
+            --target "$GITHUB_SHA" --title "bbport-mac-$TAG" --notes-file "$notes" --latest

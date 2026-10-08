@@ -183,6 +183,16 @@ void TextureCache::MarkAsMaybeDirty(ImageId image_id, Image& image) {
         const u8* addr = std::bit_cast<u8*>(image.info.guest_address);
         image.hash = XXH3_64bits(addr, image.info.guest_size);
     }
+    // bbport: diagnostics in RefreshImage (the first pixels, as the old check hashed them).
+    {
+        const u32 w = std::min(image.info.size.width, u32(8));
+        const u32 h = std::min(image.info.size.height, u32(8));
+        const u32 s_w = image.info.props.is_block ? Common::DivCeil(w, 4u) : w;
+        const u32 s_h = image.info.props.is_block ? Common::DivCeil(h, 4u) : h;
+        const u32 corner = std::min<u32>(s_w * s_h * (image.info.num_bits / 8),
+                                         u32(image.info.guest_size));
+        image.corner_hash = XXH3_64bits(std::bit_cast<u8*>(image.info.guest_address), corner);
+    }
     image.flags |= ImageFlagBits::MaybeCpuDirty;
     UntrackImage(image_id);
 }
@@ -842,18 +852,31 @@ void TextureCache::RefreshImage(Image& image) {
         False(image.flags & ImageFlagBits::CpuDirty)) {
         // The image size should be less than page size to be considered MaybeCpuDirty
         // So this calculation should be very uncommon and reasonably fast
-        // For now we'll just check up to 64 first pixels
+        // bbport: the whole image, as MarkAsMaybeDirty hashes it. Its first 64 pixels alone
+        // missed writes elsewhere in it: an icon's corner stays transparent while the rest is
+        // filled in (the item picture on the loading screen stayed empty until loading ended).
         const auto addr = std::bit_cast<u8*>(image.info.guest_address);
-        const u32 w = std::min(image.info.size.width, u32(8));
-        const u32 h = std::min(image.info.size.height, u32(8));
-
-        const u32 s_w = image.info.props.is_block ? Common::DivCeil(w, 4u) : w;
-        const u32 s_h = image.info.props.is_block ? Common::DivCeil(h, 4u) : h;
-        const u32 size = s_w * s_h * (image.info.num_bits / 8);
-        const u64 hash = XXH3_64bits(addr, size);
+        const u64 hash = XXH3_64bits(addr, image.info.guest_size);
         if (image.hash == hash) {
             image.flags &= ~ImageFlagBits::MaybeCpuDirty;
             return;
+        }
+        // Diagnostics: whether the first 64 pixels alone would have kept the old contents.
+        static std::atomic<u32> missed_reports{0};
+        if (image.corner_hash != 0 && missed_reports.load(std::memory_order_relaxed) < 16) {
+            const u32 w = std::min(image.info.size.width, u32(8));
+            const u32 h = std::min(image.info.size.height, u32(8));
+            const u32 s_w = image.info.props.is_block ? Common::DivCeil(w, 4u) : w;
+            const u32 s_h = image.info.props.is_block ? Common::DivCeil(h, 4u) : h;
+            const u32 corner = std::min<u32>(s_w * s_h * (image.info.num_bits / 8),
+                                             u32(image.info.guest_size));
+            if (XXH3_64bits(addr, corner) == image.corner_hash) {
+                missed_reports.fetch_add(1, std::memory_order_relaxed);
+                std::printf("Texture cache: image %#llx %ux%u changed past its first pixels "
+                            "(refreshed; the old check kept the previous contents)\n",
+                            static_cast<unsigned long long>(image.info.guest_address),
+                            image.info.size.width, image.info.size.height);
+            }
         }
         image.hash = hash;
     }

@@ -192,6 +192,7 @@ public:
     boost::container::static_vector<u64, 16> mip_hashes{};
     u64 lru_id{};
     u64 hash{};
+    u64 corner_hash{}; ///< bbport: diagnostics (TextureCache::RefreshImage)
 
 private:
     static Common::IncrementalIdProvider<u64> global_image_uid;

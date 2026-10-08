@@ -40,6 +40,9 @@ void RunSrtWalker(const PersistentSrtInfo& srt, const u32* user_data, u32* flat)
 
 /// bbport: set by the GPU library to check guest pointers the bytecode walker follows.
 extern bool (*srt_guest_readable)(u64 address, u64 size);
+/// bbport (native GPU process): where this process sees a guest address the walker loads from
+/// (the game image's data sits elsewhere there). Null: the address itself.
+extern u64 (*srt_guest_translate)(u64 address);
 /// bbport: keeps a copy of portable walker bytecode for the rest of the run.
 const u32* RegisterSrtBytecode(const u32* words, size_t count);
 

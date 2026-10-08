@@ -5,6 +5,7 @@
 // forwards to it (remote_front.cpp). The runtime's GPU interface (runtime_memory_*, clocks) is
 // served here from bb-gpu's own copy of the guest's mapping table (bb_gpu_main.cpp exports it).
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cerrno>
 #include <csetjmp>
@@ -46,6 +47,7 @@
 #include "remote/bb_control.h"
 #include "remote/bb_memory_mirror.h"
 #include "remote/bb_vma_table.h"
+#include "shader_recompiler/ir/passes/srt.h"
 #include "remote/bb_protocol.h"
 #include "remote/bb_remote.h"
 #include "video_core/amdgpu/liverpool.h"
@@ -225,7 +227,54 @@ void Init(const Message& message, auto&& reply) {
     reply(&out, sizeof(out));
 }
 
+// The game image's data: in a native process macOS keeps its shared library region over the
+// low region (0x2f0000000-0xfc0000000 on macOS 27), so it is mapped elsewhere and the code that
+// reads it directly (the SRT walker) is pointed there.
+struct Alias {
+    u64 begin, end, at;
+};
+constexpr std::size_t MaxAliases = 16;
+std::array<Alias, MaxAliases> aliases{};
+std::atomic<std::size_t> alias_count{0};
+
+u64 TranslateGuest(u64 address) {
+    const std::size_t n = alias_count.load(std::memory_order_acquire);
+    for (std::size_t i = 0; i < n; ++i) {
+        if (address >= aliases[i].begin && address < aliases[i].end) {
+            return aliases[i].at + (address - aliases[i].begin);
+        }
+    }
+    return address;
+}
+
+bool MapAlias(const MapArgs& args) {
+    const std::size_t n = alias_count.load(std::memory_order_relaxed);
+    if (n == MaxAliases) {
+        return false;
+    }
+    void* at = mmap(nullptr, args.size, PROT_READ | PROT_WRITE, MAP_SHARED, g.pool_fd,
+                    static_cast<off_t>(args.offset));
+    if (at == MAP_FAILED) {
+        return false;
+    }
+    aliases[n] = {args.address, args.address + args.size, reinterpret_cast<u64>(at)};
+    alias_count.store(n + 1, std::memory_order_release);
+    Shader::srt_guest_translate = TranslateGuest;
+    std::printf("GPU process: the game's data at %#llx+%#llx is read at %p here\n",
+                static_cast<unsigned long long>(args.address),
+                static_cast<unsigned long long>(args.size), at);
+    return true;
+}
+
 void MapMemory(const MapArgs& args) {
+    if (args.kind == MapShared && args.address < GuestBegin &&
+        MirrorFor(args.address).Overlaps(args.address, args.size)) {
+        if (!MapAlias(args)) {
+            std::fprintf(stderr, "GPU process: the game's data at %#llx not shared\n",
+                         static_cast<unsigned long long>(args.address));
+        }
+        return;
+    }
     const bool ok = (args.flags & MapUnshared)
                         ? MapZeros(args.address, args.size)
                         : MirrorFor(args.address).Map(args.address, args.size, g.pool_fd,
@@ -644,33 +693,11 @@ int Main(int argc, char** argv) {
                     static_cast<unsigned long long>(begin), static_cast<unsigned long long>(end),
                     static_cast<unsigned long long>((end - begin) >> 20));
     }
-    // The game image's data cannot move. The system allocator places its ranges at random each
-    // start: when they fall there, start again (the same pid, descriptors and arguments).
+    // The game image's range is macOS's shared library region in a native process: its data
+    // is mapped elsewhere when it arrives (MapAlias).
     if (!g.low.Taken().empty()) {
-        bool has_attempt = false;
-        const u64 attempt = ArgValue(argc, argv, "--attempt", has_attempt);
-        ReportMappings(LowBegin, LowBegin + LowReserveBytes);
-        if (attempt < 8) {
-            std::printf("GPU process: its memory allocator is where the game image goes; starting "
-                        "again\n");
-            std::fflush(stdout);
-            std::vector<char*> next;
-            for (int i = 0; i < argc; ++i) {
-                if (std::strcmp(argv[i], "--attempt") == 0) {
-                    ++i; // replaced below
-                    continue;
-                }
-                next.push_back(argv[i]);
-            }
-            std::string count = std::to_string(attempt + 1);
-            next.push_back(const_cast<char*>("--attempt"));
-            next.push_back(count.data());
-            next.push_back(nullptr);
-            execv(argv[0], next.data());
-            std::perror("GPU process: starting again");
-        }
-        std::fprintf(stderr, "GPU process: the game image's data is not shared (the GPU reads "
-                     "its resource tables there)\n");
+        std::printf("GPU process: the game image's range is the system's here; its data will be "
+                    "read from a second mapping\n");
     }
     if (g.guest.Overlaps(ControlAddress, ControlBytes)) {
         std::fprintf(stderr, "GPU process: the control block's address is in use here\n");

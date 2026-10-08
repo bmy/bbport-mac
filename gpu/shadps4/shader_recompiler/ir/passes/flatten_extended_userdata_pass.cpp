@@ -1120,12 +1120,16 @@ PFN_SrtWalker RegisterWalkerCode(const u8* ptr, size_t size) {
 #endif
 
 bool (*srt_guest_readable)(u64 address, u64 size) = nullptr;
+u64 (*srt_guest_translate)(u64 address) = nullptr;
 
 namespace {
 /// A table pointer can be stale or garbage: an unreadable load gives 0, as the x86 walker's
 /// fault handler makes it (that one patches the load for good; here each walk checks).
 template <typename T>
 T LoadGuest(u64 address) {
+    if (srt_guest_translate) {
+        address = srt_guest_translate(address);
+    }
     if (srt_guest_readable && !srt_guest_readable(address, sizeof(T))) {
         return 0;
     }

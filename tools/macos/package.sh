@@ -3,7 +3,8 @@
 # GPU library, run.sh and its Python scripts), the x86-64 libraries they load and the KosmicKrisp
 # Vulkan driver into one self-contained bbport.app, and zips it with a short read-me:
 #   bash tools/macos/setup_deps.sh && bash tools/macos/build.sh
-#   bash tools/macos/package.sh v0.2.0           # dist/bbport-mac-0.2.0.zip (+ .sha256)
+#   bash tools/macos/package.sh 0.4-v1           # dist/bbport-mac-0.4-v1.zip (+ .sha256)
+# Versions: <upstream bbport version>-v<our build for it>: 0.4-v1, 0.4-v2, 0.4.1-v1, 0.5-v1.
 # The app needs no checkout, Homebrew or build tools to run; only Rosetta 2 and Python 3 (the
 # Command Line Tools' python3, or Homebrew's). It writes nothing into itself: settings, generated
 # files, logs and saves go to ~/Library/Application Support/bbport (tools/macos/run.sh, .packaged).
@@ -29,8 +30,6 @@ for file in out/bb-probe out/bb-gpu-capabilities out/gpu/libbbgpu.dylib \
 done
 command -v python3 >/dev/null || die "python3 missing"
 
-# Shown without the tag's v: the app's version, the zip's name.
-version=${version#v}
 name=bbport-mac-$version
 stage=$repo/out/package
 top=$stage/$name

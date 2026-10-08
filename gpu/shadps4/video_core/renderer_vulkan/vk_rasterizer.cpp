@@ -1644,22 +1644,6 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
         return;
     }
     const auto state = BeginRendering(pipeline);
-    if (traced && scheduler.PassCount() != passes_before) {
-        const auto& db = state.depth_stencil_attachment;
-        std::printf("Draw trace:   new render pass %ux%u (%llu since the last draw): depth %s, "
-                    "stencil %s, DB_RENDER_CONTROL %08x\n",
-                    state.width, state.height,
-                    static_cast<unsigned long long>(scheduler.PassCount() - passes_before),
-                    !db.image_view ? "none" : db.depth_clear ? "CLEARED" : "loaded",
-                    !db.image_view || !db.has_stencil ? "none"
-                    : db.stencil_clear                ? "CLEARED"
-                                                      : "loaded",
-                    [&] {
-                        u32 v = 0;
-                        std::memcpy(&v, &Regs().depth_render_control, sizeof(v));
-                        return v;
-                    }());
-    }
 
     if (!inputs_resolved) {
         ResolveVertexBuffers(pipeline, draw_prepared);
@@ -1780,6 +1764,22 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     UpdateDynamicState(pipeline, is_indexed);
     MarkPass(pipeline, state);
     scheduler.BeginRendering(state);
+    if (traced && scheduler.PassCount() != passes_before) {
+        const auto& db = state.depth_stencil_attachment;
+        std::printf("Draw trace:   new render pass %ux%u (%llu since the last draw): depth %s, "
+                    "stencil %s, DB_RENDER_CONTROL %08x\n",
+                    state.width, state.height,
+                    static_cast<unsigned long long>(scheduler.PassCount() - passes_before),
+                    !db.image_view ? "none" : db.depth_clear ? "CLEARED" : "loaded",
+                    !db.image_view || !db.has_stencil ? "none"
+                    : db.stencil_clear                ? "CLEARED"
+                                                      : "loaded",
+                    [&] {
+                        u32 v = 0;
+                        std::memcpy(&v, &Regs().depth_render_control, sizeof(v));
+                        return v;
+                    }());
+    }
 
     const auto& vs_info = pipeline->GetStage(Shader::SwStage::Vertex);
     const auto& fetch_shader = pipeline->GetFetchShader();

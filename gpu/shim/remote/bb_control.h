@@ -27,6 +27,8 @@ struct SharedState {
     alignas(64) std::uint64_t vo_labels[16]; ///< VideoOutPort::buffer_labels (guest-visible)
     alignas(64) std::atomic<std::uint32_t> overlay_captures_input{0}; ///< written by bb-gpu
     std::atomic<std::uint32_t> gpu_ready{0};
+    /// The game window's keyboard (SDL scancodes, 1 while held), written by bb-gpu's window loop.
+    alignas(64) std::uint8_t keyboard[512];
 };
 
 struct ControlBlock {

@@ -483,6 +483,9 @@ ScreenshotRequests ConsumeScreenshotRequests() { return {}; }
 } // namespace VideoCore
 
 extern "C" const bool* bbgpu_keyboard_state(void) {
+    if (BbRemote::FrontActive()) {
+        return BbRemote::Front::KeyboardState(); // bb-gpu's window
+    }
     return SDL_WasInit(SDL_INIT_VIDEO) ? SDL_GetKeyboardState(nullptr) : nullptr;
 }
 

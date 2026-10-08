@@ -34,6 +34,7 @@
 #endif
 
 #include "../bbgpu.h"
+#include <SDL3/SDL.h>
 #include "bbport_overlay.h"
 #include "bbport_portable.h"
 #include "bbport_toggles.h"
@@ -777,6 +778,15 @@ u64* VideoOutLabels() {
 }
 
 void PublishWindowState() {
+    // The keyboard: the game process's pad reads it (runtime_pad.c through bbgpu_keyboard_state).
+    int count = 0;
+    if (const bool* keys = SDL_GetKeyboardState(&count)) {
+        const int n = std::min<int>(count, int(sizeof(g.control->state.keyboard)));
+        for (int i = 0; i < n; ++i) {
+            __atomic_store_n(&g.control->state.keyboard[i], u8(keys[i] ? 1 : 0),
+                             __ATOMIC_RELAXED);
+        }
+    }
     const u32 captures = BbOverlay::CapturesInput() ? 1 : 0;
     if (captures != g.published_overlay) {
         g.published_overlay = captures;

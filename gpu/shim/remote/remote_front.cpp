@@ -771,6 +771,11 @@ int OverlayCapturesInput() {
                : 0;
 }
 
+const bool* KeyboardState() {
+    static_assert(sizeof(bool) == 1);
+    return g.control ? reinterpret_cast<const bool*>(g.control->state.keyboard) : nullptr;
+}
+
 int TextInputBegin(const char* initial, const char* prompt) {
     TextInputArgs args{};
     CopyString(args.initial, sizeof(args.initial), initial);

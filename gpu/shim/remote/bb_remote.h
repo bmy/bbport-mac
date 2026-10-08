@@ -78,6 +78,8 @@ void InvalidateMemory(u64 address, u64 size);
 int ShareRange(void* address, u64 size, int prot);
 
 int OverlayCapturesInput();
+/// bb-gpu's window keyboard (bbgpu_keyboard_state).
+const bool* KeyboardState();
 int TextInputBegin(const char* initial, const char* prompt);
 int TextInputPoll(char* out, u64 size);
 } // namespace Front

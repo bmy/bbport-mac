@@ -4090,8 +4090,18 @@ void Rasterizer::UnmapMemory(VAddr addr, u64 size) {
 
 void Rasterizer::UpdateDynamicState(const GraphicsPipeline* pipeline, const bool is_indexed) const {
     BB_SECTION(UpdateDynamicState);
+    // bbport experiments for the loading screen picture (BB_TOGGLE_FILE second number):
+    // 1: every dynamic state is set again for every draw (stale dynamic state);
+    // 2: the stencil test is off for draws with the loading screen picture's plain pixel shader.
+    if (BbToggle::Experiment(1)) {
+        scheduler.GetDynamicState().Invalidate();
+    }
     UpdateViewportScissorState();
     UpdateDepthStencilState();
+    if (BbToggle::Experiment(2) && pipeline && pipeline->GetGraphicsKey().mrt_mask &&
+        pipeline->GetStage(Shader::SwStage::Fragment).pgm_hash == 0xcfa96da9ull) {
+        scheduler.GetDynamicState().SetStencilTestEnabled(false);
+    }
     UpdatePrimitiveState(is_indexed);
     UpdateRasterizationState();
     UpdateColorBlendingState(pipeline);

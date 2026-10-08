@@ -250,6 +250,7 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
         stats.Print();
     }
     is_rendering = true;
+    ++pass_count;
     render_state = new_state;
 
     std::array<vk::RenderingAttachmentInfo, 8> color_attachments;

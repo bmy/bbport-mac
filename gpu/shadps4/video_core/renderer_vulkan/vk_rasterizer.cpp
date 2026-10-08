@@ -1631,8 +1631,10 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     // bbport: vertex and index buffers are resolved while the helper binds textures (their
     // commands are recorded after BeginRendering, as before).
     draw_inputs = {pipeline, draw_prepared, index_offset, is_indexed, true, false};
+    const u64 passes_before = scheduler.PassCount();
     const bool bound = BindResources(pipeline);
-    if (DrawTraceActive()) {
+    const bool traced = DrawTraceActive();
+    if (traced) {
         TraceDraw(pipeline, bound);
     }
     bind_prepared = nullptr; // indirect draws and dispatches bind without prepared sharps
@@ -1642,6 +1644,22 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
         return;
     }
     const auto state = BeginRendering(pipeline);
+    if (traced && scheduler.PassCount() != passes_before) {
+        const auto& db = state.depth_stencil_attachment;
+        std::printf("Draw trace:   new render pass %ux%u (%llu since the last draw): depth %s, "
+                    "stencil %s, DB_RENDER_CONTROL %08x\n",
+                    state.width, state.height,
+                    static_cast<unsigned long long>(scheduler.PassCount() - passes_before),
+                    !db.image_view ? "none" : db.depth_clear ? "CLEARED" : "loaded",
+                    !db.image_view || !db.has_stencil ? "none"
+                    : db.stencil_clear                ? "CLEARED"
+                                                      : "loaded",
+                    [&] {
+                        u32 v = 0;
+                        std::memcpy(&v, &Regs().depth_render_control, sizeof(v));
+                        return v;
+                    }());
+    }
 
     if (!inputs_resolved) {
         ResolveVertexBuffers(pipeline, draw_prepared);

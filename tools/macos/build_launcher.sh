@@ -34,7 +34,9 @@ rm -rf "$app" "$work"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$work"
 cp "$bin" "$app/Contents/MacOS/bbport"
 version=$(git rev-list --count HEAD 2>/dev/null || echo 1)
-short_version=${release:-0.1}
+# macOS wants numbers here: the upstream part (0.4 of 0.4-v1); the app shows the full version.
+short_version=${release%%-*}
+short_version=${short_version:-0.1}
 # KosmicKrisp needs macOS 26; a checkout build keeps the old minimum so its own checks explain.
 min_system=14.0
 [[ -n $release ]] && min_system=26.0

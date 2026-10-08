@@ -81,9 +81,13 @@ final class LauncherModel: ObservableObject {
 
     private init() {
         embeddedRepoPath = Bundle.main.object(forInfoDictionaryKey: "BBRepoPath") as? String
-        engineURL = Bundle.main.resourceURL.map { $0.appendingPathComponent("bbport", isDirectory: true) }
+        let engine = Bundle.main.resourceURL.map { $0.appendingPathComponent("bbport", isDirectory: true) }
             .flatMap { FileManager.default.fileExists(atPath: $0.appendingPathComponent(".packaged").path) ? $0 : nil }
-        appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+        engineURL = engine
+        // The full release version (0.4-v1) from the engine; About shows only the number part.
+        let release = engine.flatMap { try? String(contentsOf: $0.appendingPathComponent(".version"), encoding: .utf8) }
+        appVersion = release?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
         prefs = LauncherPrefs.load(from: UserDefaults.standard)
         refreshChecks()
         reloadRepositoryFiles()

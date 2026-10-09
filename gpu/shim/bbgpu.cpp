@@ -1,4 +1,5 @@
 #include "bbport_write_log.h"
+#include "bbport_game_menu.h"
 #include "bbport_gnm_hooks.h"
 // bbport: glue between the C loader and the vendored shadPS4 video core.
 #include "bbport_overlay.h"
@@ -199,6 +200,9 @@ void MemoryManager::CopySparseMemory(VAddr source, u8* dest, u64 size) {
         CopySparseSerial(source + offset, dest + offset, std::min(Chunk, size - offset));
     });
 }
+void MemoryManager::ReadBacking(VAddr address, void* data, u64 size) {
+    runtime_memory_read_backing(address, data, size);
+}
 bool MemoryManager::TryWriteBacking(void* address, const void* data, u64 size) {
     BbWriteLog::Note(reinterpret_cast<uintptr_t>(address), data, size, BbWriteLog::Backing);
     return runtime_memory_write_backing(reinterpret_cast<uintptr_t>(address), data, size) != 0;
@@ -328,6 +332,9 @@ extern "C" int bbgpu_init(const BbGpuConfig* config) {
         if (!BbRemote::Front::Init(*config)) {
             return 1;
         }
+        // The game's System menu pages (this process) offer MetalFX: bb-gpu checks the device
+        // and falls back as it does for its own menu.
+        BbSettings::Get().metalfx_supported = true;
 #ifdef __APPLE__
         // Gamepads stay here (runtime_pad.c reads them through SDL): this process's main thread,
         // idle without a window, keeps their events and run loop going.
@@ -421,6 +428,7 @@ extern "C" int bbgpu_handle_fault(void* ucontext, void* address) {
 
 extern "C" void bbgpu_patch_image(unsigned char* image, uint64_t size) {
     BbGnmHooks::PatchImage(image, size);
+    BbGameMenu::PatchImage(image, size);
 }
 
 extern "C" int bbgpu_share_range(void* address, uint64_t size, int prot) {

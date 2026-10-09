@@ -492,7 +492,7 @@ public:
 
         // Read faults (readbacks) still arrive as signals.
         Core::Signals::Instance()->RegisterAccessViolationHandler(
-            GuestFaultSignalHandler, std::numeric_limits<u32>::min());
+            GuestFaultSignalHandler, 1u);
 
         ufd_thread = std::jthread([this](std::stop_token token) { UffdHandler(token); });
         std::printf("GPU: memory tracking with userfaultfd write-protection\n");
@@ -601,8 +601,8 @@ struct SignalImpl : public PageManager::Impl {
     SignalImpl(Vulkan::Rasterizer* rasterizer_) : Impl() {
         rasterizer = rasterizer_;
 
-        // Should be called first.
-        constexpr auto priority = std::numeric_limits<u32>::min();
+        // Should be called first (bbport: after BB_VRAM_ACCESS_TRAP, priority 0, diagnostics only).
+        constexpr u32 priority = 1;
         Core::Signals::Instance()->RegisterAccessViolationHandler(GuestFaultSignalHandler,
                                                                   priority);
     }

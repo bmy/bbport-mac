@@ -19,6 +19,7 @@
 #include "bbport_guest_memory.h"
 #include "bbport_guest_hooks.h"
 #include "common/alignment.h"
+#include "core/emulator_settings.h"
 #include "core/memory.h"
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/buffer_cache/buffer.h"
@@ -34,6 +35,18 @@
 #include <mutex>
 #include <pthread.h>
 #include "bbport_cpu.h"
+#include <cstring>
+#include <dlfcn.h>
+#include <string>
+#include <fmt/format.h>
+#include <sys/mman.h>
+#ifdef __APPLE__
+#include <sys/ucontext.h> // <ucontext.h> requires _XOPEN_SOURCE on macOS
+#else
+#include <ucontext.h>
+#endif
+#include "common/signal_context.h"
+#include "core/signals.h"
 #include <vk_mem_alloc.h>
 
 extern "C" int runtime_memory_vma_info(uintptr_t address, int* prot, int* type, uintptr_t* end);
@@ -272,10 +285,13 @@ std::mutex fast_readback_mutex;
 // guest did not write them); downloads do not overwrite guest bytes that no longer match it (the
 // guest wrote them since). Only pages with at most BB_GPU_WRITE_TWINS_MAX (1024) GPU-written
 // bytes: larger outputs (vertices the CPU reads back, FaceGen) keep waiting for the GPU.
+// Not with BB_READBACKS=2: a twinned page stays GPU-modified (read-protected) while the guest may
+// write it, a write-only page the page manager cannot make (it stopped at the first cutscene).
 bool TwinsEnabled() {
     static const bool enabled = [] {
         const char* env = std::getenv("BB_GPU_WRITE_TWINS");
-        return env && env[0] == '1';
+        return env && env[0] == '1' &&
+               EmulatorSettings.GetReadbacksMode() != GpuReadbacksMode::Precise;
     }();
     return enabled;
 }
@@ -309,7 +325,13 @@ void ForEachTwinRun(VAddr begin, VAddr end, Func&& func) {
         if (cursor < from) {
             func(cursor, from, TwinRun::None);
         }
-        const u8* guest = reinterpret_cast<const u8*>(from);
+        // bbport: through the backing view: with BB_READBACKS=2 the page is read-protected, and a
+        // fault here (GPU thread, twins_mutex held) waited for a readback needing twins_mutex:
+        // the game froze at the first cutscene (a movie frame written into GPU-written memory).
+        thread_local std::vector<u8> guest_bytes;
+        guest_bytes.resize(to - from);
+        Core::Memory::Instance()->ReadBacking(from, guest_bytes.data(), to - from);
+        const u8* guest = guest_bytes.data();
         const u8* twin = it->second.data() + (from - start);
         VAddr run = from;
         bool same = guest[0] == twin[0];
@@ -434,6 +456,14 @@ bool WriteVerify() {
     return on && !WriteTracking();
 }
 
+bool ConstantsInPlace() {
+    static const bool on = [] {
+        const char* env = std::getenv("BB_CONSTANTS_IN_PLACE");
+        return env && env[0] == '1';
+    }();
+    return GuestInPlace() && on != BbToggle::Experiment(1);
+}
+
 bool Detail::ComputeGuestInPlace() {
     static const bool on = [] {
         const char* env = std::getenv("BB_GUEST_IN_PLACE");
@@ -526,6 +556,17 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
         FindMemoryType(instance.GetMemoryProperties(), vk::MemoryPropertyFlagBits::eDeviceLocal,
                        reqs.memoryTypeBits)
             .value();
+    {
+        const auto& properties = instance.GetMemoryProperties();
+        for (u32 i = 0; i < properties.memoryTypeCount; ++i) {
+            const auto flags = properties.memoryTypes[i].propertyFlags;
+            if (((reqs.memoryTypeBits >> i) & 1) && !(flags & vk::MemoryPropertyFlagBits::eDeviceLocal) &&
+                (flags & vk::MemoryPropertyFlagBits::eHostVisible)) {
+                arena_fallback_type_index = i;
+                break;
+            }
+        }
+    }
 
     const u64 bda_pagetable_size =
         (blocks_per_arena_page * NUM_ARENA_PAGES) * sizeof(vk::DeviceAddress);
@@ -636,8 +677,11 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
                             // have been written since it was taken.
                             ForEachTwinRun(start, end, [&](VAddr from, VAddr to, TwinRun run) {
                                 if (run == TwinRun::None) {
-                                    const u8* guest = reinterpret_cast<const u8*>(from);
-                                    twins[from] = std::vector<u8>(guest, guest + (to - from));
+                                    // The backing view: the page may be read-protected.
+                                    std::vector<u8> bytes(to - from);
+                                    Core::Memory::Instance()->ReadBacking(from, bytes.data(),
+                                                                          to - from);
+                                    twins[from] = std::move(bytes);
                                 }
                             });
                         });
@@ -902,8 +946,30 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
     if (is_written && !shadows.empty()) {
         DropShadows(device_addr, size);
     }
-    if (GuestInPlace() &&
-        (is_written || size > STREAM_THRESHOLD || IsRegionGpuModified(device_addr, size))) {
+    // bbport: a read-only binding of blocks that were resident and in place the last time, with
+    // the residency unchanged since (most bindings in place, constants with
+    // BB_CONSTANTS_IN_PLACE): the arena where it is, without the residency walk.
+    struct InPlaceMemo {
+        u64 first = ~0ULL, last = 0, generation = 0;
+        const Buffer* arena = nullptr;
+    };
+    thread_local std::array<InPlaceMemo, 256> in_place_reads{};
+    const u64 memo_first = device_addr >> block_shift;
+    const u64 memo_last = (device_addr + size - 1) >> block_shift;
+    auto& read_memo = in_place_reads[memo_first & (in_place_reads.size() - 1)];
+    const bool memo_candidate = GuestInPlace() && !is_written && !is_texel_buffer && !stats &&
+                                (size > STREAM_THRESHOLD || ConstantsInPlace());
+    if (memo_candidate && maintained_epoch != packet_epoch) {
+        Maintain(); // what EnsureResident does first: residency changes queued since
+    }
+    if (memo_candidate && read_memo.first == memo_first && read_memo.last == memo_last &&
+        read_memo.generation == ResidencyGeneration()) {
+        NoteUse(memo_first << block_shift, (memo_last - memo_first + 1) << block_shift);
+        BbStats::bound_in_place_bytes.fetch_add(size, std::memory_order_relaxed);
+        return {read_memo.arena, read_memo.arena->Offset(device_addr)};
+    }
+    if (GuestInPlace() && (is_written || size > STREAM_THRESHOLD || ConstantsInPlace() ||
+                           IsRegionGpuModified(device_addr, size))) {
         const u64 first_block = device_addr >> block_shift;
         const u64 last_block = (device_addr + size - 1) >> block_shift;
         const auto* arena = GetArena(first_block, last_block);
@@ -916,7 +982,7 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
             const char* env = std::getenv("BB_GPU_WRITES_IN_PLACE");
             return env && env[0] == '1';
         }();
-        const bool writes_in_place = WriteTracking() || writes_in_place_forced;
+        const bool writes_in_place = WriteTracking() || writes_in_place_forced || force_writes_in_place;
         if (is_written && !writes_in_place) {
             NoteGpuWrite(device_addr, size);
         }
@@ -940,6 +1006,9 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
                 if (const auto shadow = ShadowCopy(device_addr, size)) {
                     return *shadow;
                 }
+            }
+            if (memo_candidate) {
+                read_memo = {memo_first, memo_last, ResidencyGeneration(), arena};
             }
             return {arena, arena->Offset(device_addr)};
         }
@@ -980,6 +1049,8 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
     const auto* arena = GetArena(first_block, last_block);
     EnsureResident(arena, first_block, last_block);
     BB_SECTION(ObtainVram);
+    if (!is_written) {
+    }
     const u64 uploaded_before = BbStats::buffer_upload_bytes.load(std::memory_order_relaxed);
     if (GuestInPlace()) {
         BbStats::bound_vram_bytes.fetch_add(size, std::memory_order_relaxed);
@@ -1422,11 +1493,41 @@ std::pair<vk::DeviceMemory, u64> BufferCache::AllocateResidency(u64 bytes) {
     // current one is used: the kernel clears new memory, on a Steam Deck with the CPU (16-22 ms a
     // burst). At most one spare block.
     constexpr u64 ResidencyBlock = 64_MB;
+    // bbport: VRAM full (a 4 GB card: "ErrorOutOfDeviceMemory", the game stopped): the block
+    // comes from system memory the GPU reads over the bus, as a PC game's data spills there.
+    // Slower, not fatal. BB_RESIDENCY_VRAM_LIMIT_MB=N (tests): VRAM "full" after N MiB of blocks.
     const auto allocate = [this](u64 size) {
-        const auto memory = Vulkan::Check(instance.GetDevice().allocateMemory({
-            .allocationSize = size,
-            .memoryTypeIndex = arena_memory_type_index,
-        }));
+        static const u64 test_limit = [] {
+            const char* env = std::getenv("BB_RESIDENCY_VRAM_LIMIT_MB");
+            return env ? std::strtoull(env, nullptr, 10) << 20 : 0;
+        }();
+        static std::atomic<u64> vram_bytes{0};
+        const auto device = instance.GetDevice();
+        vk::Result result = vk::Result::eErrorOutOfDeviceMemory;
+        vk::DeviceMemory memory{};
+        if (!test_limit || vram_bytes.load(std::memory_order_relaxed) + size <= test_limit) {
+            auto vram = device.allocateMemory({.allocationSize = size,
+                                               .memoryTypeIndex = arena_memory_type_index});
+            result = vram.result;
+            memory = vram.value;
+        }
+        if (result == vk::Result::eSuccess) {
+            vram_bytes.fetch_add(size, std::memory_order_relaxed);
+        } else if ((result == vk::Result::eErrorOutOfDeviceMemory ||
+                    result == vk::Result::eErrorOutOfHostMemory) &&
+                   arena_fallback_type_index) {
+            static std::atomic<bool> reported{false};
+            if (!reported.exchange(true)) {
+                std::printf("Guest memory: VRAM is full (%s): further copies of the game's memory "
+                            "go to system memory (slower)\n",
+                            vk::to_string(result).c_str());
+            }
+            memory = Vulkan::Check(device.allocateMemory(
+                {.allocationSize = size, .memoryTypeIndex = *arena_fallback_type_index}));
+        } else {
+            ASSERT_MSG(false, "Failed to allocate {} MiB for guest memory copies: {}", size >> 20,
+                       vk::to_string(result));
+        }
         BbStats::device_alloc_bytes.fetch_add(size, std::memory_order_relaxed);
         BbStats::residency_alloc_bytes.fetch_add(size, std::memory_order_relaxed);
         return memory;
@@ -1728,7 +1829,14 @@ void BufferCache::NoteCpuWrite(VAddr address, u64 guest_rip) {
 }
 
 void BufferCache::ProcessDemotions() {
-    if (demotes_requested.load(std::memory_order_acquire)) {
+    // bbport: the waiting requests become ready only once their tick is submitted: rescanned
+    // when a new tick began or a request came (it ran for every draw and dispatch).
+    const bool requested = demotes_requested.load(std::memory_order_acquire);
+    if (!requested && demotions_scanned_tick == scheduler.CurrentTick()) {
+        return;
+    }
+    demotions_scanned_tick = scheduler.CurrentTick();
+    if (requested) {
         std::scoped_lock lk{dynamic_mutex};
         for (const u64 block : demote_requests) {
             demotions_waiting.push_back({block, scheduler.CurrentTick(), true});
@@ -1949,13 +2057,24 @@ void BufferCache::TraceBinding(VAddr addr, u64 size, bool is_written, int kind) 
         const char* env = std::getenv("BB_TRACE_SIZE");
         return env ? std::strtoull(env, nullptr, 0) : u64(0);
     }();
+    // BB_TRACE_ADDR=addr,size: that range is traced from the start (with BB_TRACE_SIZE set).
+    static const bool fixed_range = [this] {
+        const char* env = std::getenv("BB_TRACE_ADDR");
+        if (!env) {
+            return false;
+        }
+        char* end = nullptr;
+        const u64 start = std::strtoull(env, &end, 0);
+        traced_ranges.emplace_back(start, end && *end == ',' ? std::strtoull(end + 1, nullptr, 0) : 4096);
+        return true;
+    }();
     if (trace_size == 0) {
         return;
     }
     if (is_written && size == trace_size &&
         std::ranges::find(traced_ranges, std::pair<VAddr, u64>{addr, size}) == traced_ranges.end()) {
         if (traced_ranges.size() >= 16) {
-            traced_ranges.erase(traced_ranges.begin());
+            traced_ranges.erase(traced_ranges.begin() + (fixed_range ? 1 : 0));
         }
         traced_ranges.emplace_back(addr, size);
     }
@@ -2244,9 +2363,193 @@ void BufferCache::QueueCopyBacks(u64 submitted) {
     }
 }
 
+namespace {
+// bbport BB_VRAM_ACCESS_TRAP=1 (diagnostics): blocks moved to VRAM are closed to the CPU
+// (PROT_NONE); the first CPU access to each is recorded (code site, read or write) and the block
+// opened again. Finds CPU readers of data the GPU writes in VRAM, where the CPU sees a stale copy.
+struct VramTrap {
+    std::atomic<u64> address{0}, rip{0}, caller{0};
+    std::atomic<bool> write{false};
+};
+std::array<VramTrap, 256> vram_traps;
+std::atomic<u32> vram_trap_count{0}, vram_trap_reported{0};
+std::mutex vram_trapped_mutex;
+std::unordered_map<u64, u64> vram_trapped; // block address -> block size
+u64 vram_trap_block_size = 0;
+// BB_VRAM_TRAP_RANGE=addr,size: only blocks over that range, re-armed for every packet, every
+// access counted by site.
+std::pair<u64, u64> VramTrapRange() {
+    static const std::pair<u64, u64> range = [] {
+        const char* env = std::getenv("BB_VRAM_TRAP_RANGE");
+        if (!env) {
+            return std::pair<u64, u64>{0, 0};
+        }
+        char* end = nullptr;
+        const u64 addr = std::strtoull(env, &end, 0);
+        return std::pair<u64, u64>{addr, end && *end == ',' ? std::strtoull(end + 1, nullptr, 0) : 0};
+    }();
+    return range;
+}
+struct SiteCount {
+    std::atomic<u64> key{0}, count{0}, caller{0};
+};
+std::array<SiteCount, 128> vram_trap_sites;
+std::vector<u64> vram_rearm;
+
+bool VramTrapsEnabled() {
+    static const bool enabled = std::getenv("BB_VRAM_ACCESS_TRAP") != nullptr;
+    return enabled;
+}
+
+bool VramTrapHandler(void* context, void* fault_address) {
+    const u64 address = reinterpret_cast<u64>(fault_address);
+    const u64 block = vram_trap_block_size ? address & ~(vram_trap_block_size - 1) : 0;
+    {
+        std::scoped_lock lk{vram_trapped_mutex};
+        if (!vram_trapped.erase(block)) {
+            return false;
+        }
+    }
+    const u64 rip = reinterpret_cast<u64>(Common::GetRip(context));
+    constexpr u64 Image = 0x800000000ull, ImageEnd = 0x810000000ull;
+    u64 caller = 0;
+    // bbport (macOS): the stack pointer by platform; no caller where the guest's stack isn't ours.
+#if defined(__linux__) && defined(__x86_64__)
+    const auto* stack =
+        reinterpret_cast<const u64*>(static_cast<const ucontext_t*>(context)->uc_mcontext.gregs[REG_RSP]);
+#elif defined(__APPLE__) && defined(__x86_64__)
+    const auto* stack =
+        reinterpret_cast<const u64*>(static_cast<const ucontext_t*>(context)->uc_mcontext->__ss.__rsp);
+#else
+    const u64* stack = nullptr;
+#endif
+    for (u32 i = 0; stack && i < 48; ++i) {
+        if (stack[i] >= Image && stack[i] < ImageEnd) {
+            caller = stack[i] - Image;
+            break;
+        }
+    }
+    const bool write = Common::IsWriteError(context);
+    const u64 site = (rip >= Image && rip < ImageEnd ? rip - Image : rip | (1ull << 63)) ^
+                     (write ? 1ull << 62 : 0);
+    if (VramTrapRange().second) {
+        // Counted by site; the block is closed again at the next packet.
+        for (u32 i = 0, slot = u32((site * 0x9E3779B97F4A7C15ull) >> 57); i < vram_trap_sites.size();
+             ++i) {
+            auto& entry = vram_trap_sites[(slot + i) % vram_trap_sites.size()];
+            u64 expected = 0;
+            if (entry.key.load() == site || entry.key.compare_exchange_strong(expected, site)) {
+                entry.count.fetch_add(1);
+                entry.caller = caller;
+                break;
+            }
+        }
+        std::scoped_lock lk{vram_trapped_mutex};
+        vram_rearm.push_back(block);
+    } else {
+        const u32 slot = vram_trap_count.fetch_add(1);
+        if (slot < vram_traps.size()) {
+            auto& trap = vram_traps[slot];
+            trap.rip = site & ~(1ull << 62);
+            trap.caller = caller;
+            trap.write = write;
+            trap.address = address;
+        }
+    }
+    mprotect(reinterpret_cast<void*>(block), vram_trap_block_size, PROT_READ | PROT_WRITE);
+    return true;
+}
+
+std::string VramTrapSiteName(u64 rip) {
+    if (!(rip >> 63)) {
+        return fmt::format("+{:#x}", rip);
+    }
+    Dl_info info{};
+    const u64 address = rip & ~(1ull << 63);
+    dladdr(reinterpret_cast<void*>(address), &info);
+    const char* name = info.dli_fname ? std::strrchr(info.dli_fname, '/') : nullptr;
+    return fmt::format("host {}+{:#x}", name ? name + 1 : "?",
+                       address - reinterpret_cast<u64>(info.dli_fbase));
+}
+
+void ReportVramTraps() {
+    if (VramTrapRange().second) {
+        // Re-arm the blocks touched since the last packet.
+        std::vector<u64> blocks;
+        {
+            std::scoped_lock lk{vram_trapped_mutex};
+            blocks.swap(vram_rearm);
+            for (const u64 block : blocks) {
+                vram_trapped[block] = vram_trap_block_size;
+            }
+        }
+        for (const u64 block : blocks) {
+            mprotect(reinterpret_cast<void*>(block), vram_trap_block_size, PROT_NONE);
+        }
+        static auto last = std::chrono::steady_clock::now();
+        if (std::chrono::steady_clock::now() - last < std::chrono::seconds(3)) {
+            return;
+        }
+        last = std::chrono::steady_clock::now();
+        std::string line;
+        for (auto& entry : vram_trap_sites) {
+            const u64 key = entry.key.load(), count = entry.count.exchange(0);
+            if (key && count) {
+                line += fmt::format(" {} {} x{} (guest caller +{:#x});",
+                                    key & (1ull << 62) ? "write" : "read",
+                                    VramTrapSiteName(key & ~(1ull << 62)), count,
+                                    entry.caller.load());
+            }
+        }
+        std::printf("VRAM trap sites (3 s):%s\n", line.c_str());
+        return;
+    }
+    const u32 count = std::min<u32>(vram_trap_count.load(), vram_traps.size());
+    for (u32 i = vram_trap_reported.load(); i < count; ++i) {
+        const auto& trap = vram_traps[i];
+        std::printf("VRAM trap: CPU %s at %#llx by %s (guest caller +%#llx)\n",
+                    trap.write ? "write" : "read", (unsigned long long)trap.address.load(),
+                    VramTrapSiteName(trap.rip.load()).c_str(),
+                    (unsigned long long)trap.caller.load());
+    }
+    vram_trap_reported = count;
+}
+} // namespace
+
 void BufferCache::QueuePromotions(u64 submitted) {
+    if (VramTrapsEnabled()) {
+        ReportVramTraps();
+    }
     if (promote_candidates.Empty()) {
         return;
+    }
+    // VRAM nearly full (past BB_VRAM_PROMOTE_PERCENT of the driver's budget, default 90): no new
+    // copies; the candidates wait, read in place meanwhile (#32: a card with 8 GB). Checked at
+    // most once a second (the query goes to the driver).
+    if (instance.CanReportMemoryUsage()) {
+        static const u64 percent = [] {
+            const char* v = std::getenv("BB_VRAM_PROMOTE_PERCENT");
+            return v && *v ? std::strtoull(v, nullptr, 10) : 90ull;
+        }();
+        static s64 checked_second = -1;
+        static bool full = false;
+        const s64 second = BbStats::coarse_second.load(std::memory_order_relaxed);
+        if (second != checked_second) {
+            checked_second = second;
+            const u64 usage = instance.GetDeviceMemoryUsage();
+            const u64 budget = instance.GetDeviceMemoryBudgetNow();
+            const bool now_full = budget != 0 && usage * 100 > budget * percent;
+            if (now_full != full) {
+                std::printf("Guest memory: VRAM %llu of %llu MiB in use: copies of loaded blocks "
+                            "%s\n",
+                            (unsigned long long)(usage >> 20), (unsigned long long)(budget >> 20),
+                            now_full ? "wait (read in place meanwhile)" : "resume");
+            }
+            full = now_full;
+        }
+        if (full) {
+            return;
+        }
     }
     std::vector<u64> blocks;
     for (const auto& range : promote_candidates) {
@@ -2288,6 +2591,20 @@ void BufferCache::QueuePromotions(u64 submitted) {
         }
         memory_tracker->MarkRegionAsCpuModified(address, block_size);
         moved += block_size;
+        const auto trap_range = VramTrapRange();
+        if (VramTrapsEnabled() &&
+            (trap_range.second ? address < trap_range.first + trap_range.second &&
+                                     trap_range.first < address + block_size
+                               : gpu_written_bytes.Overlaps(address, address + block_size))) {
+            static const bool registered = [] {
+                Core::Signals::Instance()->RegisterAccessViolationHandler(VramTrapHandler, 0);
+                return true;
+            }();
+            vram_trap_block_size = block_size;
+            std::scoped_lock lk{vram_trapped_mutex};
+            vram_trapped[address] = block_size;
+            mprotect(reinterpret_cast<void*>(address), block_size, PROT_NONE);
+        }
     }
     if (moved == 0) {
         return;
@@ -2311,6 +2628,9 @@ void BufferCache::UnmapInPlace(VAddr addr, u64 size) {
 
 void BufferCache::Maintain() {
     maintained_epoch = packet_epoch;
+    if (VramTrapsEnabled()) {
+        ReportVramTraps();
+    }
     ProcessPendingUnmaps();
     ProcessIdleBlocks();
     ProcessDemotions();
@@ -2631,6 +2951,24 @@ bool BufferCache::SynchronizeMemoryFromImage(const Buffer* arena, VAddr device_a
     }
     if (buffer_copies.empty()) {
         return false;
+    }
+    // bbport BB_TILE_BACK_LOG=1 (diagnostics): each image written back into the game's memory
+    // because a texel buffer reads it, with the age of its last GPU write in submissions.
+    static const bool tile_back_log = std::getenv("BB_TILE_BACK_LOG") != nullptr;
+    if (tile_back_log) {
+        static std::atomic<u32> printed{0};
+        if (printed.fetch_add(1) < 400) {
+            std::printf("Tile back: image %#llx %ux%u fmt %u tile %u size %llu, read %#llx+%u; last "
+                        "GPU write %lld submissions ago, flags %#x\n",
+                        (unsigned long long)image.info.guest_address, image.info.size.width,
+                        image.info.size.height, u32(image.info.pixel_format),
+                        u32(image.info.tile_mode), (unsigned long long)image.info.guest_size,
+                        (unsigned long long)device_addr, size,
+                        image.gpu_write_tick ? (long long)(scheduler.CurrentTick() -
+                                                           image.gpu_write_tick)
+                                             : -1ll,
+                        u32(image.flags));
+        }
     }
     auto& tile_manager = texture_cache.GetTileManager();
     tile_manager.TileImage(image, buffer_copies, arena, arena_offset);

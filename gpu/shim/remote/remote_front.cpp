@@ -28,6 +28,7 @@
 #include <mach-o/dyld.h>
 #endif
 
+#include "bbport_game_menu.h"
 #include "bbport_portable.h"
 #include "bbport_threads.h"
 #include "bbport_toggles.h"
@@ -590,6 +591,12 @@ void SubmitAsc(u32 gnm_vqid, std::span<const u32> acb) {
 void SubmitDone(u64 frame) {
     const ValueArgs args{frame};
     g.channel->Send(MsgSubmitDone, &args, sizeof(args));
+    // The game's System menu pages live in this process (their hooks are in the game's code), the
+    // renderer's settings in bb-gpu: a change there is saved to bbport.ini and bb-gpu reloads it.
+    // Once a frame, on the game's thread (bb-gpu's presenter polls in-process builds).
+    if (BbGameMenu::Poll()) {
+        g.channel->Send(MsgSettingsChanged, nullptr, 0);
+    }
 }
 
 bool IsGpuIdle() {

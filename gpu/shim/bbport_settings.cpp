@@ -185,6 +185,19 @@ void ConfigureUpscalerSupport(bool fsr4, bool fsr411, bool metalfx) {
     }
 }
 
+void ConfigureDlssSupport(bool available, const char* problem) {
+    auto& v = Get();
+    v.dlss_supported = available;
+    static std::string kept;
+    kept = problem ? problem : "";
+    v.dlss_problem = available || kept.empty() ? nullptr : kept.c_str();
+    if (v.upscaler == UpscalerDlss && !available) {
+        std::printf("Upscaler: DLSS unavailable (%s); falling back to FSR 3.1\n",
+                    kept.empty() ? "the DLSS bridge or NVIDIA's DLSS library is missing" : kept.c_str());
+        v.upscaler = UpscalerFsr3;
+    }
+}
+
 bool FixedRenderSession() {
     const char* size = std::getenv("BB_RENDER_RES");
     return size && size[0];
@@ -203,6 +216,39 @@ bool ResolutionNeedsRestart() {
         (v.preset != v.startup_preset || v.output_res != v.startup_output_res ||
          (v.upscaler == UpscalerOff) != (v.startup_upscaler == UpscalerOff) ||
          (v.upscaler == UpscalerTaa) != (v.startup_upscaler == UpscalerTaa));
+}
+
+void ReloadLive() {
+    Values fresh;
+    for (int e = 0; e < EffectCount; ++e) {
+        fresh.effects[e] = Effects[e].default_on;
+    }
+    FILE* file = std::fopen(Path(), "r");
+    if (!file) {
+        return;
+    }
+    char line[256];
+    while (std::fgets(line, sizeof(line), file)) {
+        std::string text{line};
+        text.erase(text.find_last_not_of(" \t\r\n") + 1);
+        const auto eq = text.find('=');
+        if (text.empty() || text[0] == '#' || eq == std::string::npos) {
+            continue;
+        }
+        Set(fresh, text.substr(0, eq), text.substr(eq + 1));
+    }
+    std::fclose(file);
+    auto& v = Get();
+    v.output_res = fresh.output_res.load();
+    v.upscaler = fresh.upscaler.load();
+    v.preset = fresh.preset.load();
+    v.sharpen = fresh.sharpen.load();
+    v.sharpness = fresh.sharpness.load();
+    v.show_fps = fresh.show_fps.load();
+    v.model_lod = fresh.model_lod.load();
+    for (int e = 0; e < EffectCount; ++e) {
+        v.effects[e] = fresh.effects[e].load();
+    }
 }
 
 void Save() {
@@ -302,8 +348,8 @@ const char* PresetName(int preset) {
 }
 
 const char* UpscalerName(int upscaler) {
-    static constexpr const char* names[UpscalerCount] = {"off",    "fsr3", "fsr4",
-                                                         "fsr411", "taa",  "metalfx"};
+    static constexpr const char* names[UpscalerCount] = {"off", "fsr3", "fsr4",   "fsr411",
+                                                         "taa", "dlss", "metalfx"};
     return names[std::clamp(upscaler, 0, UpscalerCount - 1)];
 }
 

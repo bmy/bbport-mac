@@ -140,11 +140,27 @@ if [[ ${MANGOHUD:-0} == 1 ]]; then
         echo "MangoHud: Steam's performance overlay is on; the in-game MangoHud stays off"
         unset MANGOHUD
         export DISABLE_MANGOHUD=1
-    elif grep -qs '"VK_LAYER_MANGOHUD' /usr/share/vulkan/implicit_layer.d/*.json \
-            /etc/vulkan/implicit_layer.d/*.json \
-            "${XDG_DATA_HOME:-$HOME/.local/share}"/vulkan/implicit_layer.d/*.json; then
-        # The system's own MangoHud (and its config) is used; the bundled one is skipped.
-        export VK_LOADER_LAYERS_DISABLE=${VK_LOADER_LAYERS_DISABLE:+$VK_LOADER_LAYERS_DISABLE,}VK_LAYER_MANGOHUD_overlay_64_x86_64
+    else
+        # The system's own MangoHud (and its config) is used when there is one: the bundled one
+        # (the AppImage's, /nix/store/...-mangohud-.../share on XDG_DATA_DIRS) is taken off the
+        # layer search path. Disabling it by layer name (0.3, 0.4) also disabled the system's one,
+        # which usually has the same name: no MangoHud at all (issue #66). Bash builtins only.
+        bundled=() others=()
+        IFS=: read -r -a data_dirs <<< "${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+        for dir in "${data_dirs[@]}"; do
+            if [[ $dir == */nix/store/*-mangohud-*/share ]]; then bundled+=("$dir"); else others+=("$dir"); fi
+        done
+        system_mangohud=0
+        for dir in "${XDG_DATA_HOME:-$HOME/.local/share}" /etc/xdg /etc "${others[@]}"; do
+            for manifest in "$dir"/vulkan/implicit_layer.d/*.json; do
+                [[ -f $manifest && $(< "$manifest") == *'"VK_LAYER_MANGOHUD'* ]] && system_mangohud=1
+            done
+        done
+        if [[ ${#bundled[@]} -gt 0 && $system_mangohud == 1 ]]; then
+            echo "MangoHud: the system's MangoHud is used"
+            export XDG_DATA_DIRS=$(IFS=:; echo "${others[*]}")
+        fi
+        unset bundled others data_dirs dir manifest system_mangohud
     fi
 fi
 # Write tracking with userfaultfd write-protection instead of mprotect (no address-space write lock:

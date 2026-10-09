@@ -11,7 +11,7 @@
 
 namespace BbRemote {
 
-inline constexpr std::uint32_t ProtocolVersion = 3;
+inline constexpr std::uint32_t ProtocolVersion = 4;
 
 enum Msg : std::uint32_t {
     // ---- game process -> GPU process ----
@@ -25,6 +25,7 @@ enum Msg : std::uint32_t {
     MsgInvalidate = 8,  ///< RangeArgs: Rasterizer::InvalidateMemory
     MsgNoteWrite = 9,   ///< RangeArgs: data written by a path the GPU side hears of (file reads)
     MsgCpuWrite = 10,   ///< RangeArgs: libc copies over watched pages
+    MsgSettingsChanged = 11, ///< the game's System menu changed bbport.ini (BbSettings::ReloadLive)
 
     MsgSubmitGfx = 20,  ///< SubmitGfxArgs, then the inline command words (host data)
     MsgSubmitAsc = 21,  ///< SubmitAscArgs

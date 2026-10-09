@@ -276,6 +276,16 @@ struct DisplaySection: View {
                 Text("Live resolution changes")
                 Text("No restart needed, but slower on weaker GPUs")
             }
+            Picker(selection: $model.prefs.display) {
+                Text("Main display").tag("")
+                ForEach(NSScreen.screens.map(\.localizedName), id: \.self) { Text($0).tag($0) }
+                if !model.prefs.display.isEmpty && !NSScreen.screens.contains(where: { $0.localizedName == model.prefs.display }) {
+                    Text("\(model.prefs.display) (not connected)").tag(model.prefs.display)
+                }
+            } label: {
+                Text("Display")
+                Text("Where the game's window opens")
+            }
             Toggle("Fullscreen", isOn: $model.prefs.fullscreen)
             Picker(selection: $model.prefs.presentMode) {
                 ForEach(Catalog.presentModes) { Text($0.label).tag($0.value) }
@@ -386,6 +396,14 @@ struct EffectsSection: View {
         Section {
             Picker("Model detail", selection: $model.game.modelLOD) {
                 ForEach(Catalog.modelDetail) { Text($0.label).tag($0.value) }
+            }
+            Toggle(isOn: $model.prefs.gameMenu) {
+                Text("Settings in the game's System menu")
+                Text("The port's display, effects and patch settings as pages after Screen/Sound")
+            }
+            Toggle(isOn: $model.prefs.skipNetworkChoice) {
+                Text("Skip the online/offline screen")
+                Text("The game starts straight at its main menu, offline")
             }
             ForEach($model.game.effects) { $effect in
                 Toggle(isOn: $effect.isOn) {

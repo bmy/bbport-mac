@@ -386,6 +386,9 @@ final class LauncherModel: ObservableObject {
         env["BB_PATCHES_CONFIG"] = patchesConfigURL.path
         env["BB_LANGUAGE"] = p.language
         env["BB_FULLSCREEN"] = p.fullscreen ? "1" : "0"
+        env["BB_GAME_MENU"] = p.gameMenu ? "1" : "0"
+        env["BB_SKIP_NETWORK_CHOICE"] = p.skipNetworkChoice ? "1" : "0"
+        if p.display.isEmpty { env.removeValue(forKey: "BB_DISPLAY") } else { env["BB_DISPLAY"] = p.display }
         env["BB_PRESENT_MODE"] = p.presentMode
         env["BB_HDR"] = p.hdr ? "1" : "0"
         env["BB_FPS"] = p.fpsMode

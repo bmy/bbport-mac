@@ -34,6 +34,9 @@ bool Usable(const Vulkan::Instance& instance);
 /// model) may run on this GPU: tested on AMD only. Elsewhere it stays off (the 0.3 model) unless
 /// BB_PC_MODEL_ANY_GPU=1.
 bool PcModelGpu(const Vulkan::Instance& instance);
+/// The external memory handle type of the chunks (dma-buf or imported host memory): buffers bound
+/// to them (the arena, chunk buffers) are created with it. Valid after Usable().
+vk::ExternalMemoryHandleTypeFlagBits HandleType();
 /// Hands the runtime direct memory chunks from now on (when enabled and supported).
 void Install(const Vulkan::Instance& instance);
 /// The chunk holding direct memory address `phys`, or null.

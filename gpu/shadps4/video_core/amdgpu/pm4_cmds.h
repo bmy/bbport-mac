@@ -1232,6 +1232,28 @@ struct PM4CmdMemSemaphore {
     }
 };
 
+// bbport: SET_PREDICATION (CIK): draws and dispatches whose header has the predicate bit run
+// only if the predicate holds: the occlusion results at the address (ZPass: any samples passed,
+// summed over the depth blocks' begin/end pairs), or a 64- or 32-bit boolean there.
+struct PM4CmdSetPredication {
+    enum class Op : u32 { Clear = 0, ZPass = 1, PrimCount = 2, Bool64 = 3, Bool32 = 4 };
+
+    PM4Type3Header header;
+    u32 start_addr_lo;
+    union {
+        BitField<0, 8, u32> start_addr_hi;
+        BitField<8, 1, u32> draw_if_true; ///< 1: draw if visible / the boolean is set
+        BitField<12, 1, u32> hint_no_wait; ///< 1: draw when the result is not ready
+        BitField<16, 3, Op> op;
+        BitField<31, 1, u32> continue_; ///< ORed with the previous predicate
+        u32 control;
+    };
+
+    VAddr Address() const {
+        return u64(start_addr_hi.Value()) << 32 | (start_addr_lo & ~3u);
+    }
+};
+
 struct PM4CmdCondExec {
     PM4Type3Header header;
     union {

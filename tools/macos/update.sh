@@ -4,8 +4,11 @@
 #   bash tools/macos/update.sh <branch>   # switch to a test branch (macos-0.4 is the main one)
 # Local changes to tracked files are discarded (the branch matches GitHub exactly); bbport.ini,
 # saves, deps-x86_64 and out/ are untracked and stay. The Mac app's Update button runs this.
+# Everything it prints is also saved to out/last-update.log (to send when an update fails).
 set -euo pipefail
 cd -- "$(dirname -- "$0")/../.."
+mkdir -p out
+exec > >(tee out/last-update.log) 2>&1
 branch=${1:-$(git branch --show-current)}
 [[ -n $branch ]] || { echo "STOP: no branch checked out; name one: bash tools/macos/update.sh macos-0.4" >&2; exit 1; }
 old=$(git rev-parse HEAD)

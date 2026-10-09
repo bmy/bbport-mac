@@ -37,6 +37,7 @@
 #include "../bbgpu.h"
 #include <SDL3/SDL.h>
 #include "bbport_overlay.h"
+#include "bbport_settings.h"
 #include "bbport_portable.h"
 #include "bbport_toggles.h"
 #include "common/slot_vector.h"
@@ -427,6 +428,10 @@ void Handle(const Message& message, auto&& reply) {
         break;
     case MsgCpuWrite:
         CallHook(&State::hook_cpu_write, Payload<RangeArgs>(message));
+        break;
+    case MsgSettingsChanged:
+        BbSettings::ReloadLive();
+        std::printf("GPU process: settings from the game's menu applied\n");
         break;
     case MsgWriteFault:
         WriteFault(message, reply);

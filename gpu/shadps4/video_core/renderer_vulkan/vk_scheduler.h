@@ -893,6 +893,21 @@ public:
     /// command) a long enough segment is cut there, and the next one goes to another thread.
     void KickRecording(bool force = false);
 
+    /// bbport: work that may not span command buffers or render pass instances (an occlusion
+    /// query, vk_occlusion.h). While one is set, Suspend is called before every boundary (a
+    /// render pass beginning or ending, a segment cut, a direct segment, a submission) and Resume
+    /// right after it; `inside_render_pass` tells where the commands they record go. Called on
+    /// the recording side, as Record.
+    struct CarriedScope {
+        virtual void Suspend(bool inside_render_pass) = 0;
+        virtual void Resume(bool inside_render_pass) = 0;
+    protected:
+        ~CarriedScope() = default;
+    };
+    void SetCarriedScope(CarriedScope* scope) {
+        carried_scope = scope;
+    }
+
     /// Waits until every recorded command is in the command buffer.
     void SyncRecording();
 
@@ -937,6 +952,11 @@ public:
     /// bbport (BB_DRAW_TRACE): render passes begun so far.
     [[nodiscard]] u64 PassCount() const noexcept {
         return pass_count;
+    }
+
+    /// bbport: a render pass instance is open in the command stream.
+    [[nodiscard]] bool IsRendering() const noexcept {
+        return is_rendering;
     }
 
     [[nodiscard]] bool IsRenderingWith(const RenderState& state) const {
@@ -1145,6 +1165,17 @@ private:
     /// bbport: direct_mode in a segment of its own (direct_pool), the recording threads going on
     /// with the segments before it.
     bool direct_segment = false;
+    CarriedScope* carried_scope = nullptr;
+    void CarrySuspend(bool inside_render_pass) {
+        if (carried_scope) {
+            carried_scope->Suspend(inside_render_pass);
+        }
+    }
+    void CarryResume(bool inside_render_pass) {
+        if (carried_scope) {
+            carried_scope->Resume(inside_render_pass);
+        }
+    }
     std::unique_ptr<CommandPool> direct_pool; ///< used by the producer thread only
     u64 host_copies_issued = 0;
     std::atomic<u64> host_copies_done{0};

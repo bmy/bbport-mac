@@ -181,6 +181,7 @@ public:
         std::scoped_lock lock{mutex};
         Image& image = slot_images[image_id];
         TrackImage(image_id);
+        WatchImage(image, "update image (slow path)");
         TouchImage(image);
         RefreshImage(image);
     }
@@ -200,6 +201,15 @@ public:
 
     /// Reuploads image contents.
     void RefreshImage(Image& image);
+    void WatchImage(const Image& image, const char* what);
+
+    /// bbport BB_IMAGE_TRACE=1 (diagnostic): on quiet screens (loading screens, menus: few draws
+    /// a frame) every texture use whose guest memory, upload count or flags changed is printed.
+    void TraceImageUse(const Image& image);
+    static bool ImageTraceEnabled();
+    /// BB_IMAGE_TRACE=1: something wrote guest memory under a texture the trace has seen used.
+    /// source names the writer: a file read, a CPU write fault, the game's libc, a GPU copy...
+    static void TraceImageWrite(VAddr address, u64 size, const char* source);
 
     /// bbport BB_IMAGE_TRACE=1 (diagnostic): on quiet screens (loading screens, menus: few draws
     /// a frame) every texture use whose guest memory, upload count or flags changed is printed.

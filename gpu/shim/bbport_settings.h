@@ -10,7 +10,7 @@
 namespace BbSettings {
 
 enum Upscaler : int { UpscalerOff = 0, UpscalerFsr3 = 1, UpscalerFsr4 = 2, UpscalerFsr411 = 3,
-                      UpscalerTaa = 4, UpscalerMetalFx = 5, UpscalerCount };
+                      UpscalerTaa = 4, UpscalerDlss = 5, UpscalerMetalFx = 6, UpscalerCount };
 /// FSR 4 v07 or FSR 4.1.1: the same inputs, settings and placement in the frame.
 inline bool IsFsr4(int upscaler) {
     return upscaler == UpscalerFsr4 || upscaler == UpscalerFsr411;
@@ -85,6 +85,9 @@ struct Values {
     /// MetalFX (macOS with KosmicKrisp only); why it cannot run, or null. Set by the renderer.
     std::atomic<bool> metalfx_supported{false};
     std::atomic<const char*> metalfx_problem{nullptr};
+    /// DLSS (gpu/dlss_bridge, NVIDIA RTX) is ready, or why not (null before the device exists).
+    std::atomic<bool> dlss_supported{false};
+    std::atomic<const char*> dlss_problem{nullptr};
 
     /// Startup settings for the explicit BB_RENDER_RES compatibility patch only.
     int startup_preset = NativeAA;
@@ -104,12 +107,18 @@ const char* MenuText(const char* english, const char* russian);
 void Load();
 /// Checks the loaded choice before the first frame: unsupported FSR 4 uses FSR 3.1, MetalFX off.
 void ConfigureUpscalerSupport(bool fsr4, bool fsr411, bool metalfx = false);
+/// After device creation: DLSS availability; a DLSS setting falls back to FSR 3.1 without it.
+void ConfigureDlssSupport(bool available, const char* problem);
 /// Startup-patched scene dimensions cannot change until run.sh prepares a new image.
 bool FixedRenderSession();
 int RenderPreset();
 bool ResolutionNeedsRestart();
 /// Writes the file (menu changes).
 void Save();
+/// bbport (macOS native GPU process): reads bbport.ini again into the values the game's System menu
+/// pages change (output, upscaler, preset, sharpening, FPS counter, model detail, effects), so
+/// that the process which did not make a change follows it. Startup values stay.
+void ReloadLive();
 
 /// Render resolution divisor of a preset (1.0 native, 1.5 quality, ...).
 float PresetScale(int preset);

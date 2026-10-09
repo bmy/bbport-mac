@@ -112,12 +112,16 @@ class PackagedVulkanTests(unittest.TestCase):
     def test_new_memory_model_offered_with_an_amd_gpu(self):
         self.drm_card("card0", "0x8086")
         self.drm_card("card1", "0x1002")
-        self.assertIs(vulkan.amd_gpu(self.root / "drm"), True)
+        self.assertIs(vulkan.pc_model_gpu(self.root / "drm"), True)
 
-    def test_new_memory_model_not_offered_without_an_amd_gpu(self):
+    def test_new_memory_model_offered_with_an_nvidia_gpu(self):
         self.drm_card("card0", "0x10de")
-        self.assertIs(vulkan.amd_gpu(self.root / "drm"), False)
+        self.assertIs(vulkan.pc_model_gpu(self.root / "drm"), True)
+
+    def test_new_memory_model_not_offered_with_other_gpus(self):
+        self.drm_card("card0", "0x8086")
+        self.assertIs(vulkan.pc_model_gpu(self.root / "drm"), False)
 
     def test_unknown_gpu_leaves_the_choice_to_the_game(self):
         (self.root / "drm").mkdir()
-        self.assertIsNone(vulkan.amd_gpu(self.root / "drm"))
+        self.assertIsNone(vulkan.pc_model_gpu(self.root / "drm"))

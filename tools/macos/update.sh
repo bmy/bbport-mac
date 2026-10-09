@@ -26,6 +26,14 @@ else
 fi
 changed() { [[ $old != "$new" ]] && ! git diff --quiet "$old" "$new" -- "$@" 2>/dev/null; }
 
+# The build applies gpu/patches/fsr-vulkan to the FSR library's files in place, and git keeps
+# those edits across a change of commit: another branch's versions of the patches would not
+# apply over them. Back to the library's own files; build.sh applies this commit's patches.
+fsr=gpu/third_party/fsr-vulkan
+if [[ $old != "$new" && -e $fsr/.git ]]; then
+    git -C "$fsr" checkout -q -- . && git -C "$fsr" clean -qfd
+fi
+
 # Dependencies only when their recipe changed (setup_deps.sh skips what is built, but it still
 # calls Homebrew, which can take a while).
 if [[ ! -f deps-x86_64/env.sh ]] || changed tools/macos/setup_deps.sh tools/macos/kosmickrisp-patches; then

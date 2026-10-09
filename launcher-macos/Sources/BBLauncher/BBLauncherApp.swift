@@ -9,13 +9,13 @@ struct BBLauncherApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        Window("Bloodborne", id: "main") {
+        Window("血源诅咒", id: "main") {
             ContentView()
                 .environmentObject(LauncherModel.shared)
         }
         .defaultSize(width: 700, height: 880)
 
-        Window("Game Log", id: "log") {
+        Window("运行日志", id: "log") {
             LogView()
                 .environmentObject(LauncherModel.shared)
         }
@@ -52,34 +52,34 @@ struct LauncherSettingsView: View {
     var body: some View {
         Form {
             Section {
-                LabeledContent("Embedded at build") {
-                    Text(model.embeddedRepoPath ?? "None")
+                LabeledContent("构建时记录的目录") {
+                    Text(model.embeddedRepoPath ?? "无")
                         .textSelection(.enabled)
                         .truncationMode(.middle)
                 }
-                TextField(text: $model.prefs.repoOverride, prompt: Text("Use the embedded path")) {
-                    Text("Override")
+                TextField(text: $model.prefs.repoOverride, prompt: Text("使用构建时记录的目录")) {
+                    Text("自定义目录")
                 }
                 HStack {
-                    Button("Choose…") { model.chooseRepository() }
-                    Button("Use the Embedded Path") { model.prefs.repoOverride = "" }
+                    Button("选择…") { model.chooseRepository() }
+                    Button("恢复构建时记录的目录") { model.prefs.repoOverride = "" }
                         .disabled(model.prefs.repoOverride.isEmpty)
                 }
                 CheckLabel(check: model.repoCheck)
             } header: {
-                Text("bbport repository")
+                Text("bbport 项目目录")
             } footer: {
-                Text("The folder with tools/macos/run.sh. tools/macos/build_launcher.sh embeds the checkout it was run from.")
+                Text("选择包含 tools/macos/run.sh 的项目目录。构建脚本会记录构建时使用的项目路径。")
                     .foregroundStyle(.secondary)
             }
             Section {
-                TextField(text: $model.prefs.branch, prompt: Text("Keep the current branch")) {
-                    Text("Branch")
+                TextField(text: $model.prefs.branch, prompt: Text("保留当前分支")) {
+                    Text("更新分支")
                 }
             } header: {
-                Text("Update")
+                Text("更新")
             } footer: {
-                Text("Update fetches this branch from GitHub and rebuilds. macos-port is the main branch; others are for testing. Empty keeps the current one.")
+                Text("更新时从 GitHub 获取此分支并重新构建。macos-port 为主分支，其他分支用于测试。留空表示保留当前分支。")
                     .foregroundStyle(.secondary)
             }
         }

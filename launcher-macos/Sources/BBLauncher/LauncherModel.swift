@@ -133,20 +133,20 @@ final class LauncherModel: ObservableObject {
         switch state {
         case .idle:
             if !repoCheck.allowsPlay { return repoCheck.message }
-            if !gameCheck.allowsPlay { return "Choose the game folder" }
-            return "Ready"
+            if !gameCheck.allowsPlay { return "请选择游戏目录" }
+            return "准备就绪"
         case .running:
-            return job == .update ? "Updating…" : "Running"
+            return job == .update ? "正在更新…" : "运行中"
         case .stopping:
-            return "Stopping…"
+            return "正在停止…"
         case let .exited(status, bySignal):
-            if bySignal { return "Stopped (signal \(status))" }
+            if bySignal { return "已停止（信号 \(status)）" }
             if job == .update {
-                return status == 0 ? "Updated" : "The update failed: see the log"
+                return status == 0 ? "更新完成" : "更新失败，请查看日志"
             }
-            return status == 0 ? "The game exited" : "The game exited with code \(status): see the log"
+            return status == 0 ? "游戏已退出" : "游戏已退出（代码 \(status)），请查看日志"
         case let .failed(message):
-            return "Could not start: \(message)"
+            return "无法启动：\(message)"
         }
     }
 
@@ -204,33 +204,33 @@ final class LauncherModel: ObservableObject {
     // MARK: - Folders
 
     func chooseGameFolder() {
-        if let path = chooseFolder(message: "Choose the game folder (with eboot.bin)", startingAt: prefs.gameFolder) {
+        if let path = chooseFolder(message: "选择游戏目录（包含 eboot.bin）", startingAt: prefs.gameFolder) {
             prefs.gameFolder = path
         }
     }
 
     func chooseUserFolder() {
-        if let path = chooseFolder(message: "Choose the saves folder", startingAt: userFolderURL.path) {
+        if let path = chooseFolder(message: "选择存档目录", startingAt: userFolderURL.path) {
             prefs.userFolder = path
         }
     }
 
     func chooseModsFolder() {
         saveModProfile()
-        if let path = chooseFolder(message: "Choose the mods folder", startingAt: modsFolderURL.path) {
+        if let path = chooseFolder(message: "选择模组目录", startingAt: modsFolderURL.path) {
             prefs.modsFolder = path
         }
     }
 
     func choosePatchesFolder() {
         savePatchProfile()
-        if let path = chooseFolder(message: "Choose the patches folder", startingAt: patchesFolderURL.path) {
+        if let path = chooseFolder(message: "选择补丁目录", startingAt: patchesFolderURL.path) {
             prefs.patchesFolder = path
         }
     }
 
     func chooseRepository() {
-        if let path = chooseFolder(message: "Choose the bbport repository (with tools/macos/run.sh)",
+        if let path = chooseFolder(message: "选择 bbport 项目目录（包含 tools/macos/run.sh）",
                                    startingAt: repoURL?.path) {
             prefs.repoOverride = path
         }
@@ -239,7 +239,7 @@ final class LauncherModel: ObservableObject {
     private func chooseFolder(message: String, startingAt path: String?) -> String? {
         let panel = NSOpenPanel()
         panel.message = message
-        panel.prompt = "Choose"
+        panel.prompt = "选择"
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
@@ -297,7 +297,7 @@ final class LauncherModel: ObservableObject {
         let builtIn = dataURL.appendingPathComponent("patches/Bloodborne.xml")
         patches = discoverPatches(in: patchesFolderURL, builtIn: builtIn).map { meta in
             var subtitle = String(meta.key.split(separator: "/", maxSplits: 1).first ?? "")
-            if let author = meta.author { subtitle += " · Author: \(author)" }
+            if let author = meta.author { subtitle += " · 作者：\(author)" }
             let isOn = enabled.contains(meta.key) || (meta.enabledByDefault && !disabled.contains(meta.key))
             return PatchEntry(key: meta.key, title: meta.name, subtitle: subtitle, note: meta.note,
                               enabledByDefault: meta.enabledByDefault, isOn: isOn)
@@ -386,7 +386,7 @@ final class LauncherModel: ObservableObject {
         do {
             try saveIni()
         } catch {
-            state = .failed("cannot write \(iniURL.path): \(error.localizedDescription)")
+            state = .failed("无法写入 \(iniURL.path)：\(error.localizedDescription)")
             return
         }
 
@@ -431,7 +431,7 @@ final class LauncherModel: ObservableObject {
         } catch {
             if readFD >= 0 { close(readFD) }
             state = .failed(error.localizedDescription)
-            appendLines(["Could not start: \(error.localizedDescription)"])
+            appendLines(["无法启动：\(error.localizedDescription)"])
             return
         }
         let collector = OutputCollector()
@@ -497,13 +497,13 @@ final class LauncherModel: ObservableObject {
         pollTask = nil
         state = .exited(status: status, bySignal: bySignal)
         if job == .update {
-            appendLines(["", status == 0 && !bySignal ? "— update finished —" : "— the update stopped (code \(status)) —"])
+            appendLines(["", status == 0 && !bySignal ? "— 更新完成 —" : "— 更新已停止（代码 \(status)）—"])
             // New code may bring new checks, mods or patches.
             refreshChecks()
             reloadRepositoryFiles()
             return true
         }
-        appendLines(["", bySignal ? "— the game was stopped (signal \(status)) —" : "— the game exited (code \(status)) —"])
+        appendLines(["", bySignal ? "— 游戏已停止（信号 \(status)）—" : "— 游戏已退出（代码 \(status)）—"])
         // Pick up changes made in the in-game menu (it saves bbport.ini).
         reloadIni()
         return true

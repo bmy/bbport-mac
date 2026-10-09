@@ -30,39 +30,39 @@ struct LogView: View {
             }
             .overlay {
                 if model.logLines.isEmpty {
-                    Text("Press Play: the game's output appears here.")
+                    Text("点击“启动游戏”后，运行日志会显示在这里。")
                         .foregroundStyle(.secondary)
                 }
             }
         }
         .frame(minWidth: 480, minHeight: 240)
-        .navigationTitle("Game Log")
+        .navigationTitle("运行日志")
         .navigationSubtitle(model.statusText)
         .toolbar {
             ToolbarItemGroup {
                 Toggle(isOn: $model.followLog) {
-                    Label("Follow Output", systemImage: "arrow.down.to.line")
+                    Label("跟随最新日志", systemImage: "arrow.down.to.line")
                 }
-                .help("Keep the newest output in view")
+                .help("自动滚动到最新日志")
                 Button {
                     model.copyLog()
                 } label: {
-                    Label("Copy Log", systemImage: "doc.on.doc")
+                    Label("复制日志", systemImage: "doc.on.doc")
                 }
-                .help("Copy the whole log")
+                .help("复制全部日志")
                 Button {
                     NSWorkspace.shared.open(model.lastRunLogURL)
                 } label: {
-                    Label("Open last-run.log", systemImage: "doc.text")
+                    Label("打开 last-run.log", systemImage: "doc.text")
                 }
-                .help("out/last-run.log: the full output of the last run (send this when reporting a problem)")
+                .help("out/last-run.log：上次运行的完整日志，反馈问题时可提供此文件")
                 .disabled(!FileManager.default.fileExists(atPath: model.lastRunLogURL.path))
                 Button {
                     model.clearLog()
                 } label: {
-                    Label("Clear", systemImage: "trash")
+                    Label("清空", systemImage: "trash")
                 }
-                .help("Clear the log view")
+                .help("清空日志显示")
                 .disabled(model.isRunning)
             }
         }

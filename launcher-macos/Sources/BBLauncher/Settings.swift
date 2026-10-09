@@ -23,19 +23,19 @@ enum Catalog {
     // Upscalers offered on macOS (bbport.ini "upscaler", BB_UPSCALER). FSR 4 and 4.1.1 need
     // FP8/WMMA features the Mac Vulkan drivers lack; the port falls back to FSR 3.1 for them.
     static let upscalers: [Choice<String>] = [
-        Choice(value: "off", label: "Off"),
+        Choice(value: "off", label: "关闭"),
         Choice(value: "fsr3", label: "FSR 3.1"),
-        Choice(value: "taa", label: "TAA (native anti-aliasing)"),
+        Choice(value: "taa", label: "TAA（原生抗锯齿）"),
         Choice(value: "metalfx", label: "MetalFX"),
     ]
     static let defaultUpscaler = "off"
 
     static let presets: [Choice<Int>] = [
-        Choice(value: 0, label: "Native AA"),
-        Choice(value: 1, label: "Quality (x1.5)"),
-        Choice(value: 2, label: "Balanced (x1.7)"),
-        Choice(value: 3, label: "Performance (x2)"),
-        Choice(value: 4, label: "Ultra Performance (x3)"),
+        Choice(value: 0, label: "原生抗锯齿"),
+        Choice(value: 1, label: "质量（1.5 倍）"),
+        Choice(value: 2, label: "平衡（1.7 倍）"),
+        Choice(value: 3, label: "性能（2 倍）"),
+        Choice(value: 4, label: "极致性能（3 倍）"),
     ]
     // Linux defaults to 4 for FSR 4; FSR 3.1 and MetalFX look much better at Quality.
     static let defaultPreset = 1
@@ -48,68 +48,70 @@ enum Catalog {
     ]
 
     static let liveResolution: [Choice<String>] = [
-        Choice(value: "auto", label: "Auto (by GPU)"),
-        Choice(value: "0", label: "Off (faster)"),
-        Choice(value: "1", label: "On"),
+        Choice(value: "auto", label: "自动（根据 GPU）"),
+        Choice(value: "0", label: "关闭（更快）"),
+        Choice(value: "1", label: "开启"),
     ]
 
     static let modelDetail: [Choice<String>] = [
-        Choice(value: "0", label: "As in the game"),
-        Choice(value: "-2", label: "Highest (-2)"),
-        Choice(value: "1", label: "Lower (1)"),
-        Choice(value: "2", label: "Lowest (2)"),
+        Choice(value: "0", label: "游戏默认"),
+        Choice(value: "-2", label: "最高（-2）"),
+        Choice(value: "1", label: "较低（1）"),
+        Choice(value: "2", label: "最低（2）"),
     ]
 
     static let effects: [EffectDefinition] = [
-        EffectDefinition(key: "effect_chromatic_aberration", title: "Chromatic aberration", defaultOn: true, note: nil),
-        EffectDefinition(key: "effect_dof", title: "Depth of field (DoF)", defaultOn: true, note: nil),
-        EffectDefinition(key: "effect_motion_blur", title: "Motion blur", defaultOn: true, note: nil),
-        EffectDefinition(key: "effect_ssao", title: "SSAO", defaultOn: true, note: nil),
-        EffectDefinition(key: "effect_game_aa", title: "The game's own anti-aliasing", defaultOn: true, note: nil),
-        EffectDefinition(key: "effect_dynamic_shadows", title: "Dynamic light shadows", defaultOn: true, note: nil),
-        EffectDefinition(key: "effect_ssr", title: "SSR reflections (not in the original game)", defaultOn: false, note: nil),
-        EffectDefinition(key: "skip_intro", title: "Skip the intro videos", defaultOn: false, note: nil),
-        EffectDefinition(key: "debug_camera", title: "Free camera (Cross + L3 / Space + Z)", defaultOn: false, note: nil),
-        EffectDefinition(key: "debug_menu", title: "Debug menu (left touchpad / Tab; needs fonts)", defaultOn: false,
-                         note: "Install DbgFont14h.ccm and DbgFont14h.tpf into dvdroot_ps4/font from Nexus mod #253"),
+        EffectDefinition(key: "effect_chromatic_aberration", title: "色差", defaultOn: true, note: nil),
+        EffectDefinition(key: "effect_dof", title: "景深（DoF）", defaultOn: true, note: nil),
+        EffectDefinition(key: "effect_motion_blur", title: "动态模糊", defaultOn: true, note: nil),
+        EffectDefinition(key: "effect_ssao", title: "屏幕空间环境光遮蔽（SSAO）", defaultOn: true, note: nil),
+        EffectDefinition(key: "effect_game_aa", title: "游戏自带抗锯齿", defaultOn: true, note: nil),
+        EffectDefinition(key: "effect_dynamic_shadows", title: "动态光源阴影", defaultOn: true, note: nil),
+        EffectDefinition(key: "effect_ssr", title: "屏幕空间反射（SSR，原版无此效果）", defaultOn: false, note: nil),
+        EffectDefinition(key: "skip_intro", title: "跳过片头视频", defaultOn: false, note: nil),
+        EffectDefinition(key: "debug_camera", title: "自由镜头（叉键 + L3／空格 + Z）", defaultOn: false, note: nil),
+        EffectDefinition(key: "debug_menu", title: "调试菜单（触摸板左侧／Tab；需安装字体）", defaultOn: false,
+                         note: "从 Nexus 模组 #253 获取 DbgFont14h.ccm 和 DbgFont14h.tpf，放入 dvdroot_ps4/font"),
     ]
 
     static let fpsModes: [Choice<String>] = [
-        Choice(value: "uncap", label: "Unlocked (patch)"),
+        Choice(value: "uncap", label: "解除限制（补丁）"),
         Choice(value: "60", label: "60"),
         Choice(value: "90", label: "90"),
-        Choice(value: "30", label: "30 (as on PS4)"),
+        Choice(value: "30", label: "30（PS4 默认）"),
     ]
     // 60 FPS runs well on Apple Silicon (most areas hold it with FSR 3.1).
     static let defaultFPSMode = "60"
 
     static let presentModes: [Choice<String>] = [
-        Choice(value: "Mailbox", label: "Mailbox"),
-        Choice(value: "Fifo", label: "FIFO (VSync)"),
-        Choice(value: "FifoRelaxed", label: "FIFO Relaxed"),
-        Choice(value: "Immediate", label: "Immediate"),
+        Choice(value: "Mailbox", label: "Mailbox（邮箱模式）"),
+        Choice(value: "Fifo", label: "FIFO（垂直同步）"),
+        Choice(value: "FifoRelaxed", label: "FIFO Relaxed（宽松同步）"),
+        Choice(value: "Immediate", label: "Immediate（立即呈现）"),
     ]
 
     static let drawPipe: [Choice<String>] = [
-        Choice(value: "", label: "Auto (8+ threads)"),
-        Choice(value: "1", label: "On"),
-        Choice(value: "0", label: "Off (more stable)"),
+        Choice(value: "", label: "自动（8 个及以上线程）"),
+        Choice(value: "1", label: "开启"),
+        Choice(value: "0", label: "关闭（更稳定）"),
     ]
 
     static let readbacks: [Choice<String>] = [
-        Choice(value: "", label: "Relaxed (default)"),
-        Choice(value: "0", label: "Off"),
-        Choice(value: "2", label: "Precise"),
+        Choice(value: "", label: "宽松（默认）"),
+        Choice(value: "0", label: "关闭"),
+        Choice(value: "2", label: "精确"),
     ]
 
     static let languages: [Choice<String>] = [
-        Choice(value: "1", label: "English"),
-        Choice(value: "8", label: "Russian"),
-        Choice(value: "0", label: "Japanese"),
-        Choice(value: "2", label: "French"),
-        Choice(value: "3", label: "Spanish"),
-        Choice(value: "4", label: "German"),
-        Choice(value: "5", label: "Italian"),
+        Choice(value: "11", label: "简体中文"),
+        Choice(value: "10", label: "繁體中文"),
+        Choice(value: "1", label: "英语"),
+        Choice(value: "8", label: "俄语"),
+        Choice(value: "0", label: "日语"),
+        Choice(value: "2", label: "法语"),
+        Choice(value: "3", label: "西班牙语"),
+        Choice(value: "4", label: "德语"),
+        Choice(value: "5", label: "意大利语"),
     ]
 
     static func contains<Value: Hashable & Sendable>(_ choices: [Choice<Value>], _ value: Value) -> Bool {

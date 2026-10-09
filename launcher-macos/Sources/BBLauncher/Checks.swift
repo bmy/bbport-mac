@@ -71,28 +71,28 @@ func readSFO(_ url: URL) -> [String: String]? {
 /// The Linux launcher only requires eboot.bin; the title and version are reported as warnings.
 func checkGameFolder(_ path: String) -> Check {
     if path.isEmpty {
-        return Check(level: .error, message: "Not chosen: pick the folder with eboot.bin")
+        return Check(level: .error, message: "尚未选择：请选择包含 eboot.bin 的目录")
     }
     let folder = URL(fileURLWithPath: path, isDirectory: true)
     if !isDirectory(folder) {
-        return Check(level: .error, message: "The folder does not exist")
+        return Check(level: .error, message: "目录不存在")
     }
     if !isFile(folder.appendingPathComponent("eboot.bin")) {
-        return Check(level: .error, message: "No eboot.bin in the folder")
+        return Check(level: .error, message: "目录中没有 eboot.bin")
     }
     guard let sfo = readSFO(folder.appendingPathComponent("sce_sys/param.sfo")) else {
-        return Check(level: .warning, message: "eboot.bin found; sce_sys/param.sfo is missing or unreadable")
+        return Check(level: .warning, message: "已找到 eboot.bin，但 sce_sys/param.sfo 缺失或无法读取")
     }
     let title = sfo["TITLE_ID"] ?? "?"
     let version = sfo["APP_VER"] ?? "?"
     if !bloodborneTitleIDs.contains(title) {
-        return Check(level: .warning, message: "eboot.bin found, but the title is \(title), not Bloodborne")
+        return Check(level: .warning, message: "已找到 eboot.bin，但游戏编号 \(title) 不属于《血源诅咒》")
     }
     if version != "01.09" {
         return Check(level: .warning,
-                     message: "\(title) version \(version) found; the port expects 01.09 (the game merged with update 1.09)")
+                     message: "检测到 \(title)，版本 \(version)；本项目需要 01.09（本体合并 1.09 更新）")
     }
-    return Check(level: .ok, message: "Bloodborne \(title), version \(version)")
+    return Check(level: .ok, message: "血源诅咒 \(title)，版本 \(version)")
 }
 
 // MARK: - Repository
@@ -117,16 +117,16 @@ func findRepository(above start: URL) -> URL? {
 func checkRepository(_ url: URL?) -> Check {
     guard let url else {
         return Check(level: .error,
-                     message: "bbport repository not found: rebuild with tools/macos/build_launcher.sh or set it in Settings")
+                     message: "未找到 bbport 项目目录：请运行 tools/macos/build_launcher.sh 重新构建，或在设置中指定目录")
     }
     if !isRepository(url) {
-        return Check(level: .error, message: "\(url.path) has no tools/macos/run.sh: set the repository in Settings")
+        return Check(level: .error, message: "\(url.path) 中没有 tools/macos/run.sh，请在设置中指定项目目录")
     }
     if !FileManager.default.isExecutableFile(atPath: url.appendingPathComponent("out/bb-probe").path) {
-        return Check(level: .error, message: "The port is not built yet: run bash tools/macos/build.sh in Terminal")
+        return Check(level: .error, message: "尚未构建游戏运行程序：请在终端执行 bash tools/macos/build.sh")
     }
     if !isFile(url.appendingPathComponent("deps-x86_64/env.sh")) {
-        return Check(level: .warning, message: "deps-x86_64/env.sh is missing: run bash tools/macos/setup_deps.sh")
+        return Check(level: .warning, message: "缺少 deps-x86_64/env.sh：请执行 bash tools/macos/setup_deps.sh")
     }
     return Check(level: .ok, message: url.path)
 }

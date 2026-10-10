@@ -323,6 +323,15 @@ void ReaderThread() {
 /// A protection or write trap from bb-gpu (ProtectArgs, ProtectTrap).
 void ApplyProtect(const ProtectArgs& args) {
     if (args.read & ProtectTrap) {
+        // runtime_memory_trap trusts its caller (in-process, the GPU library): a range that wraps
+        // or reaches past its table would write outside it.
+        constexpr u64 TrapLimit = 1ull << 40;
+        if (!args.size || args.address >= TrapLimit || args.size > TrapLimit - args.address) {
+            std::fprintf(stderr, "GPU process: refused a write trap at %#llx+%#llx\n",
+                         static_cast<unsigned long long>(args.address),
+                         static_cast<unsigned long long>(args.size));
+            return;
+        }
         runtime_memory_trap(args.address, args.size, args.read & ~ProtectTrap, args.write ? 1 : 0);
     } else {
         runtime_memory_gpu_protect(args.address, args.size, int(args.read), int(args.write));

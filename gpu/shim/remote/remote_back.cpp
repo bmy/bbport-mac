@@ -108,6 +108,12 @@ thread_local std::vector<ProtectArgs>* collected_protects = nullptr;
 /// (and its own table of reasons, which is the one that counts); this process keeps a copy of the
 /// reasons for its GPU code's questions, one byte per 4 KiB page below TrapLimit, set by its own
 /// trap calls and cleared where the game's mappings change, as runtime_memory.c's trap_forget.
+/// Limits: the copy can briefly differ from the game's (a trap set while a remap is on its way,
+/// a trap lifted here before the game lifts it), and WriteFault doesn't run the image, mirror
+/// and VRAM trap handlers. On macOS that is unreachable as shipped: Image, Mirror and VramData
+/// need BB_GUEST_IN_PLACE, which BbGuestMemory keeps off there; only BB_OCCLUSION_READ_TRACE=1
+/// (diagnostics) sets QueryReads. Make the game's table the only one before any of those runs
+/// with the native GPU process.
 constexpr u64 TrapLimit = 1ull << 40;
 std::atomic<u8*> trap_reasons{nullptr};
 std::mutex trap_mutex;
@@ -955,7 +961,7 @@ void MemoryGpuProtect(uintptr_t address, u64 size, int read, int write) {
 }
 
 void MemoryTrap(uintptr_t address, u64 size, unsigned reason, int on) {
-    if (!size || address >= TrapLimit || (reason & ProtectTrap)) {
+    if (!size || address >= TrapLimit || address + size < address || (reason & ProtectTrap)) {
         return;
     }
     u8* table = TrapTable();

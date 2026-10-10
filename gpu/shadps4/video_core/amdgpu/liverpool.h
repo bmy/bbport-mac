@@ -37,6 +37,11 @@ namespace Libraries::GnmDriver {
 bool SubmitLockOnDecode(); // gnmdriver.cpp
 }
 
+namespace BbCp {
+class Decoder;
+class RegisterObserver;
+} // namespace BbCp
+
 namespace AmdGpu {
 
 union PM4Header;
@@ -90,6 +95,10 @@ struct Liverpool {
     void NotePendingWrite(const struct PM4CmdWriteData& write_data, u32 num_bytes);
     /// bbport: running checksum of graphics-register packets (see ApplyGraphicsRegisterPacket).
     u64 gfx_reg_checksum{};
+    /// bbport: the translator's own PM4 decoder (gpu/cp) over `regs`, and what it tells.
+    std::unique_ptr<BbCp::Decoder> cp_decoder;
+    std::unique_ptr<BbCp::RegisterObserver> cp_observer;
+    BbCp::Decoder& CpDecoder();
     /// Top-level graphics submissions, numbered for the draw preparation workers.
     static constexpr u64 NoSeq = ~0ull;
     u64 gfx_submit_seq{};
@@ -99,6 +108,10 @@ struct Liverpool {
                                             RegDirty* dirty = nullptr);
 
 public:
+    /// bbport BB_CP_DECODER=1 (opt-in; else shadPS4's packet walk): graphics command buffers
+    /// are decoded by the translator's own decoder (gpu/cp/cp_decoder.h).
+    static bool CpDecoderEnabled();
+
     explicit Liverpool();
     ~Liverpool();
 

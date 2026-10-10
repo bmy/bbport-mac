@@ -11,6 +11,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include "video_core/renderer_vulkan/vk_instance.h"
+#include "bblayer_gpu_memory.h"
 
 #ifdef __APPLE__
 // bbport (macOS): no dma-buf; guest direct memory stays in the runtime's shared memory object,
@@ -82,6 +83,32 @@ std::uint32_t FindType(std::uint32_t bits) {
     return ~0u;
 }
 
+/// Uses of a chunk's buffer. With the layer's memory module the chunk buffers are what the GPU
+/// binds (no sparse arena): every buffer use, texel buffers and a device address too.
+vk::BufferUsageFlags ChunkBufferUsage() {
+    vk::BufferUsageFlags usage =
+        vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst |
+        vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eUniformBuffer |
+        vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eIndexBuffer |
+        vk::BufferUsageFlagBits::eIndirectBuffer;
+    if (LayerMemory()) {
+        usage |= vk::BufferUsageFlagBits::eUniformTexelBuffer |
+                 vk::BufferUsageFlagBits::eStorageTexelBuffer |
+                 vk::BufferUsageFlagBits::eShaderDeviceAddress;
+    }
+    return usage;
+}
+
+/// A new chunk becomes a source of the layer's memory module.
+void RegisterChunk(Chunk* chunk) {
+    if (!LayerMemory()) {
+        return;
+    }
+    const vk::DeviceAddress address = device.getBufferAddress({.buffer = chunk->buffer});
+    BbLayer::GpuMemory::Get().AddGuestSource(chunk->phys, chunk->size, chunk->buffer, address,
+                                             chunk);
+}
+
 /// The runtime's chunk allocator: a dma-buf fd of `size` bytes of GPU-visible memory, or -1.
 int AllocChunk(u64 phys, u64 size) {
     {
@@ -104,10 +131,7 @@ int AllocChunk(u64 phys, u64 size) {
     const vk::BufferCreateInfo buffer_ci{
         .pNext = &external,
         .size = size,
-        .usage = vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst |
-                 vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eUniformBuffer |
-                 vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eIndexBuffer |
-                 vk::BufferUsageFlagBits::eIndirectBuffer,
+        .usage = ChunkBufferUsage(),
         .sharingMode = vk::SharingMode::eExclusive,
     };
     const auto [buffer_result, buffer] = device.createBuffer(buffer_ci);
@@ -120,7 +144,11 @@ int AllocChunk(u64 phys, u64 size) {
         device.destroyBuffer(buffer);
         return fail("finding a cached system memory type", vk::Result::eErrorFeatureNotPresent);
     }
+    const vk::MemoryAllocateFlagsInfo address_flags{
+        .flags = vk::MemoryAllocateFlagBits::eDeviceAddress,
+    };
     const vk::ExportMemoryAllocateInfo export_info{
+        .pNext = LayerMemory() ? &address_flags : nullptr,
         .handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT,
     };
     const auto [memory_result, memory] = device.allocateMemory({
@@ -155,6 +183,7 @@ int AllocChunk(u64 phys, u64 size) {
         }
         static std::uint32_t next_index = 0;
         chunks[i] = new Chunk{phys, size, buffer, memory, next_index++};
+        RegisterChunk(chunks[i]);
     }
     const u64 total = chunk_bytes.fetch_add(size) + size;
     std::printf("Guest memory: direct memory %#llx+%llu MiB in GPU-visible memory (dma-buf), "
@@ -201,7 +230,7 @@ bool ImportHost(void* pointer, u64 size, vk::Buffer& buffer, vk::DeviceMemory& m
     const auto [buffer_result, created] = device.createBuffer({
         .pNext = &external,
         .size = size,
-        .usage = ChunkUsage,
+        .usage = ChunkBufferUsage(),
         .sharingMode = vk::SharingMode::eExclusive,
     });
     if (buffer_result != vk::Result::eSuccess) {
@@ -220,7 +249,11 @@ bool ImportHost(void* pointer, u64 size, vk::Buffer& buffer, vk::DeviceMemory& m
                                                      : vk::Result::eErrorFeatureNotPresent;
         return false;
     }
+    const vk::MemoryAllocateFlagsInfo address_flags{
+        .flags = vk::MemoryAllocateFlagBits::eDeviceAddress,
+    };
     const vk::ImportMemoryHostPointerInfoEXT import_info{
+        .pNext = LayerMemory() ? &address_flags : nullptr,
         .handleType = vk::ExternalMemoryHandleTypeFlagBits::eHostAllocationEXT,
         .pHostPointer = pointer,
     };
@@ -280,6 +313,7 @@ int AllocImported(u64 phys, u64 size) {
         }
         static std::uint32_t next_index = 0;
         chunks[i] = new Chunk{phys, size, buffer, memory, next_index++};
+        RegisterChunk(chunks[i]);
     }
     const u64 total = chunk_bytes.fetch_add(size) + size;
     std::printf("Guest memory: direct memory %#llx+%llu MiB imported by the GPU (host memory), "
@@ -366,6 +400,21 @@ bool HostImportWorks(const Vulkan::Instance& instance, const char*& why) {
         static std::string text;
         text = "the import of a memfd mapping failed (" + vk::to_string(error) + ")";
         why = text.c_str();
+    } else if (LayerMemory()) {
+        // The layer's memory module binds the imported buffers themselves (no sparse arena): the
+        // same GPU and CPU writes through the imported buffer.
+        guest[1024] = 0x5ca1ab1e;
+        const bool ran = RunOnce(instance, [&](vk::CommandBuffer cmd) {
+            cmd.fillBuffer(buffer, 0, 4096, 0x600dcafe);
+            cmd.copyBuffer(buffer, buffer, vk::BufferCopy{4096, 8192, 4});
+        });
+        why = "GPU work on imported memory";
+        if (ran) {
+            const bool gpu_to_cpu = guest[0] == 0x600dcafe && guest[1023] == 0x600dcafe;
+            const bool cpu_to_gpu = guest[2048] == 0x5ca1ab1e;
+            why = !gpu_to_cpu ? "GPU writes not seen by the CPU" : "CPU writes not seen by the GPU";
+            ok = gpu_to_cpu && cpu_to_gpu;
+        }
     } else {
         const vk::ExternalMemoryBufferCreateInfo external{
             .handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eHostAllocationEXT,
@@ -462,22 +511,64 @@ double MappedReadSpeed(const volatile std::uint64_t* p, u64 size) {
 }
 } // namespace
 
+namespace {
+/// The GPU's choice of LayerMemory without BB_LAYER_MEMORY: -1 not known yet, 0 or 1.
+std::atomic<int> layer_default{-1};
+} // namespace
+
 bool PcModelGpu(const Vulkan::Instance& instance) {
     static const bool ok = [&] {
-        // AMD (dma-buf chunks) and NVIDIA (host memory import, else whole dma-buf chunks); the
-        // startup checks in Usable() decide whether the driver can do it.
+        // The layer's memory module on every GPU; the startup checks in Usable() decide whether
+        // the driver can do it. The sparse arena (BB_LAYER_MEMORY=0) is for AMD; not on NVIDIA
+        // (only with BB_PC_MODEL_ANY_GPU=1):
+        // its host memory import passes those checks, but each rebinding of the game's memory (vkQueueBindSparse, blocks moved to and from VRAM) held the GPU for 10 s
+        // and more, the desktop frozen with it (GTX 1660 Ti, driver 615.71). The Linux driver's
+        // sparse binding has slowed down since 555: the time grows with the pages already bound
+        // (NVIDIA developer forum, "Sparse texture binding is painfully slow"), and the arena has
+        // gigabytes of 64 KiB pages bound. Without rebinding (BB_FIXED_ARENA=1, all in place) the
+        // GPU reads the game's data over the bus: 48 FPS against 210 on an RX 7800 XT.
         constexpr std::uint32_t AmdVendor = 0x1002, NvidiaVendor = 0x10de;
         const std::uint32_t vendor = instance.GetVendorID();
         const char* any = std::getenv("BB_PC_MODEL_ANY_GPU");
-        if (vendor == AmdVendor || vendor == NvidiaVendor || (any && any[0] == '1')) {
+        // AMD keeps the sparse arena, every other GPU gets the layer's memory module (no sparse
+        // binding of the game's memory, see LayerMemory); BB_LAYER_MEMORY=1/0 by hand. On an
+        // RX 7800 XT the module was on par with the arena on a route in Yharnam, but in the
+        // Hunter's Dream it kept ~1 GB of the area's data out of VRAM (ranges with a few
+        // unannounced blocks stay in place without volatile blocks): 100 FPS against ~200.
+        layer_default.store(vendor == AmdVendor ? 0 : 1, std::memory_order_relaxed);
+        if (LayerMemory()) {
+            std::printf("Guest memory: the new memory model through the layer's memory module on "
+                        "this GPU (vendor 0x%04x): no sparse binding of the game's memory\n",
+                        vendor);
+        }
+        if (vendor == AmdVendor || LayerMemory() || (any && any[0] == '1')) {
             return true;
         }
-        std::printf("Guest memory: the new memory model is for AMD and NVIDIA GPUs; this GPU "
-                    "(vendor 0x%04x) uses the model of 0.3 (BB_PC_MODEL_ANY_GPU=1: try it)\n",
+        std::printf("Guest memory: the new memory model is for AMD GPUs%s; this GPU (vendor "
+                    "0x%04x) uses the model of 0.3 (BB_PC_MODEL_ANY_GPU=1: try it)\n",
+                    vendor == NvidiaVendor ? " (NVIDIA: rebinding memory holds the GPU for seconds)"
+                                           : "",
                     vendor);
         return false;
     }();
     return ok;
+}
+
+bool HostImported() {
+    return mode == Mode::HostImport;
+}
+
+bool LayerMemory() {
+    // BB_LAYER_MEMORY=1/0 chooses; else PcModelGpu (which asks first) sets the module for every GPU
+    // (BB_LAYER_MEMORY=0: the sparse arena; NVIDIA's sparse binding stalls for seconds).
+    static const bool on = [] {
+        const char* env = std::getenv("BB_LAYER_MEMORY");
+        if (env && *env) {
+            return env[0] == '1';
+        }
+        return layer_default.load(std::memory_order_relaxed) == 1;
+    }();
+    return on;
 }
 
 namespace {
@@ -638,7 +729,9 @@ void Install(const Vulkan::Instance& instance) {
         return;
     }
     const bool host = mode == Mode::HostImport;
-    runtime_memory_set_guest_chunk_whole(!host && whole_only ? 1 : 0);
+    // One chunk per direct allocation where the dma-buf maps at offset 0 only, and with the
+    // layer's memory module (a mapping then lies whole in one chunk buffer).
+    runtime_memory_set_guest_chunk_whole(LayerMemory() || (!host && whole_only) ? 1 : 0);
     runtime_memory_set_guest_chunk_allocator(host ? &AllocImported : &AllocChunk);
     std::printf("Guest memory: direct memory chunks come from Vulkan (BB_GUEST_GPU_MEMORY=1)\n");
 }

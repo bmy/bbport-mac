@@ -417,6 +417,9 @@ static void drop_range(uintptr_t start, uintptr_t end) {
     }
     vma_erase(i,n);
 }
+/* bbport: write traps (runtime_memory_trap, below), kept across the game's own changes. */
+static void trap_reapply(uintptr_t start, uintptr_t end);
+static void trap_forget(uintptr_t start, uintptr_t end);
 /* Places a host mapping; with MAP_FIXED it replaces what the guest had there. */
 static int32_t place(void **inout, uint64_t size, int prot, int flags, uint64_t alignment,
                      int kind, int type, uint64_t phys) {
@@ -441,6 +444,7 @@ static int32_t place(void **inout, uint64_t size, int prot, int flags, uint64_t 
         : mmap((void *)address,size,PROT_NONE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE|MAP_FIXED,-1,0);
     if (mapped==MAP_FAILED) return NO_MEMORY;
     drop_range(address,address+size);
+    trap_forget(address,address+size); /* a new mapping starts without traps */
     if (vma_insert(vma_index(address),(Vma){address,address+size,kind,prot,type,phys,private_exec})) return NO_MEMORY;
     if (kind==KIND_FLEXIBLE) flexible_bytes+=size;
     if (kind!=KIND_RESERVED) queue_hook(HOOK_MAP,address,size);
@@ -531,6 +535,7 @@ static int32_t unmap_locked(uintptr_t start, uint64_t size) {
         if (munmap((void *)a,b-a)) return INVALID;
     }
     drop_range(start,end);
+    trap_forget(start,end);
     queue_mirror(MIRROR_UNMAP,start,end-start,0,0,0,0,0);
     return 0;
 }
@@ -637,6 +642,7 @@ static int32_t protect_locked(uintptr_t start, uint64_t size, int prot, int type
     start&=~(uintptr_t)(PAGE-1);
     if ((prot & ~0x37) || !covered(start,end,0)) return INVALID;
     if (mprotect((void *)start,end-start,host_prot(prot))) return INVALID;
+    trap_reapply(start,end); /* pages with write traps stay read-only */
     int error; size_t i=carve(start,end,&error);
     if (error) return NO_MEMORY;
     for (; i<vma_count && vmas[i].start<end; ++i) { vmas[i].prot=prot; if (type>=0) vmas[i].type=type; }
@@ -933,6 +939,94 @@ void runtime_memory_note_cpu_write(uintptr_t address, uint64_t size) {
             return;
         }
     }
+}
+/* bbport: write traps the GPU side keeps on guest pages, by reason (bits: a VRAM copy of the page,
+ * an image made from it, ...). A page with any reason is read-only for the game even where its
+ * own protection allows writes; the fault goes to the GPU library's handlers, and each clears
+ * only its own reason. One owner for these protections: the layer's VRAM copies and the texture
+ * cache trap the same pages, and one's unprotect must not drop the other's trap. Reasons from 16 up
+ * trap reads too (no access: the page's data is newer elsewhere, a VRAM copy). Lock order: the
+ * runtime's lock, then trap_mutex (as kernel_mprotect, which keeps the traps). */
+#define TRAP_LIMIT (1ull<<40)
+#define TRAP_NO_ACCESS 0xf0u
+static uint8_t *trap_reasons; /* one byte per 4 KiB page below TRAP_LIMIT (reserved, not committed) */
+static pthread_mutex_t trap_mutex=PTHREAD_MUTEX_INITIALIZER;
+/* A page's trap level: 0 none, 1 read-only, 2 no access. */
+static int trap_level(uint8_t reasons) { return !reasons ? 0 : (reasons & TRAP_NO_ACCESS) ? 2 : 1; }
+/* The pages [a, b) to the game's protection, without write at level 1, without access at 2
+ * (runtime lock held). */
+static void trap_apply(uintptr_t a, uintptr_t b, int level) {
+    for (size_t i=vma_index(a); i<vma_count && vmas[i].start<b; ++i) {
+        if (vmas[i].kind==KIND_RESERVED) continue;
+        const uintptr_t s=vmas[i].start>a ? vmas[i].start : a, e=vmas[i].end<b ? vmas[i].end : b;
+        const int prot=host_prot(vmas[i].prot);
+        mprotect((void *)s,e-s,level==2 ? PROT_NONE : level ? (prot & ~PROT_WRITE) : prot);
+    }
+}
+/* No traps in [start, end) any more: a mapping replaced or gone (runtime lock held). */
+static void trap_forget(uintptr_t start, uintptr_t end) {
+    if (!trap_reasons || start>=TRAP_LIMIT) return;
+    if (end>TRAP_LIMIT) end=TRAP_LIMIT;
+    pthread_mutex_lock(&trap_mutex);
+    memset(trap_reasons+(start>>12),0,((end+4095)>>12)-(start>>12));
+    pthread_mutex_unlock(&trap_mutex);
+}
+/* Pages with traps in [start, end) read-only (or no access) again after the game changed their
+ * protection (runtime lock held). */
+static void trap_reapply(uintptr_t start, uintptr_t end) {
+    if (!trap_reasons || start>=TRAP_LIMIT) return;
+    if (end>TRAP_LIMIT) end=TRAP_LIMIT;
+    pthread_mutex_lock(&trap_mutex);
+    uintptr_t run=0; int run_level=0;
+    for (uintptr_t p=start>>12; p<(end+4095)>>12; ++p) {
+        const int level=trap_level(trap_reasons[p]);
+        if (run && level!=run_level) { trap_apply(run,p<<12,run_level); run=0; }
+        if (level && !run) { run=p<<12; run_level=level; }
+    }
+    if (run) trap_apply(run,end,run_level);
+    pthread_mutex_unlock(&trap_mutex);
+}
+void runtime_memory_trap(uintptr_t address, uint64_t size, unsigned reason, int on) {
+    if (!size || address>=TRAP_LIMIT) return;
+    if (!trap_reasons) {
+        void *bytes=mmap(NULL,TRAP_LIMIT>>12,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE,-1,0);
+        if (bytes==MAP_FAILED) { perror("bbport: write trap table"); return; }
+        uint8_t *expected=NULL;
+        if (!__atomic_compare_exchange_n(&trap_reasons,&expected,(uint8_t *)bytes,0,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE))
+            munmap(bytes,TRAP_LIMIT>>12);
+    }
+    uintptr_t end=address+size>TRAP_LIMIT ? TRAP_LIMIT : address+size;
+    read_lock();
+    pthread_mutex_lock(&trap_mutex);
+    /* Runs of pages whose trap level changes, one mprotect each. */
+    uintptr_t run=0; int run_level=0;
+    const uintptr_t first=address>>12, last=(end-1)>>12;
+    for (uintptr_t p=first; p<=last; ++p) {
+        const uint8_t old=trap_reasons[p], now=on ? (uint8_t)(old|reason) : (uint8_t)(old & ~reason);
+        if (old!=now) trap_reasons[p]=now;
+        const int level=trap_level(now), change=trap_level(old)!=level;
+        if (run && (!change || level!=run_level)) { trap_apply(run,p<<12,run_level); run=0; }
+        if (change && !run) { run=p<<12; run_level=level; }
+    }
+    if (run) trap_apply(run,(last+1)<<12,run_level);
+    pthread_mutex_unlock(&trap_mutex);
+    read_unlock();
+}
+/* bbport: a libc write about to land on pages with write traps: the GPU side is told first and
+ * lifts its traps, instead of the write faulting (a fault handler waits for the draws the GPU
+ * thread has queued; libc copies into small textures every frame made the game's frames late).
+ * Its announcement after the write (runtime_memory_note_cpu_write) stays as it was. */
+void runtime_memory_prepare_cpu_write(uintptr_t address, uint64_t size) {
+    const uint8_t *table=__atomic_load_n(&trap_reasons,__ATOMIC_ACQUIRE);
+    if (!table || !size || address>=TRAP_LIMIT || !hook_cpu_write) return;
+    uint64_t last=(address+size-1)>>12;
+    if (last>=(TRAP_LIMIT>>12)) last=(TRAP_LIMIT>>12)-1;
+    for (uint64_t p=address>>12; p<=last; ++p)
+        if (__atomic_load_n(&table[p],__ATOMIC_RELAXED)) { hook_cpu_write(address,size); return; }
+}
+unsigned runtime_memory_trap_reasons(uintptr_t address) {
+    const uint8_t *table=__atomic_load_n(&trap_reasons,__ATOMIC_ACQUIRE);
+    return table && address<TRAP_LIMIT ? __atomic_load_n(&table[address>>12],__ATOMIC_ACQUIRE) : 0;
 }
 /* bbport: where direct memory at a guest address lives (BB_GUEST_IN_PLACE: the GPU uses the game's
  * memory where it is): its offset in direct memory and the end of the mapping, which is contiguous

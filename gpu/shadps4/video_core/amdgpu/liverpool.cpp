@@ -38,6 +38,7 @@
 #include "bbport_free_check.h"
 #include "video_core/amdgpu/pm4_cmds.h"
 #include "video_core/amdgpu/pm4_selftest.h"
+#include "cp_decoder.h"
 #include "video_core/renderdoc.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 
@@ -447,6 +448,13 @@ void RunEventWriteEop(Vulkan::Rasterizer& rasterizer, const u8* data) {
     rasterizer.ProcessDownloadImages();
     // BB_HONEST_LABELS: written once the GPU has finished the work before it, as the hardware
     // does (an end-of-pipe event), instead of when that work is recorded.
+    // bbport: a timestamp without an interrupt: the GPU's own clock at the end of the pipe.
+    if (Vulkan::Rasterizer::HonestLabels() && eop.data_sel.Value() == DataSelect::GpuClock64 &&
+        eop.int_sel.Value() == InterruptSelect::None &&
+        rasterizer.WriteTimestampOnGpu(reinterpret_cast<VAddr>(eop.Address<u8>()), true)) {
+        BbStats::eop_written.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
     if (Vulkan::Rasterizer::HonestLabels()) {
         const bool writes = eop.data_sel.Value() != DataSelect::None;
         const u64 value = eop.data_sel.Value() == DataSelect::Data32Low ? eop.DataDWord()
@@ -485,6 +493,23 @@ void RunEventWriteEop(Vulkan::Rasterizer& rasterizer, const u8* data) {
         rasterizer.WaitDeferredSignals();
         SignalEop(eop, seq);
     }
+}
+
+// bbport: a MEM_SEMAPHORE signal once the GPU has finished the work before it, in stream order
+// (BB_HONEST_LABELS), as the command processor gives it when it gets there: signalled when decoded
+// (a frame ahead of the GPU), a queue waiting on it would read what that work had not written
+// yet. BB_MEM_SEMAPHORE_ORDER=0: when decoded (as before).
+bool MemSemaphoreInOrder() {
+    static const bool on = [] {
+        const char* env = std::getenv("BB_MEM_SEMAPHORE_ORDER");
+        return !(env && env[0] == '0');
+    }();
+    return on && Vulkan::Rasterizer::HonestLabels();
+}
+
+void RunMemSemaphoreSignal(Vulkan::Rasterizer& rasterizer, const u8* data) {
+    const auto semaphore = *reinterpret_cast<const PM4CmdMemSemaphore*>(data);
+    rasterizer.SignalAfterGpu([semaphore] { semaphore.Signal(); });
 }
 
 void RunDmaData(Vulkan::Rasterizer& rasterizer, const u8* data) {
@@ -577,6 +602,20 @@ void RunCopyData(Vulkan::Rasterizer& rasterizer, const u8* data) {
 void SignalFlip(Vulkan::Rasterizer& rasterizer, const u8*) {
     rasterizer.WaitDeferredSignals();
     Platform::IrqC::Instance()->Signal(Platform::InterruptId::GfxFlip);
+}
+
+// bbport: COPY_DATA of the GPU clock (64-bit, to memory) in stream order: the GPU's own clock when
+// it gets there (vk_timestamps.h); else the CPU's, when this runs.
+void RunGpuClockCopy(Vulkan::Rasterizer& rasterizer, const u8* data) {
+    VAddr target;
+    std::memcpy(&target, data, sizeof(target));
+    if (rasterizer.WriteTimestampOnGpu(target, false)) {
+        return;
+    }
+    const u64 value = GetGpuClock64();
+    if (!rasterizer.WriteDataOnGpu(target, &value, sizeof(value))) {
+        std::memcpy(reinterpret_cast<void*>(target), &value, sizeof(value));
+    }
 }
 
 void RunWriteData(Vulkan::Rasterizer& rasterizer, const u8* data) {
@@ -814,6 +853,54 @@ u64 Liverpool::HashRegisterPacket(u64 checksum, const u32* words, u32 count) {
     return checksum;
 }
 
+bool Liverpool::CpDecoderEnabled() {
+    static const bool enabled = [] {
+        // Opt-in for now: the GPU thread spends ~7 % more per draw than the old walk (3.86 vs
+        // 4.13 us on a 5700X3D), the cause not found yet.
+        const char* env = std::getenv("BB_CP_DECODER");
+        const bool on = env && env[0] == '1';
+        if (on) {
+            std::printf("GPU: command buffers decoded by the translator's own decoder (gpu/cp)\n");
+        }
+        return on;
+    }();
+    return enabled;
+}
+
+BbCp::Decoder& Liverpool::CpDecoder() {
+    if (cp_decoder) {
+        return *cp_decoder;
+    }
+    // Exactly what ApplyGraphicsRegisterPacket records: the blocks written, the packets' checksum.
+    struct Observer final : BbCp::RegisterObserver {
+        Liverpool* self;
+        void OnRegisterPacket(std::span<const u32> words, std::span<const BbCp::RegisterWrite> writes,
+                              bool clear_state) override {
+            if (clear_state) {
+                self->pipe_dirty.Clear();
+                self->pipe_dirty.reset = true;
+            }
+            for (const auto& write : writes) {
+                self->pipe_dirty.Mark(write.index, write.count);
+            }
+            self->gfx_reg_checksum =
+                HashRegisterPacket(self->gfx_reg_checksum, words.data(), u32(words.size()));
+        }
+    };
+    auto observer = std::make_unique<Observer>();
+    observer->self = this;
+    cp_decoder = std::make_unique<BbCp::Decoder>(
+        std::span<u32, BbCp::Bank::End>{regs.reg_array.data(), BbCp::Bank::End},
+        BbCp::DecoderOptions{.compute_sh_to_owner = true,
+                             .compute_words = sizeof(ComputeProgram) / 4});
+    static Regs defaults;
+    defaults.SetDefaults();
+    cp_decoder->Registers().SetDefaults(defaults.reg_array);
+    cp_decoder->SetObserver(observer.get());
+    cp_observer = std::move(observer);
+    return *cp_decoder;
+}
+
 void Liverpool::ApplyGraphicsRegisterPacket(Regs& regs, const PM4Header* header, u64& checksum,
                                              RegDirty* dirty) {
     const u32 count = header->type3.NumWords();
@@ -969,6 +1056,112 @@ bool IsDrawOpcode(PM4ItOpcode op) {
         return false;
     }
 }
+
+// bbport BB_CP_SHADOW=1: the translator's own decoder (gpu/cp, step 2 of
+// docs/TRANSLATOR_ARCHITECTURE.ru.md) decodes every top-level graphics buffer as well, from the
+// same state. Once this decoder is done with the buffer both register files must be equal (the
+// compute program's SH range aside: this one keeps it per queue); the first differences are
+// printed and the shadow takes this state again. Off with the PM4 self-test (its packets are not
+// in the game's buffers).
+namespace {
+static_assert(offsetof(Regs, index_base_address) / 4 == BbCp::Reg::VgtDmaBaseHi);
+static_assert(offsetof(Regs, draw_initiator) / 4 == BbCp::Reg::VgtDrawInitiator);
+static_assert(offsetof(Regs, max_index_size) / 4 == BbCp::Reg::VgtDmaMaxSize);
+static_assert(offsetof(Regs, index_buffer_type) / 4 == BbCp::Reg::VgtDmaIndexType);
+static_assert(offsetof(Regs, cp_strmout_cntl) / 4 == BbCp::Reg::CpStrmoutCntl);
+static_assert(offsetof(Regs, num_indices) / 4 == BbCp::Reg::VgtNumIndices);
+static_assert(offsetof(Regs, num_instances) / 4 == BbCp::Reg::VgtNumInstances);
+static_assert(Regs::NumRegs == BbCp::Bank::End && Regs::ShRegWordOffset == BbCp::Bank::Sh);
+static_assert(Regs::ContextRegWordOffset == BbCp::Bank::Context);
+static_assert(Regs::ConfigRegWordOffset == BbCp::Bank::Config);
+static_assert(Regs::UconfigRegWordOffset == BbCp::Bank::Uconfig);
+
+struct CpShadowSink final : BbCp::Sink {
+    std::span<const u32> ResolveIndirectBuffer(u64 address, u32 dwords) override {
+        return {reinterpret_cast<const u32*>(address), dwords};
+    }
+    u32 ConditionalSkip(u64 address, u32 exec_count, const BbCp::Packet&) override {
+        ++conditionals;
+        return *reinterpret_cast<const u32*>(address) == 0 ? exec_count : 0;
+    }
+    void OnBadPacket(std::span<const u32>, const char* what, int depth) override {
+        std::printf("CP shadow: %s (depth %d)\n", what, depth);
+    }
+    u64 conditionals = 0;
+};
+
+struct CpShadow {
+    BbCp::Decoder decoder;
+    bool started = false;
+    u64 buffers = 0, equal = 0, conditionals = 0;
+    std::chrono::steady_clock::time_point report = std::chrono::steady_clock::now();
+};
+
+CpShadow& Shadow() {
+    static CpShadow shadow;
+    return shadow;
+}
+
+bool CpShadowEnabled() {
+    static const bool enabled = [] {
+        const char* env = std::getenv("BB_CP_SHADOW");
+        return env && env[0] == '1' && !Pm4SelfTest::Enabled() && !Liverpool::CpDecoderEnabled();
+    }();
+    return enabled;
+}
+
+void CpShadowDecode(std::span<const u32> dcb, const Regs& regs) {
+    auto& shadow = Shadow();
+    if (!shadow.started) {
+        static Regs defaults;
+        defaults.SetDefaults();
+        shadow.decoder.Registers().SetDefaults(defaults.reg_array);
+        shadow.decoder.Registers().Write(0, regs.reg_array);
+        shadow.started = true;
+    }
+    CpShadowSink sink;
+    shadow.decoder.Decode(dcb, sink);
+    shadow.conditionals += sink.conditionals;
+}
+
+void CpShadowCompare(const Regs& regs) {
+    auto& shadow = Shadow();
+    ++shadow.buffers;
+    const auto words = shadow.decoder.Registers().Words();
+    constexpr u32 ComputeFirst = BbCp::ComputeShFirst;
+    constexpr u32 ComputeEnd = ComputeFirst + sizeof(ComputeProgram) / 4 + 1;
+    u32 differences = 0;
+    for (u32 i = 0; i < Regs::NumRegs; ++i) {
+        if (words[i] == regs.reg_array[i] || (i >= ComputeFirst && i < ComputeEnd)) {
+            continue;
+        }
+        if (++differences <= 8) {
+            std::printf("CP shadow: register %#x: own decoder %#x, this one %#x (buffer %llu)\n",
+                        i, words[i], regs.reg_array[i], (unsigned long long)shadow.buffers);
+        }
+    }
+    if (differences == 0) {
+        ++shadow.equal;
+    } else {
+        std::printf("CP shadow: %u registers differ; taking this decoder's state\n", differences);
+        shadow.decoder.Registers().Write(0, regs.reg_array);
+    }
+    if (const auto now = std::chrono::steady_clock::now();
+        now - shadow.report >= std::chrono::seconds(5)) {
+        const auto& stats = shadow.decoder.Stats();
+        std::printf("CP shadow: %llu of %llu buffers with equal registers; %llu packets, %llu "
+                    "draws, %llu dispatches, %llu indirect buffers, %llu bad, %llu conditional\n",
+                    (unsigned long long)shadow.equal, (unsigned long long)shadow.buffers,
+                    (unsigned long long)stats.packets, (unsigned long long)stats.draws,
+                    (unsigned long long)stats.dispatches,
+                    (unsigned long long)stats.indirect_buffers, (unsigned long long)stats.bad,
+                    (unsigned long long)shadow.conditionals);
+        shadow.decoder.ResetStats();
+        shadow.buffers = shadow.equal = shadow.conditionals = 0;
+        shadow.report = now;
+    }
+}
+} // namespace
 
 void ScanDcb(std::span<const u32> dcb, int depth) {
     auto& st = g_dcb_stats;
@@ -1227,10 +1420,43 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
         }
     }
 
+    if (seq != NoSeq && CpShadowEnabled()) {
+        CpShadowDecode(dcb, regs);
+    }
     const auto base_addr = reinterpret_cast<uintptr_t>(dcb.data());
     const std::size_t dcb_dwords = dcb.size();
-    while (!dcb.empty()) {
+    // bbport BB_CP_DECODER=1: packets and their register writes come from the
+    // translator's own decoder (gpu/cp); what each packet does stays below.
+    const u32* const dcb_end = dcb.data() + dcb.size();
+    struct CpSink final : BbCp::Sink {
+        uintptr_t base;
+        std::size_t dwords;
+        u64 seq;
+        int depth;
+        void OnBadPacket(std::span<const u32> rest, const char* what, int) override {
+            ReportBadPacket(base, dwords, rest.data(), seq, depth);
+            UNREACHABLE_MSG("PM4: {}", what);
+        }
+    } cp_sink;
+    cp_sink.base = base_addr;
+    cp_sink.dwords = dcb_dwords;
+    cp_sink.seq = seq;
+    cp_sink.depth = dcb_depth;
+    std::optional<BbCp::Cursor> cp_cursor;
+    if (CpDecoderEnabled()) {
+        cp_cursor.emplace(CpDecoder(), dcb, cp_sink, dcb_depth, false);
+    }
+    while (true) {
         ProcessCommands();
+        if (cp_cursor) {
+            const auto packet = cp_cursor->Next();
+            if (!packet) {
+                break;
+            }
+            dcb = {packet->body.data() - 1, dcb_end}; // its packet first
+        } else if (dcb.empty()) {
+            break;
+        }
 
         const auto* header = reinterpret_cast<const PM4Header*>(dcb.data());
         const u32 type = header->type;
@@ -1252,7 +1478,9 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
         case 3:
             const u32 count = header->type3.NumWords();
             const PM4ItOpcode opcode = header->type3.opcode;
-            ApplyGraphicsRegisterPacket(regs, header, gfx_reg_checksum, &pipe_dirty);
+            if (!cp_cursor) {
+                ApplyGraphicsRegisterPacket(regs, header, gfx_reg_checksum, &pipe_dirty);
+            }
             // DmaData to 0x3022C does nothing here (skipped below): no need to wait.
             if (rasterizer && !PipelinedOpcode(opcode) &&
                 !(opcode == PM4ItOpcode::DmaData &&
@@ -1803,6 +2031,15 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 default:
                     break;
                 }
+                if (src == CopyDataSrc::GpuClock && rasterizer && to_memory && num_bytes == 8 &&
+                    Vulkan::Rasterizer::HonestLabels()) {
+                    const VAddr target = copy_data->DstAddress<VAddr>();
+                    if (rasterizer->RunInOrder(&RunGpuClockCopy, &target, sizeof(target),
+                                               BbToggle::PipelinedMemoryWrites, false)) {
+                        rasterizer->NotePendingGpuWrite(target, num_bytes);
+                    }
+                    break;
+                }
                 const bool handled_source =
                     value || from_memory || src == CopyDataSrc::Gds;
                 if (!rasterizer || !handled_source ||
@@ -1857,9 +2094,24 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
             case PM4ItOpcode::MemSemaphore: {
                 const auto* mem_semaphore = reinterpret_cast<const PM4CmdMemSemaphore*>(header);
                 if (mem_semaphore->IsSignaling()) {
-                    mem_semaphore->Signal();
+                    if (rasterizer && MemSemaphoreInOrder()) {
+                        rasterizer->RunInOrder(&RunMemSemaphoreSignal, mem_semaphore,
+                                               sizeof(*mem_semaphore), BbToggle::PipelinedTasks,
+                                               false);
+                    } else {
+                        mem_semaphore->Signal();
+                    }
                 } else {
                     while (!mem_semaphore->Signaled()) {
+                        // A signal in stream order may wait for work still in the draw pipe or
+                        // not submitted yet; this thread would spin on it forever.
+                        if (rasterizer && !rasterizer->DrawPipeIdle()) {
+                            rasterizer->DrainDrawPipe(static_cast<u32>(opcode));
+                            continue;
+                        }
+                        if (rasterizer && rasterizer->HasUnsubmittedSignals()) {
+                            rasterizer->Flush();
+                        }
                         YIELD_GFX();
                     }
                     mem_semaphore->Decrement();
@@ -1996,6 +2248,9 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                     skip = value == 0;
                 }
                 if (skip) {
+                    if (cp_cursor) {
+                        cp_cursor->Skip(cond_exec->exec_count.Value());
+                    }
                     dcb = NextPacket(dcb,
                                      header->type3.NumWords() + 1 + cond_exec->exec_count.Value());
                     continue;
@@ -2029,6 +2284,9 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
         ce_task.handle.destroy();
     }
 
+    if (seq != NoSeq && CpShadowEnabled()) {
+        CpShadowCompare(regs);
+    }
     if (rasterizer && seq != NoSeq) {
         rasterizer->RetireSubmission(); // prepared draws live until the recording thread is past
     }
@@ -2300,9 +2558,18 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
         case PM4ItOpcode::MemSemaphore: {
             const auto* mem_semaphore = reinterpret_cast<const PM4CmdMemSemaphore*>(header);
             if (mem_semaphore->IsSignaling()) {
-                mem_semaphore->Signal();
+                // In stream order: after the dispatches recorded before it (MemSemaphoreInOrder).
+                if (rasterizer && MemSemaphoreInOrder()) {
+                    const PM4CmdMemSemaphore semaphore = *mem_semaphore;
+                    rasterizer->SignalAfterGpu([semaphore] { semaphore.Signal(); });
+                } else {
+                    mem_semaphore->Signal();
+                }
             } else {
                 while (!mem_semaphore->Signaled()) {
+                    if (rasterizer && rasterizer->HasUnsubmittedSignals()) {
+                        rasterizer->Flush();
+                    }
                     YIELD_ASC(vqid);
                 }
                 mem_semaphore->Decrement();
@@ -2329,6 +2596,11 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
                 rasterizer && Vulkan::Rasterizer::HonestLabels() &&
                 rm->data_sel.Value() != DataSelect::GdsMemStore) {
                 rasterizer->ProcessDownloadImages();
+                if (rm->data_sel.Value() == DataSelect::GpuClock64 &&
+                    rm->int_sel.Value() == InterruptSelect::None &&
+                    rasterizer->WriteTimestampOnGpu(rm->Address<VAddr>(), true)) {
+                    break;
+                }
                 // bbport: a label without an interrupt is written by the GPU (end of pipe).
                 if ((rm->data_sel.Value() == DataSelect::Data32Low ||
                      rm->data_sel.Value() == DataSelect::Data64) &&

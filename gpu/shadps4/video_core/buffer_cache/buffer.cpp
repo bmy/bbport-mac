@@ -165,13 +165,22 @@ Buffer::Buffer(const Vulkan::Instance& instance, u64 size_bytes_, vk::DeviceMemo
     const vk::ExternalMemoryBufferCreateInfo external{
         .handleTypes = BbGuestMemory::HandleType(),
     };
+    // bbport BB_LAYER_MEMORY: what the GPU binds for the game's memory in place (no arena):
+    // vertex, index and indirect data and device addresses too (the memory has them).
+    const bool layer = BbGuestMemory::LayerMemory();
+    vk::BufferUsageFlags usage =
+        vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst |
+        vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eUniformBuffer |
+        vk::BufferUsageFlagBits::eUniformTexelBuffer | vk::BufferUsageFlagBits::eStorageTexelBuffer;
+    if (layer) {
+        usage |= vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eIndexBuffer |
+                 vk::BufferUsageFlagBits::eIndirectBuffer |
+                 vk::BufferUsageFlagBits::eShaderDeviceAddress;
+    }
     const vk::BufferCreateInfo buffer_ci = {
         .pNext = &external,
         .size = size_bytes,
-        .usage = vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst |
-                 vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eUniformBuffer |
-                 vk::BufferUsageFlagBits::eUniformTexelBuffer |
-                 vk::BufferUsageFlagBits::eStorageTexelBuffer,
+        .usage = usage,
         .sharingMode = vk::SharingMode::eExclusive,
     };
     const auto device = instance.GetDevice();
@@ -179,6 +188,9 @@ Buffer::Buffer(const Vulkan::Instance& instance, u64 size_bytes_, vk::DeviceMemo
     const auto result = device.bindBufferMemory(buffer.buffer, memory, 0);
     ASSERT_MSG(result == vk::Result::eSuccess, "Binding a guest memory chunk failed: {}",
                vk::to_string(result));
+    if (layer) {
+        buffer.bda_addr = device.getBufferAddress({.buffer = buffer.buffer});
+    }
     Vulkan::SetObjectName(device, Handle(), debug_name);
     is_coherent = true;
 }

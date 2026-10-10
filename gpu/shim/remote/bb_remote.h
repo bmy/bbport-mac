@@ -80,6 +80,11 @@ int ShareRange(void* address, u64 size, int prot);
 int OverlayCapturesInput();
 /// bb-gpu's window keyboard (bbgpu_keyboard_state).
 const bool* KeyboardState();
+/// bb-gpu's window mouse (bbgpu_mouse_*).
+void MouseTake(double* dx, double* dy, int* wheel_up, int* wheel_down);
+int MouseCaptured();
+u32 MouseButtons();
+void MouseLookEnable(int enabled);
 int TextInputBegin(const char* initial, const char* prompt);
 int TextInputPoll(char* out, u64 size);
 } // namespace Front

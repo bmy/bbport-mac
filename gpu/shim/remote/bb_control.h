@@ -29,6 +29,13 @@ struct SharedState {
     std::atomic<std::uint32_t> gpu_ready{0};
     /// The game window's keyboard (SDL scancodes, 1 while held), written by bb-gpu's window loop.
     alignas(64) std::uint8_t keyboard[512];
+    /// Mouse look (bbport 0.51): written by bb-gpu's window loop, taken by the game process's pad
+    /// (bbgpu_mouse_*). Motion in 1/1024 pixels and wheel notches pile up until taken.
+    alignas(64) std::atomic<std::int64_t> mouse_dx{0}, mouse_dy{0};
+    std::atomic<std::uint32_t> wheel_up{0}, wheel_down{0};
+    std::atomic<std::uint32_t> mouse_captured{0}, mouse_buttons{0};
+    /// The game's mouse_look setting for bb-gpu's window: 0 not said yet, 1 off, 2 on.
+    std::atomic<std::uint32_t> mouse_look{0};
 };
 
 struct ControlBlock {

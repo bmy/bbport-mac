@@ -847,6 +847,34 @@ const bool* KeyboardState() {
     return g.control ? reinterpret_cast<const bool*>(g.control->state.keyboard) : nullptr;
 }
 
+void MouseTake(double* dx, double* dy, int* wheel_up, int* wheel_down) {
+    *dx = *dy = 0;
+    *wheel_up = *wheel_down = 0;
+    if (!g.control) {
+        return;
+    }
+    auto& s = g.control->state;
+    *dx = double(s.mouse_dx.exchange(0, std::memory_order_relaxed)) / 1024.0;
+    *dy = double(s.mouse_dy.exchange(0, std::memory_order_relaxed)) / 1024.0;
+    // At most a second of notches (the pad treats each as a short press).
+    *wheel_up = int(std::min<u32>(s.wheel_up.exchange(0, std::memory_order_relaxed), 64));
+    *wheel_down = int(std::min<u32>(s.wheel_down.exchange(0, std::memory_order_relaxed), 64));
+}
+
+int MouseCaptured() {
+    return g.control && g.control->state.mouse_captured.load(std::memory_order_relaxed) ? 1 : 0;
+}
+
+u32 MouseButtons() {
+    return g.control ? g.control->state.mouse_buttons.load(std::memory_order_relaxed) : 0;
+}
+
+void MouseLookEnable(int enabled) {
+    if (g.control) {
+        g.control->state.mouse_look.store(enabled ? 2 : 1, std::memory_order_relaxed);
+    }
+}
+
 int TextInputBegin(const char* initial, const char* prompt) {
     TextInputArgs args{};
     CopyString(args.initial, sizeof(args.initial), initial);

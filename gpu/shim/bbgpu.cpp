@@ -508,6 +508,10 @@ extern "C" int bbgpu_overlay_captures_input(void) {
 }
 
 extern "C" void bbgpu_mouse_take(double* dx, double* dy, int* wheel_up, int* wheel_down) {
+    if (BbRemote::FrontActive()) {
+        BbRemote::Front::MouseTake(dx, dy, wheel_up, wheel_down); // bb-gpu's window
+        return;
+    }
     double x = 0, y = 0;
     int up = 0, down = 0;
     if (g_window) {
@@ -520,15 +524,25 @@ extern "C" void bbgpu_mouse_take(double* dx, double* dy, int* wheel_up, int* whe
 }
 
 extern "C" int bbgpu_mouse_captured(void) {
+    if (BbRemote::FrontActive()) {
+        return BbRemote::Front::MouseCaptured();
+    }
     return g_window && g_window->MouseCaptured() ? 1 : 0;
 }
 
 extern "C" uint32_t bbgpu_mouse_buttons(void) {
+    if (BbRemote::FrontActive()) {
+        return BbRemote::Front::MouseButtons();
+    }
     return bbgpu_mouse_captured() && SDL_WasInit(SDL_INIT_VIDEO) ? SDL_GetMouseState(nullptr, nullptr)
                                                                  : 0;
 }
 
 extern "C" void bbgpu_mouse_look_enable(int enabled) {
+    if (BbRemote::FrontActive()) {
+        BbRemote::Front::MouseLookEnable(enabled);
+        return;
+    }
     Frontend::WindowSDL::EnableMouseLook(enabled != 0);
 }
 

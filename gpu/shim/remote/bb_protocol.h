@@ -11,7 +11,7 @@
 
 namespace BbRemote {
 
-inline constexpr std::uint32_t ProtocolVersion = 5;
+inline constexpr std::uint32_t ProtocolVersion = 6;
 
 enum Msg : std::uint32_t {
     // ---- game process -> GPU process ----

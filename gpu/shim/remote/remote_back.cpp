@@ -890,6 +890,27 @@ void PublishWindowState() {
                              __ATOMIC_RELAXED);
         }
     }
+    // The mouse (0.51's mouse look): this process's window holds it; the game process's pad
+    // takes the motion, wheel and buttons (bbgpu_mouse_* there).
+    auto& s = g.control->state;
+    if (const u32 look = s.mouse_look.load(std::memory_order_relaxed)) {
+        bbgpu_mouse_look_enable(look == 2 ? 1 : 0);
+    }
+    double dx = 0, dy = 0;
+    int up = 0, down = 0;
+    bbgpu_mouse_take(&dx, &dy, &up, &down);
+    if (dx != 0 || dy != 0) {
+        s.mouse_dx.fetch_add(std::int64_t(dx * 1024.0), std::memory_order_relaxed);
+        s.mouse_dy.fetch_add(std::int64_t(dy * 1024.0), std::memory_order_relaxed);
+    }
+    if (up) {
+        s.wheel_up.fetch_add(u32(up), std::memory_order_relaxed);
+    }
+    if (down) {
+        s.wheel_down.fetch_add(u32(down), std::memory_order_relaxed);
+    }
+    s.mouse_captured.store(bbgpu_mouse_captured() ? 1 : 0, std::memory_order_relaxed);
+    s.mouse_buttons.store(bbgpu_mouse_buttons(), std::memory_order_relaxed);
     const u32 captures = BbOverlay::CapturesInput() ? 1 : 0;
     if (captures != g.published_overlay) {
         g.published_overlay = captures;

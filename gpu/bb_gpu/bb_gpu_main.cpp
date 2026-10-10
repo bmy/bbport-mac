@@ -66,6 +66,21 @@ void runtime_memory_read_backing(uintptr_t address, void* data, uint64_t size) {
 void runtime_memory_gpu_protect(uintptr_t address, uint64_t size, int read, int write) {
     Back::MemoryGpuProtect(address, size, read, write);
 }
+void runtime_memory_trap(uintptr_t address, uint64_t size, unsigned reason, int on) {
+    Back::MemoryTrap(address, size, reason, on);
+}
+unsigned runtime_memory_trap_reasons(uintptr_t address) {
+    return Back::MemoryTrapReasons(address);
+}
+// Host import of the game's direct memory (the PC memory model's chunk allocator): the backing
+// is the game process's, so never here.
+void* runtime_memory_backing_pointer(uint64_t) {
+    return nullptr;
+}
+// Guest functions by name (the PM4 self test): the game's code runs in the game process.
+uintptr_t runtime_memory_resolve(const char*) {
+    return 0;
+}
 void runtime_memory_set_gpu_hooks(Back::GpuRange map, Back::GpuRange unmap,
                                   Back::GpuRange invalidate) {
     Back::SetGpuHooks(map, unmap, invalidate);

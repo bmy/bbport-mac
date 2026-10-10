@@ -114,6 +114,8 @@ int MemoryIsMapped(uintptr_t address, u64 size);
 int MemoryWriteBacking(uintptr_t address, const void* data, u64 size);
 void MemoryReadBacking(uintptr_t address, void* data, u64 size);
 void MemoryGpuProtect(uintptr_t address, u64 size, int read, int write);
+void MemoryTrap(uintptr_t address, u64 size, unsigned reason, int on);
+unsigned MemoryTrapReasons(uintptr_t address);
 using GpuRange = void (*)(uintptr_t address, u64 size);
 void SetGpuHooks(GpuRange map, GpuRange unmap, GpuRange invalidate);
 void SetNoteWriteHook(GpuRange hook);

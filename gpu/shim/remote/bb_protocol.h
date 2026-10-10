@@ -11,7 +11,7 @@
 
 namespace BbRemote {
 
-inline constexpr std::uint32_t ProtocolVersion = 4;
+inline constexpr std::uint32_t ProtocolVersion = 5;
 
 enum Msg : std::uint32_t {
     // ---- game process -> GPU process ----
@@ -114,6 +114,9 @@ struct ProtectArgs {
     std::uint64_t address, size;
     std::uint32_t read, write;
 };
+/// ProtectArgs.read with this bit: a write trap (runtime_memory_trap) rather than a protection;
+/// the rest of `read` is the trap's reason and `write` is 1 (on) or 0 (off).
+inline constexpr std::uint32_t ProtectTrap = 0x80000000u;
 struct ResultReply {
     std::int32_t result;
     std::uint32_t pad;

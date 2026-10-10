@@ -79,6 +79,7 @@ Backend → frontend:
 | Message | Today | Notes |
 |---|---|---|
 | Protect (range, read, write) | `runtime_memory_gpu_protect` | synchronous; the frontend applies it (Rosetta emulates 4 KiB protection, only it can) |
+| Write trap (range, reason, on) | `runtime_memory_trap` (bbport 0.5) | as Protect (a `ProtectArgs` with `ProtectTrap`); the game process keeps the reasons that count, bb-gpu a copy for `runtime_memory_trap_reasons`, cleared on Map/Unmap |
 | Interrupt (EOP, compute, flip, vblank) | `Platform::IrqC` → event queues | asynchronous, triggers guest events |
 | Pad and keyboard state | `runtime_pad.c` reads SDL | shared struct; the window and its events belong to bb-gpu |
 

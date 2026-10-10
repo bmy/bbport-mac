@@ -36,6 +36,7 @@
 
 #include "../bbgpu.h"
 #include <SDL3/SDL.h>
+#include "bblayer_write_traps.h"
 #include "bbport_overlay.h"
 #include "bbport_settings.h"
 #include "bbport_portable.h"
@@ -102,6 +103,43 @@ State g;
 
 /// A write fault from a thread holding the runtime's lock: its protections go back with the reply.
 thread_local std::vector<ProtectArgs>* collected_protects = nullptr;
+
+/// Write traps (runtime_memory_trap, bbport 0.5): the game process keeps the page protections
+/// (and its own table of reasons, which is the one that counts); this process keeps a copy of the
+/// reasons for its GPU code's questions, one byte per 4 KiB page below TrapLimit, set by its own
+/// trap calls and cleared where the game's mappings change, as runtime_memory.c's trap_forget.
+constexpr u64 TrapLimit = 1ull << 40;
+std::atomic<u8*> trap_reasons{nullptr};
+std::mutex trap_mutex;
+
+u8* TrapTable() {
+    if (u8* table = trap_reasons.load(std::memory_order_acquire)) {
+        return table;
+    }
+    void* bytes = mmap(nullptr, TrapLimit >> 12, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    if (bytes == MAP_FAILED) {
+        std::perror("GPU process: write trap table");
+        return nullptr;
+    }
+    u8* expected = nullptr;
+    if (!trap_reasons.compare_exchange_strong(expected, static_cast<u8*>(bytes),
+                                              std::memory_order_acq_rel)) {
+        munmap(bytes, TrapLimit >> 12);
+        return expected;
+    }
+    return static_cast<u8*>(bytes);
+}
+
+void TrapForget(u64 start, u64 end) {
+    u8* table = trap_reasons.load(std::memory_order_acquire);
+    if (!table || start >= TrapLimit) {
+        return;
+    }
+    end = std::min(end, TrapLimit);
+    std::scoped_lock lock{trap_mutex};
+    std::memset(table + (start >> 12), 0, ((end + 4095) >> 12) - (start >> 12));
+}
 
 template <typename T>
 T Payload(const Message& message) {
@@ -277,6 +315,7 @@ void MapMemory(const MapArgs& args) {
         std::fprintf(stderr, "GPU process: refused a mapping over the control block\n");
         return;
     }
+    TrapForget(args.address, args.address + args.size); // a new mapping starts without traps
     if (args.kind == MapShared && args.address < GuestBegin &&
         MirrorFor(args.address).Overlaps(args.address, args.size)) {
         if (!MapAlias(args)) {
@@ -331,6 +370,7 @@ void UnmapMemory(const RangeArgs& args) {
     }
     g.table.Unmap(args.address, args.address + args.size);
     MirrorFor(args.address).Unmap(args.address, args.size);
+    TrapForget(args.address, args.address + args.size);
 }
 
 void CallHook(GpuRange State::*which, const RangeArgs& args) {
@@ -350,8 +390,18 @@ void WriteFault(const Message& message, auto&& reply) {
     collected_protects = args.lock_held ? &protects : nullptr;
     int handled = 0;
     if (auto* rasterizer = Core::Memory::Instance()->GetRasterizer()) {
-        handled = args.is_write ? rasterizer->OnWriteFault(args.address, false, args.rip)
-                                : rasterizer->ReadMemory(args.address, 8, false);
+        // As page_manager.cpp's GuestFaultSignalHandler: pages trapped for reads too go to the
+        // trap's owner first.
+        const unsigned reasons = MemoryTrapReasons(args.address);
+        if (reasons & BbLayer::WriteTraps::VramData) {
+            handled = rasterizer->OnVramDataAccess(args.address, false);
+        } else if (reasons & BbLayer::WriteTraps::QueryReads) {
+            handled = rasterizer->OnOcclusionPageAccess(args.address, args.rip, args.is_write != 0,
+                                                        false);
+        } else {
+            handled = args.is_write ? rasterizer->OnWriteFault(args.address, false, args.rip)
+                                    : rasterizer->ReadMemory(args.address, 8, false);
+        }
     }
     collected_protects = nullptr;
     FaultReply out{};
@@ -884,14 +934,45 @@ void MemoryReadBacking(uintptr_t address, void* data, u64 size) {
     }
 }
 
-void MemoryGpuProtect(uintptr_t address, u64 size, int read, int write) {
-    const ProtectArgs args{address, size, u32(read != 0), u32(write != 0)};
+/// A protection or trap for the game process to apply: with the reply of the fault being handled
+/// on this thread, or now.
+void ForwardProtect(const ProtectArgs& args) {
     if (collected_protects) {
         collected_protects->push_back(args);
         return;
     }
     ResultReply result{};
     g.protect->Call(MsgProtect, &args, sizeof(args), &result, sizeof(result));
+}
+
+void MemoryGpuProtect(uintptr_t address, u64 size, int read, int write) {
+    ForwardProtect(ProtectArgs{address, size, u32(read != 0), u32(write != 0)});
+}
+
+void MemoryTrap(uintptr_t address, u64 size, unsigned reason, int on) {
+    if (!size || address >= TrapLimit || (reason & ProtectTrap)) {
+        return;
+    }
+    u8* table = TrapTable();
+    if (!table) {
+        return;
+    }
+    const u64 end = std::min<u64>(address + size, TrapLimit);
+    {
+        std::scoped_lock lock{trap_mutex};
+        for (u64 page = address >> 12; page <= (end - 1) >> 12; ++page) {
+            const u8 old = table[page];
+            __atomic_store_n(&table[page], on ? u8(old | reason) : u8(old & ~reason),
+                             __ATOMIC_RELEASE);
+        }
+    }
+    ForwardProtect(ProtectArgs{address, end - address, ProtectTrap | reason, on ? 1u : 0u});
+}
+
+unsigned MemoryTrapReasons(uintptr_t address) {
+    const u8* table = trap_reasons.load(std::memory_order_acquire);
+    return table && address < TrapLimit ? __atomic_load_n(&table[address >> 12], __ATOMIC_ACQUIRE)
+                                        : 0;
 }
 
 void SetGpuHooks(GpuRange map, GpuRange unmap, GpuRange invalidate) {

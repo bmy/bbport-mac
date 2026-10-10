@@ -54,6 +54,7 @@ int runtime_memory_is_mapped(uintptr_t address, uint64_t size);
 int runtime_memory_lock_held(void);
 int runtime_memory_exclude(uintptr_t start, uintptr_t end);
 void runtime_memory_gpu_protect(uintptr_t address, uint64_t size, int read, int write);
+void runtime_memory_trap(uintptr_t address, uint64_t size, unsigned reason, int on);
 typedef void (*RuntimeGpuRange)(uintptr_t address, uint64_t size);
 void runtime_memory_set_gpu_hooks(RuntimeGpuRange map, RuntimeGpuRange unmap,
                                   RuntimeGpuRange invalidate);
@@ -319,6 +320,15 @@ void ReaderThread() {
     }
 }
 
+/// A protection or write trap from bb-gpu (ProtectArgs, ProtectTrap).
+void ApplyProtect(const ProtectArgs& args) {
+    if (args.read & ProtectTrap) {
+        runtime_memory_trap(args.address, args.size, args.read & ~ProtectTrap, args.write ? 1 : 0);
+    } else {
+        runtime_memory_gpu_protect(args.address, args.size, int(args.read), int(args.write));
+    }
+}
+
 /// bb-gpu's page protection calls (ControlBlock::protect): only the runtime's lock is taken here.
 void ProtectThread() {
     Common::SetCurrentThreadName("bb:remote-protect");
@@ -326,9 +336,7 @@ void ProtectThread() {
         g.protect->ReceiveOne(
             [](const Message& message, auto&& reply) {
                 if (message.type == MsgProtect) {
-                    const auto args = Payload<ProtectArgs>(message);
-                    runtime_memory_gpu_protect(args.address, args.size, int(args.read),
-                                               int(args.write));
+                    ApplyProtect(Payload<ProtectArgs>(message));
                 }
                 const ResultReply result{0, 0};
                 reply(&result, sizeof(result));
@@ -758,9 +766,7 @@ int HandleFault(void* context, void* address) {
     g.channel->Call(MsgWriteFault, &args, sizeof(args), &reply, sizeof(reply));
     // Only when this thread holds the runtime's lock (see FaultReply).
     for (u32 i = 0; i < std::min(reply.count, MaxFaultProtects); ++i) {
-        const auto& protect = reply.protects[i];
-        runtime_memory_gpu_protect(protect.address, protect.size, int(protect.read),
-                                   int(protect.write));
+        ApplyProtect(reply.protects[i]);
     }
     return reply.handled;
 }

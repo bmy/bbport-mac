@@ -23,6 +23,12 @@ bool PcModelGpu(const Vulkan::Instance&) {
 bool Usable(const Vulkan::Instance&) {
     return false;
 }
+bool HostImported() {
+    return false;
+}
+bool LayerMemory() {
+    return false;
+}
 vk::ExternalMemoryHandleTypeFlagBits HandleType() {
     return {}; // never asked: Usable is false
 }

@@ -52,6 +52,19 @@ without a checksum, code run from data files) is reported at once, whatever its 
 - `.github/workflows/release.yml`: the build job stays read-only and keeps no token; only the
   publish job writes; versions are checked before use.
 
+## Known gaps
+
+What the port doesn't pin or check yet, to keep in mind in every review:
+- Homebrew's build tools (cmake, meson, LLVM, glslang and others in `setup_deps.sh`) are
+  whatever Homebrew has that day; the Python modules for Mesa are pinned by version, not by
+  hash.
+- The release zip's SHA-256 is computed by the same build job that ran the third-party build
+  scripts: it shows the file arrived intact, not that the build was clean.
+- The native GPU process checks the channel's messages, but not every guest address in the GPU
+  commands it is sent: it isn't a security boundary against a compromised game process (both
+  run as the same user, unsandboxed).
+- Paths printed by upstream's `run.sh` and the engine can still show the home folder in logs.
+
 ## Afterwards
 
 - Fix our findings on every branch they apply to (`macos-0.4`, `macos-0.5`, `macos-native`,

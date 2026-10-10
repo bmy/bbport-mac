@@ -21,7 +21,7 @@ version=${1:-${BB_VERSION:-}}
 if [[ -z $version ]]; then
     version=$(git describe --tags --always 2>/dev/null || echo dev)
 fi
-[[ $version =~ ^[A-Za-z0-9._-]+$ ]] || die "version '$version': letters, digits, dot, dash or underscore only"
+[[ $version =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "version '$version': a letter or digit, then letters, digits, dot, dash or underscore"
 DEPS=${BB_DEPS:-$repo/deps-x86_64}
 kk=$DEPS/lib/kosmickrisp
 for file in out/bb-probe out/bb-gpu-capabilities out/gpu/libbbgpu.dylib \
@@ -34,6 +34,7 @@ name=bbport-mac-$version
 stage=$repo/out/package
 top=$stage/$name
 app=$top/bbport.app
+[[ $stage == "$repo/out/package" && $app == "$stage/"*/bbport.app ]] || die "unexpected staging path $stage"
 rm -rf "$stage"
 mkdir -p "$top"
 

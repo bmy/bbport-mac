@@ -466,7 +466,8 @@ final class LauncherModel: ObservableObject {
         lastProblem = nil
         exitSeen = nil
         self.job = job
-        appendLines(["$ cd \(repo.path)", echo])
+        // ~/… rather than the full path: logs get pasted into reports.
+        appendLines(["$ cd \((repo.path as NSString).abbreviatingWithTildeInPath)", echo])
 
         let pipe = Pipe()
         let process = Process()

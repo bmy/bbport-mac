@@ -18,6 +18,13 @@
 
 #include <vk_mem_alloc.h>
 
+#ifdef __APPLE__
+#include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <mach/mach.h>
+#endif
+
 namespace Vulkan {
 
 namespace {
@@ -953,6 +960,52 @@ u64 Instance::GetDeviceMemoryUsage() const {
     return total_usage;
 }
 
+#ifdef __APPLE__
+/// bbport (macOS): the Mac's memory is shared by the CPU and the GPU, and Metal's limit (the
+/// heap size, recommendedMaxWorkingSetSize, ~75% of the Mac's memory) is for everything this
+/// process has, not for the GPU alone. The game's direct memory (5-9 GB), its heap, Rosetta and
+/// the runtime came on top of a GPU budget of the whole limit: on a 24 GB Mac the texture cache
+/// started collecting at 12.7 GB of GPU memory and the Mac swapped (issue #3). The GPU's share is
+/// the limit less the process's footprint outside the GPU's own allocations, at least 2 GB.
+static u64 UnifiedMemoryBudget(u64 limit, u64 gpu_usage) {
+    // The footprint is sampled at most every 250 ms (this runs at every texture collector tick).
+    static std::atomic<u64> other_cached{0};
+    static std::atomic<s64> sampled_ns{-1};
+    const s64 now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch())
+                        .count();
+    const s64 sampled = sampled_ns.load(std::memory_order_relaxed);
+    if (sampled < 0 || now - sampled >= 250'000'000) {
+        task_vm_info_data_t info{};
+        mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+        if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&info),
+                      &count) != KERN_SUCCESS) {
+            return limit;
+        }
+        // The footprint counts this process's Metal allocations too; if it is ever smaller than
+        // them, they were evidently not in it.
+        const u64 footprint = info.phys_footprint;
+        other_cached.store(footprint >= gpu_usage ? footprint - gpu_usage : footprint,
+                           std::memory_order_relaxed);
+        sampled_ns.store(now, std::memory_order_relaxed);
+    }
+    const u64 other = other_cached.load(std::memory_order_relaxed);
+    constexpr u64 Floor = u64{2} << 30;
+    const u64 budget = limit > other + Floor ? limit - other : Floor;
+    // Printed when it moves by 1 GiB or more (the game's memory grows as areas load).
+    static std::atomic<u64> printed{0};
+    u64 last = printed.load(std::memory_order_relaxed);
+    if ((last > budget ? last - budget : budget - last) >= (u64{1} << 30) &&
+        printed.compare_exchange_strong(last, budget, std::memory_order_relaxed)) {
+        std::printf("GPU: memory budget %llu MiB (Metal's limit %llu MiB, less %llu MiB this "
+                    "process uses outside the GPU)\n",
+                    (unsigned long long)(budget >> 20), (unsigned long long)(limit >> 20),
+                    (unsigned long long)(other >> 20));
+    }
+    return budget;
+}
+#endif
+
 u64 Instance::GetDeviceMemoryBudgetNow() const {
     vk::PhysicalDeviceMemoryBudgetPropertiesEXT memory_budget_props{};
     vk::PhysicalDeviceMemoryProperties2 props = {
@@ -961,18 +1014,26 @@ u64 Instance::GetDeviceMemoryBudgetNow() const {
     physical_device.getMemoryProperties2(&props);
 
     u64 total_budget = 0;
+#ifdef __APPLE__
+    u64 gpu_usage = 0;
+#endif
     for (const size_t heap : valid_heaps) {
 #ifdef __APPLE__
         // KosmicKrisp's budget is the usage plus 90% of the free and inactive pages, and macOS
         // keeps few of those (file cache, compressed memory): it stayed ~1 GB above the usage
         // whatever the Mac had, so the texture cache sat at its pressure mark and evicted
         // hundreds of images every few seconds, only to upload them again. The heap size is
-        // Metal's recommendedMaxWorkingSetSize (a share of the Mac's memory): the real limit.
+        // Metal's recommendedMaxWorkingSetSize (a share of the Mac's memory): the real limit,
+        // less what the rest of the process uses (UnifiedMemoryBudget).
         total_budget += props.memoryProperties.memoryHeaps[heap].size;
+        gpu_usage += memory_budget_props.heapUsage[heap];
 #else
         total_budget += memory_budget_props.heapBudget[heap];
 #endif
     }
+#ifdef __APPLE__
+    total_budget = UnifiedMemoryBudget(total_budget, gpu_usage);
+#endif
     return total_budget;
 }
 

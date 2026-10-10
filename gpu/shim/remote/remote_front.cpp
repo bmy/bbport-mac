@@ -442,7 +442,8 @@ bool Spawn() {
     posix_spawn_file_actions_init(&actions);
     int error = posix_spawnattr_setflags(&attr, POSIX_SPAWN_CLOEXEC_DEFAULT);
     for (const int fd : {0, 1, 2, g.pool_fd}) {
-        if (error == 0) {
+        // A standard stream the game was started without is simply not passed on.
+        if (error == 0 && (fd == g.pool_fd || fcntl(fd, F_GETFD) != -1)) {
             error = posix_spawn_file_actions_addinherit_np(&actions, fd);
         }
     }
@@ -465,7 +466,8 @@ bool Spawn() {
                      std::strerror(error));
         return false;
     }
-    std::printf("GPU process: started %s (pid %d)%s\n", program.c_str(), int(g.child),
+    std::printf("GPU process: started %s (pid %d)%s\n",
+                program.substr(program.find_last_of('/') + 1).c_str(), int(g.child),
                 own_deps ? "" : " without an arm64 dependency prefix");
     return true;
 }

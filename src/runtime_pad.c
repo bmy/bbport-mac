@@ -514,7 +514,7 @@ static void sample_host(PadData *d) {
     const int captured=bbgpu_mouse_captured();
     if (bbgpu_overlay_captures_input()) { apply_mouse_look(d,0,0,d->timestamp,0); return; } /* menu open: neutral input */
     const bool *k=bbgpu_keyboard_state();
-    mouse_buttons=captured && SDL_WasInit(SDL_INIT_VIDEO) ? SDL_GetMouseState(NULL,NULL) : 0;
+    mouse_buttons=captured ? bbgpu_mouse_buttons() : 0;
     mouse_wheel_step(d->timestamp,captured ? wheel_up : 0,captured ? wheel_down : 0);
     if (g) {
         int touch_right=0;

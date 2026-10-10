@@ -466,6 +466,11 @@ extern "C" int bbgpu_mouse_captured(void) {
     return g_window && g_window->MouseCaptured() ? 1 : 0;
 }
 
+extern "C" uint32_t bbgpu_mouse_buttons(void) {
+    return bbgpu_mouse_captured() && SDL_WasInit(SDL_INIT_VIDEO) ? SDL_GetMouseState(nullptr, nullptr)
+                                                                 : 0;
+}
+
 extern "C" void bbgpu_mouse_look_enable(int enabled) {
     Frontend::WindowSDL::EnableMouseLook(enabled != 0);
 }

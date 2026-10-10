@@ -163,7 +163,13 @@ void WindowSDL::CaptureMouse(bool capture) {
     static bool told;
     if (capture && !told) {
         told = true;
+#ifdef __APPLE__
+        // bbport (macOS): F1, ` and § open the overlay menu first, which lets the mouse go too.
+        std::printf("Mouse look: on (F1, ` or \u00a7 opens the menu and releases the mouse, a click "
+                    "takes it again)\n");
+#else
         std::printf("Mouse look: on (F1 releases the mouse, a click takes it again)\n");
+#endif
     }
 }
 
@@ -266,8 +272,17 @@ bool WindowSDL::PollEvents() {
         }
         if (event.type == SDL_EVENT_MOUSE_WHEEL && mouse_captured.load(std::memory_order_relaxed)) {
             const float notches = event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -event.wheel.y : event.wheel.y;
+            // bbport: whole notches only. A trackpad or Magic Mouse sends many small fractions
+            // (and momentum after a swipe); each counted as a notch cycled several items at once.
+            static float wheel_sum = 0.0f;
+            wheel_sum += notches;
             std::scoped_lock lock{mouse_mutex};
-            (notches > 0 ? wheel_up : wheel_down) += notches != 0 ? 1 : 0;
+            for (; wheel_sum >= 1.0f; wheel_sum -= 1.0f) {
+                ++wheel_up;
+            }
+            for (; wheel_sum <= -1.0f; wheel_sum += 1.0f) {
+                ++wheel_down;
+            }
         }
         if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
             CaptureMouse(false);

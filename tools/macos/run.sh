@@ -34,6 +34,9 @@ else
 fi
 : "${BB_GAME_DIR:?set BB_GAME_DIR to the merged 1.09 game folder}"
 export BB_PREBUILT=1
+# No online play on the Mac yet (0.51's online module isn't built here): run.sh would otherwise
+# contact the community server with BB_ONLINE=1 and the game still play offline.
+unset BB_ONLINE BB_NET_MODULE
 export BB_FPS=${BB_FPS:-30}
 mkdir -p "$data/out"
 # FPS counter on by default, as the Linux launcher does; the overlay menu (F1, ` or §) toggles

@@ -39,6 +39,9 @@ int bbgpu_overlay_captures_input(void);
  * bbport.ini keeps the window from taking it. */
 void bbgpu_mouse_take(double *dx, double *dy, int *wheel_up, int *wheel_down);
 int bbgpu_mouse_captured(void);
+/* bbport: the mouse buttons held (SDL_MouseButtonFlags), 0 while the window doesn't hold the
+ * mouse; through the GPU library like the keyboard, for the macOS native GPU process. */
+uint32_t bbgpu_mouse_buttons(void);
 void bbgpu_mouse_look_enable(int enabled);
 /* Patches the loaded image before the game runs (image still writable): libGnm entry hooks. */
 void bbgpu_patch_image(unsigned char *image, uint64_t size);

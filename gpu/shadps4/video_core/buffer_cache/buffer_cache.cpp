@@ -1761,6 +1761,8 @@ std::pair<vk::DeviceMemory, u64> BufferCache::AllocateResidency(u64 bytes) {
     }();
     if (!chunks) {
         const auto memory = allocate(bytes);
+        ASSERT_MSG(memory, "Buffer cache: no device memory for {} bytes (BB_RESIDENCY_CHUNKS=0)",
+                   bytes);
         residency_chunks[static_cast<VkDeviceMemory>(memory)] = {bytes, bytes, 0, 0};
         NoteResidencyUnused();
         return {memory, 0};

@@ -18,6 +18,8 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <thread>
@@ -194,11 +196,15 @@ public:
         Write(type, data, size, index);
         WaitUntil(slot.state, slot.sleepers,
                   [&] { return slot.state.load(std::memory_order_acquire) == SlotDone; });
-        const std::uint32_t n = slot.size < reply_capacity ? slot.size : reply_capacity;
+        // The peer wrote the size: read it once and keep it within the slot.
+        std::uint32_t full = slot.size;
+        if (full > MaxPayload) {
+            full = MaxPayload;
+        }
+        const std::uint32_t n = full < reply_capacity ? full : reply_capacity;
         if (n) {
             std::memcpy(reply, slot.data, n);
         }
-        const std::uint32_t full = slot.size;
         slot.state.store(SlotFree, std::memory_order_release);
         return full;
     }
@@ -215,17 +221,42 @@ public:
         if (stop()) {
             return false;
         }
+        // The other process wrote the ring, so nothing in it is trusted: the header is copied
+        // once and checked against the ring's bounds, and the payload is copied out before the
+        // handler sees it (the writer can't change it while it's being handled).
         std::uint64_t tail = c.tail.load(std::memory_order_relaxed);
+        const std::uint64_t head = c.head.load(std::memory_order_acquire);
+        const std::uint64_t available = head - tail;
+        const std::uint32_t offset = static_cast<std::uint32_t>(tail % RingBytes);
         const std::uint8_t* ring = layout->rings[In()];
-        auto* header = reinterpret_cast<const MessageHeader*>(ring + tail % RingBytes);
-        if (header->size == 0) { // the writer skipped the end of the ring
-            tail += RingBytes - tail % RingBytes;
+        std::uint32_t first_word;
+        std::memcpy(&first_word, ring + offset, sizeof(first_word));
+        if (first_word == 0) { // the writer skipped the end of the ring
+            if (available < RingBytes - offset) {
+                Corrupt("skip past the written data");
+            }
+            tail += RingBytes - offset;
             c.tail.store(tail, std::memory_order_release);
             Signal(c.space_word, c.space_sleepers);
             return true;
         }
-        const Message message{header->type, header + 1, header->payload_size};
-        const std::uint32_t reply_index = header->reply;
+        if (RingBytes - offset < sizeof(MessageHeader)) {
+            Corrupt("header past the end of the ring");
+        }
+        MessageHeader header;
+        std::memcpy(&header, ring + offset, sizeof(header));
+        if (header.size != Align8(sizeof(MessageHeader) + header.payload_size) ||
+            header.payload_size > MaxPayload || header.size > RingBytes - offset ||
+            header.size > available ||
+            (header.reply != NoReply && header.reply >= NumReplySlots)) {
+            Corrupt("bad message header");
+        }
+        alignas(16) std::uint8_t payload[MaxPayload];
+        if (header.payload_size) {
+            std::memcpy(payload, ring + offset + sizeof(MessageHeader), header.payload_size);
+        }
+        const Message message{header.type, payload, header.payload_size};
+        const std::uint32_t reply_index = header.reply;
         bool replied = false;
         auto reply = [&](const void* data, std::uint32_t size) {
             if (reply_index == NoReply || replied) {
@@ -244,7 +275,7 @@ public:
         };
         handler(message, reply);
         reply(nullptr, 0); // a call the handler did not answer still returns
-        c.tail.store(tail + header->size, std::memory_order_release);
+        c.tail.store(tail + header.size, std::memory_order_release);
         Signal(c.space_word, c.space_sleepers);
         return true;
     }
@@ -260,6 +291,12 @@ private:
     [[nodiscard]] std::uint32_t In() const { return 1 - static_cast<std::uint32_t>(side); }
 
     static constexpr std::uint32_t Align8(std::uint32_t n) { return (n + 7) & ~7u; }
+
+    /// The other process broke the protocol: stop rather than read or write out of bounds.
+    [[noreturn]] static void Corrupt(const char* what) {
+        std::fprintf(stderr, "bbport remote channel: %s; stopping\n", what);
+        std::abort();
+    }
 
     void Write(std::uint32_t type, const void* data, std::uint32_t size, std::uint32_t reply) {
         if (size > MaxPayload) {

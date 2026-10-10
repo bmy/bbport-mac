@@ -120,14 +120,10 @@ MemoryMirror& MirrorFor(u64 address) {
     return address >= GuestBegin ? g.guest : g.low;
 }
 
-/// Private (executable) memory of the game process: readable zeros here.
+/// Private (executable) memory of the game process: readable zeros here (only inside the
+/// mirrored range, so a bad message can't map over this process's own memory).
 bool MapZeros(u64 address, u64 size) {
-    if (MirrorFor(address).Overlaps(address, size)) {
-        return false;
-    }
-    void* at = mmap(reinterpret_cast<void*>(address), size, PROT_READ | PROT_WRITE,
-                    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
-    return at != MAP_FAILED;
+    return MirrorFor(address).MapZeros(address, size);
 }
 
 /// Stores every byte once (aligned pieces as single release stores), as runtime_memory.c does
@@ -269,7 +265,18 @@ bool MapAlias(const MapArgs& args) {
     return true;
 }
 
+/// The control block (the channel itself) sits right after the guest range, inside the guest
+/// mirror's reservation: no mapping message may touch it.
+bool TouchesControl(u64 address, u64 size) {
+    return address + size < address ||
+           (address < ControlAddress + ControlBytes && ControlAddress < address + size);
+}
+
 void MapMemory(const MapArgs& args) {
+    if (TouchesControl(args.address, args.size)) {
+        std::fprintf(stderr, "GPU process: refused a mapping over the control block\n");
+        return;
+    }
     if (args.kind == MapShared && args.address < GuestBegin &&
         MirrorFor(args.address).Overlaps(args.address, args.size)) {
         if (!MapAlias(args)) {
@@ -307,6 +314,10 @@ void MapMemory(const MapArgs& args) {
 }
 
 void UnmapMemory(const RangeArgs& args) {
+    if (TouchesControl(args.address, args.size)) {
+        std::fprintf(stderr, "GPU process: refused an unmapping of the control block\n");
+        return;
+    }
     GpuRange hook;
     {
         std::scoped_lock lock{g.hook_mutex};

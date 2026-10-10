@@ -420,18 +420,38 @@ bool Spawn() {
     }
     envp.push_back(nullptr);
 
-    // shm_open sets close-on-exec: bb-gpu inherits the pool by its number.
-    if (fcntl(g.pool_fd, F_SETFD, 0) != 0) {
-        std::perror("GPU process: pool descriptor");
-        return false;
-    }
     std::string fd_arg = std::to_string(g.pool_fd), bytes_arg = std::to_string(g.pool_bytes),
                 offset_arg = std::to_string(g.host_offset);
     std::vector<char*> argv{program.data(), const_cast<char*>("--pool-fd"), fd_arg.data(),
                             const_cast<char*>("--pool-bytes"), bytes_arg.data(),
                             const_cast<char*>("--control-offset"), offset_arg.data(), nullptr};
+#ifdef __APPLE__
+    // bb-gpu gets the pool (by its number) and the standard streams, and no other descriptor of
+    // this process (game files, sockets, the log pipe's other copies).
+    posix_spawnattr_t attr;
+    posix_spawn_file_actions_t actions;
+    posix_spawnattr_init(&attr);
+    posix_spawn_file_actions_init(&actions);
+    int error = posix_spawnattr_setflags(&attr, POSIX_SPAWN_CLOEXEC_DEFAULT);
+    for (const int fd : {0, 1, 2, g.pool_fd}) {
+        if (error == 0) {
+            error = posix_spawn_file_actions_addinherit_np(&actions, fd);
+        }
+    }
+    if (error == 0) {
+        error = posix_spawn(&g.child, program.c_str(), &actions, &attr, argv.data(), envp.data());
+    }
+    posix_spawn_file_actions_destroy(&actions);
+    posix_spawnattr_destroy(&attr);
+#else
+    // shm_open sets close-on-exec: bb-gpu inherits the pool by its number.
+    if (fcntl(g.pool_fd, F_SETFD, 0) != 0) {
+        std::perror("GPU process: pool descriptor");
+        return false;
+    }
     const int error = posix_spawn(&g.child, program.c_str(), nullptr, nullptr, argv.data(),
                                   envp.data());
+#endif
     if (error != 0) {
         std::fprintf(stderr, "GPU process: cannot start %s: %s\n", program.c_str(),
                      std::strerror(error));

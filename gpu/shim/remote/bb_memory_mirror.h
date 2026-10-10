@@ -142,6 +142,23 @@ public:
         return true;
     }
 
+    /// Maps `size` bytes of private zeros to `address`, readable and writable (the game's private
+    /// memory). Like Map(), only inside the reserved range, never over the Taken() parts.
+    bool MapZeros(std::uint64_t address, std::uint64_t size) {
+        if (!Inside(address, size) || Overlaps(address, size)) {
+            Report("map zeros", address, size, EINVAL);
+            return false;
+        }
+        std::scoped_lock lock{mutex};
+        void* at = mmap(reinterpret_cast<void*>(address), size, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+        if (at == MAP_FAILED) {
+            Report("map zeros", address, size, errno);
+            return false;
+        }
+        return true;
+    }
+
     /// Returns [address, address + size) to the reservation (never the Taken() parts).
     bool Unmap(std::uint64_t address, std::uint64_t size) {
         if (!Inside(address, size)) {

@@ -107,6 +107,10 @@ There is a release for each new upstream bbport version (`0.4-v1`, then `0.4.1-v
 `0.5-v1` once it is merged), and another build of the same version (`0.4-v2`, `0.4-v3`) only
 to ship a fix for something broken.
 
+Before a new upstream version (or a changed dependency pin) is pushed or released, it gets the
+security review in [docs/security-review.md](../../docs/security-review.md): two independent
+reviews, of the upstream change and of ours.
+
 Releases are made by GitHub Actions (`.github/workflows/release.yml`) on a GitHub-hosted Apple
 Silicon runner. Write the notes as `docs/release/<version>.md` (otherwise `NEXT.md` is used),
 then in the Actions tab choose **Mac release ▸ Run workflow**, pick the branch and type the

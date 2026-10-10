@@ -18,12 +18,17 @@ let
   wanted = [
     "run.sh" "out" "out/bb-probe" "out/bb-gpu-capabilities" "out/gpu" "out/gpu/libbbgpu.so" "tools"
   ] ++ assetDirs;
+  # DLSS (a build with DLSS_SDK_ROOT): the bridge, NVIDIA's runtime library and its license, as
+  # NVIDIA's RTX SDK license allows in an application. Without them the launcher lets the player
+  # choose NVIDIA's library (the bridge is still needed).
+  dlssFiles = [ "out/libbbport_dlss.so" "out/NVIDIA-DLSS-LICENSE.txt" "out/gpu/libbbnet.so" ];
+  isNgx = rel: lib.hasPrefix "out/libnvidia-ngx-dlss.so." rel;
   src = builtins.path {
     name = "bbport-src";
     path = root;
     filter = path: type:
       let rel = lib.removePrefix (toString root + "/") (toString path);
-      in builtins.elem rel wanted
+      in builtins.elem rel wanted || builtins.elem rel dlssFiles || isNgx rel
         || lib.any (dir: lib.hasPrefix (dir + "/") rel) assetDirs;
   };
   python = pkgs.python3.withPackages (ps: [ ps.pygobject3 ]);
@@ -52,10 +57,55 @@ let
     x86_64-w64-mingw32-gcc -std=c11 -O1 -Wall -I$f/ffx/api/include -I$f/ffx/upscalers/include \
       $f/fsr4cap.c $f/capture.c $f/rootsig.c -o $out -ld3d12 -ldxguid -static
   '';
-  # Mesa comes with the package. bbport_vulkan.py adds the host NVIDIA ICD and
-  # only its vendor libraries (matching the host's kernel module).
-  icds = lib.concatMapStringsSep ":" (name: "${pkgs.mesa}/share/vulkan/icd.d/${name}")
+  # Mesa's Vulkan drivers come with the package (RADV and ANV); bbport_vulkan.py adds the host
+  # NVIDIA ICD and only its vendor libraries (matching the host's kernel module). Only the two
+  # drivers, not the whole Mesa: its OpenGL drivers and LLVM were ~800 MB of the package. RADV
+  # without LLVM (it compiles with ACO; LLVM was only an optional backend); the drivers' one
+  # reference to Mesa's store path (share/drirc.d, per-application tweaks: none for this game)
+  # is removed.
+  mesaVulkan = (pkgs.mesa.override {
+    galliumDrivers = [ "radeonsi" "iris" "llvmpipe" "zink" ];
+    # Dozen (microsoft-experimental) only because the recipe expects its spirv2dxil output.
+    vulkanDrivers = [ "amd" "intel" "microsoft-experimental" ];
+  }).overrideAttrs (old: {
+    mesonFlags = old.mesonFlags ++ [ "-Damd-use-llvm=false" ];
+  });
+  vulkanDrivers = pkgs.runCommand "bbport-vulkan-drivers" {
+    nativeBuildInputs = [ pkgs.removeReferencesTo pkgs.jq ];
+  } ''
+    mkdir -p $out/lib $out/share/vulkan/icd.d
+    for name in radeon intel; do
+      cp ${mesaVulkan}/lib/libvulkan_$name.so $out/lib/
+      chmod u+w $out/lib/libvulkan_$name.so
+      remove-references-to -t ${mesaVulkan} $out/lib/libvulkan_$name.so
+      jq ".ICD.library_path = \"$out/lib/libvulkan_$name.so\"" \
+        ${mesaVulkan}/share/vulkan/icd.d/''${name}_icd.x86_64.json > $out/share/vulkan/icd.d/''${name}_icd.x86_64.json
+    done
+  '';
+  icds = lib.concatMapStringsSep ":" (name: "${vulkanDrivers}/share/vulkan/icd.d/${name}")
     [ "radeon_icd.x86_64.json" "intel_icd.x86_64.json" ];
+  # MangoHud (its Vulkan layer, XDG_DATA_DIRS) without its 32-bit half: the game is 64-bit.
+  # xdg-utils (Perl, ~55 MB) only opens links: the host's xdg-open instead.
+  # libdecor without its GTK 3 plugin (as in shell.nix) for MangoHud's glfw: GTK 3, tinysparql, ICU.
+  libdecor = pkgs.libdecor.overrideAttrs (old: {
+    buildInputs = lib.remove pkgs.gtk3 old.buildInputs;
+    mesonFlags = old.mesonFlags ++ [ "-Dgtk=disabled" ];
+  });
+  mangohud = pkgs.mangohud.override {
+    lowerBitnessSupport = false;
+    glfw = pkgs.glfw.override { inherit libdecor; };
+    xdg-utils = pkgs.writeShellScriptBin "xdg-open" ''
+      host=$(command -v xdg-open) && exec "$host" "$@"
+      exit 1
+    '';
+  };
+  # The launcher's GTK without GStreamer (video playback: flite, x265, ... ~200 MB), printing and
+  # the search indexer, which it never uses; libadwaita on top of it.
+  gtk4 = (pkgs.gtk4.override { cupsSupport = false; trackerSupport = false; }).overrideAttrs (old: {
+    buildInputs = lib.filter (p: !(lib.hasPrefix "gst-" (p.pname or ""))) old.buildInputs;
+    mesonFlags = old.mesonFlags ++ [ "-Dmedia-gstreamer=disabled" ];
+  });
+  libadwaita = pkgs.libadwaita.override { inherit gtk4; };
   # Fonts: bundled DejaVu and Adwaita plus the host's usual font directories, but not the host's
   # /etc/fonts: on NixOS it names fonts in the host's /nix/store, which the AppImage hides behind
   # its own store in some environments (Steam's FHS sandbox), and the launcher showed boxes.
@@ -75,20 +125,22 @@ let
   # Environment the closure needs on any host: icon themes, SVG icon loader, fonts (above) and
   # a UTF-8 locale built into glibc.
   common = ''
-      --prefix XDG_DATA_DIRS : ${pkgs.mangohud}/share:${pkgs.adwaita-icon-theme}/share:${pkgs.hicolor-icon-theme}/share:${pkgs.gtk4}/share/gsettings-schemas/${pkgs.gtk4.name} \
+      --prefix XDG_DATA_DIRS : ${mangohud}/share:${pkgs.adwaita-icon-theme}/share:${pkgs.hicolor-icon-theme}/share:${gtk4}/share/gsettings-schemas/${gtk4.name} \
       --set-default GDK_PIXBUF_MODULE_FILE ${pkgs.librsvg}/${pkgs.gdk-pixbuf.moduleDir}.cache \
       --set-default FONTCONFIG_FILE ${fontsConf} \
       --set-default LC_ALL C.UTF-8 \
       --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath [ pkgs.libglvnd pkgs.libx11 pkgs.libxext ]} \
       --set BB_VULKANINFO ${pkgs.vulkan-tools}/bin/vulkaninfo \
+      --run '[ -r "''${SSL_CERT_FILE:-}" ] || export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt; [ -d "''${SSL_CERT_DIR:-}" ] || unset SSL_CERT_DIR' \
   '';
 in
 pkgs.stdenv.mkDerivation {
   pname = "bbport";
   version = "0.1";
   inherit src;
-  nativeBuildInputs = [ pkgs.makeShellWrapper pkgs.wrapGAppsHook4 pkgs.gobject-introspection ];
-  buildInputs = [ pkgs.gtk4 pkgs.libadwaita pkgs.adwaita-icon-theme pkgs.librsvg ]
+  # The hook adds its GTK to the wrapper (typelibs, schemas): ours, not nixpkgs' with GStreamer.
+  nativeBuildInputs = [ pkgs.makeShellWrapper (pkgs.wrapGAppsHook3.override { gtk3 = gtk4; }) pkgs.gobject-introspection ];
+  buildInputs = [ gtk4 libadwaita pkgs.adwaita-icon-theme pkgs.librsvg ]
     ++ map builtins.storePath runtimePaths;
   dontBuild = true;
   dontConfigure = true;
@@ -130,6 +182,20 @@ pkgs.stdenv.mkDerivation {
     install -m755 out/bb-probe $d/bin/bb-probe
     install -m755 out/bb-gpu-capabilities $d/bin/bb-gpu-capabilities
     install -Dm755 out/gpu/libbbgpu.so $d/bin/gpu/libbbgpu.so
+    # Their debug info names the build environment's headers (the full GCC, Vulkan headers): Nix
+    # took those for dependencies, ~300 MB. Symbols stay (crash reports).
+    ${pkgs.binutils-unwrapped}/bin/strip --strip-debug $d/bin/bb-probe $d/bin/bb-gpu-capabilities
+    # The online module (gpu/bbnet), when the build has it.
+    if [ -f out/gpu/libbbnet.so ]; then
+      install -Dm755 out/gpu/libbbnet.so $d/bin/gpu/libbbnet.so
+    fi
+    if [ -f out/libbbport_dlss.so ]; then
+      install -m755 out/libbbport_dlss.so $d/bin/libbbport_dlss.so
+      for ngx in out/libnvidia-ngx-dlss.so.*; do
+        [ -f "$ngx" ] && install -m755 "$ngx" $d/bin/
+      done
+      [ -f out/NVIDIA-DLSS-LICENSE.txt ] && install -m644 out/NVIDIA-DLSS-LICENSE.txt $d/NVIDIA-DLSS-LICENSE.txt
+    fi
     runHook postInstall
   '';
   postFixup = ''

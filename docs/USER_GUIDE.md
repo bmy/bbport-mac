@@ -151,7 +151,8 @@ the Mac plugged in: in Low Power Mode the game runs much slower.
 **The overlay menu** opens with **F1**, **`** or **§** on the keyboard, or **L3+R3** (both stick
 buttons) on a controller. It has the upscaler and preset, sharpening, output resolution, the FPS
 counter and the game effects. Changes to resolution or preset that need it are applied with
-**Apply and restart game**, which restarts the game in place.
+**Apply and restart game**, which restarts the game in place. **Quit game** at the bottom ends
+the game.
 
 **Controllers**: a DualSense or other controller works over USB or Bluetooth. With several
 connected, set `BB_GAMEPAD=` followed by part of the controller's name in *Extra variables*.
@@ -170,8 +171,24 @@ connected, set `BB_GAMEPAD=` followed by part of the controller's name in *Extra
 | Z / C | L3 / R3 |
 | Tab / Backspace | touchpad |
 
+**Mouse**: click into the game window to look around with the mouse. Opening the overlay menu
+(**F1**, **`** or **§**) or switching to another app lets the mouse go; another click takes it
+again. While the game holds the mouse:
+
+| Mouse | PS4 |
+|---|---|
+| left / right button | R1 / L2 |
+| middle button | R3 |
+| side buttons (back / forward) | R2 / L1 |
+| wheel | D-pad up / down (quick items) |
+
+In `bbport.ini`: `mouse_look=0` turns mouse look off, `mouse_sensitivity=` changes the speed
+(1 by default, 0.05 to 20), `mouse_invert_y=1` inverts up and down.
+
 **Remapping**: add lines to `bbport.ini` (Help ▸ Show the Data Folder), one per PS4 input, using
 SDL's names for keys and controller buttons: for example `key.cross=Space` or `pad.circle=b`.
+Mouse buttons and the wheel are `Mouse Left`, `Mouse Right`, `Mouse Middle`, `Mouse X1`,
+`Mouse X2`, `Wheel Up` and `Wheel Down`, for example `key.r1=Mouse Left`.
 Several bindings for one input are separated by commas. Inputs without a line keep the defaults
 above.
 

@@ -16,10 +16,10 @@ upscaling up to 4K.
 
 ## Status (October 2026)
 
-**Experimental, playable.** Based on bbport 0.4.
+**Experimental, playable.** Based on bbport 0.51 (online play isn't available on the Mac yet).
 
 - The whole game boots, plays, saves and loads, with sound, cutscenes, a DualSense or other
-  controller, or the keyboard.
+  controller, or the keyboard and mouse.
 - **About 45–60 FPS** at 1440p with FSR 3.1 (Native AA) on an M5 Max; a 30 FPS lock holds
   everywhere. Busy areas are the slow ones.
 - 60 FPS (community patch), output up to 4K, FSR 3.1, TAA and experimental MetalFX, the in-game

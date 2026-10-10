@@ -46,9 +46,13 @@ template <typename... Args>
 void Log(int warning, const char* format, Args... args) {
     if (!state.log)
         return;
-    std::array<char, 1024> text{};
-    std::snprintf(text.data(), text.size(), format, args...);
-    state.log(warning, text.data());
+    if constexpr (sizeof...(Args) == 0) {
+        state.log(warning, format); // a plain message (no format string without arguments)
+    } else {
+        std::array<char, 1024> text{};
+        std::snprintf(text.data(), text.size(), format, args...);
+        state.log(warning, text.data());
+    }
 }
 
 bool Check(const char* operation, NVSDK_NGX_Result result) {

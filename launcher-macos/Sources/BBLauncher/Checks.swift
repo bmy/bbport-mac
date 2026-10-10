@@ -27,8 +27,9 @@ private func entries(of folder: URL) -> [URL] {
 
 // MARK: - Game folder
 
-/// Title IDs of Bloodborne (scripts/patches.py BLOODBORNE_IDS).
-let bloodborneTitleIDs: Set<String> = ["CUSA00207", "CUSA00208", "CUSA00900", "CUSA01363", "CUSA03173", "CUSA03023"]
+/// Title IDs of Bloodborne's retail releases (scripts/game_check.py SUPPORTED_TITLES).
+let bloodborneTitleIDs: Set<String> = ["CUSA00900", "CUSA00207", "CUSA00208", "CUSA00299", "CUSA01363",
+                                       "CUSA03179", "CUSA03173", "CUSA03014", "CUSA03023"]
 
 /// String and integer values of a PS4 param.sfo (scripts/prepare.py sfo()).
 func readSFO(_ url: URL) -> [String: String]? {
@@ -183,7 +184,7 @@ private func child(_ folder: URL, _ name: String) -> URL {
 /// mods.py content_root() != None: a layout run.sh accepts.
 private func hasModLayout(_ folder: URL, depth: Int = 0) -> Bool {
     guard depth < 8, isDirectory(folder) else { return false }
-    for wrapper in ["", "app0", "CUSA03173"] {
+    for wrapper in [""] + ["app0"] + bloodborneTitleIDs.sorted() {
         let base = wrapper.isEmpty ? folder : child(folder, wrapper)
         if isDirectory(child(base, "dvdroot_ps4")) { return true }
     }

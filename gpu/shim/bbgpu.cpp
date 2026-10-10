@@ -507,6 +507,31 @@ extern "C" int bbgpu_overlay_captures_input(void) {
     return BbOverlay::CapturesInput() ? 1 : 0;
 }
 
+extern "C" void bbgpu_mouse_take(double* dx, double* dy, int* wheel_up, int* wheel_down) {
+    double x = 0, y = 0;
+    int up = 0, down = 0;
+    if (g_window) {
+        g_window->TakeMouse(x, y, up, down);
+    }
+    *dx = x;
+    *dy = y;
+    *wheel_up = up;
+    *wheel_down = down;
+}
+
+extern "C" int bbgpu_mouse_captured(void) {
+    return g_window && g_window->MouseCaptured() ? 1 : 0;
+}
+
+extern "C" uint32_t bbgpu_mouse_buttons(void) {
+    return bbgpu_mouse_captured() && SDL_WasInit(SDL_INIT_VIDEO) ? SDL_GetMouseState(nullptr, nullptr)
+                                                                 : 0;
+}
+
+extern "C" void bbgpu_mouse_look_enable(int enabled) {
+    Frontend::WindowSDL::EnableMouseLook(enabled != 0);
+}
+
 extern "C" int bbgpu_text_input_begin(const char* initial, const char* prompt) {
     if (BbRemote::FrontActive()) {
         return BbRemote::Front::TextInputBegin(initial, prompt);

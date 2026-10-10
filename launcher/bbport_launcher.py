@@ -19,7 +19,6 @@ import time
 from pathlib import Path
 from bbport_assets import fsr411_problem
 from bbport_i18n import language, set_language, tr
-from bbport_vulkan import pc_model_gpu
 
 import gi
 
@@ -38,15 +37,14 @@ DATA_DIR = Path(os.environ.get("BB_DATA_DIR", PORT_DIR))
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "bbport-launcher"
 CONFIG_FILE = CONFIG_DIR / "settings.json"
 MAX_LOG_LINES = 5000
-# The new memory and translation model runs on AMD GPUs only for now (None: unknown).
-PC_MODEL_GPU = pc_model_gpu()
-PC_MODEL_SUBTITLE = ("Эксперимент, видеокарты AMD и NVIDIA. Видеокарта работает с памятью игры "
-                     "напрямую, как в игре для ПК, а команды графики переводятся, а не "
-                     "эмулируются; возможны ошибки. Если драйвер не проходит проверку при запуске "
-                     "— старая модель. Выключено — старая модель памяти, как в 0.3, "
-                     "со всеми исправлениями")
-PC_MODEL_NO_GPU = ("Только для видеокарт AMD и NVIDIA, а на этом компьютере их нет. Используется "
-                   "старая модель памяти, как в 0.3, со всеми исправлениями")
+# The memory model (run.sh: BB_PC_MODEL): "auto" leaves it to the GPU (the new one on AMD, the
+# 0.3 one elsewhere), or either by hand. The new one goes through the layer's memory module on
+# every GPU (no sparse binding of the game's memory; BB_LAYER_MEMORY=0: AMD's sparse arena).
+PC_MODEL_SUBTITLE = ("Новая: видеокарта работает с памятью игры напрямую, как в игре для ПК, а команды "
+                     "графики переводятся, а не эмулируются. Старая — модель памяти 0.3 со всеми "
+                     "исправлениями. Если драйвер не проходит проверку при запуске — старая")
+MEMORY_MODELS = [("Авто: новая на AMD, старая на других", "auto"), ("Новая", "new"),
+                 ("Старая (как в 0.3)", "old")]
 # FSR 4.1.1 assets built from the user's AMD DLL (tools/fsr4cap, also in the package).
 FSR4CAP_DIR = PORT_DIR / "tools" / "fsr4cap"
 sys.path.insert(0, str(FSR4CAP_DIR))
@@ -140,7 +138,7 @@ DEFAULTS = {
     "frame_stats": False,
     "save_log": False,
     "crash_diag": False,
-    "pc_model": False,
+    "memory_model": "auto",
     "as_0_3": False,
     "gpu_profile": False,
     "vk_validation": False,
@@ -283,10 +281,13 @@ def game_environment(s):
         env["BB_FRAME_STATS"] = "1"
     if s.get("save_log"):
         env["BB_SAVE_LOG"] = "1"
-    # The new memory and translation model (experimental, AMD GPUs only, off by default); the
-    # model of 0.3 with the fixes made since otherwise. "pc_memory", "old_memory_model",
-    # "new_memory_model" and "legacy_memory_model" of older settings are ignored.
-    env["BB_PC_MODEL"] = "1" if s.get("pc_model") and PC_MODEL_GPU is not False else "0"
+    # The memory model: "auto" is run.sh's choice by GPU (the new one on AMD, the 0.3 one
+    # elsewhere). "pc_model", "pc_memory", "old_memory_model", "new_memory_model" and
+    # "legacy_memory_model" of older settings are ignored (0.5: auto for everyone).
+    # BB_PC_MODEL from the shell (or the extra variables) still wins over "auto".
+    model = s.get("memory_model", "auto")
+    if model in ("new", "old"):
+        env["BB_PC_MODEL"] = "1" if model == "new" else "0"
     # Synchronisation and memory as released in 0.3 (run.sh: BB_AS_0_3), for comparisons.
     if s.get("as_0_3"):
         env["BB_AS_0_3"] = "1"
@@ -506,15 +507,11 @@ class LauncherWindow(Adw.ApplicationWindow):
         game.add(self.language_row)
         page.add(game)
 
-        # Off: the memory model of 0.3 (with the fixes made since); on: the new one.
+        # Auto: the new memory model on AMD, the 0.3 one elsewhere; or either by hand.
         mode = Adw.PreferencesGroup(title=tr("Режим работы"))
-        self.pc_model_row = Adw.SwitchRow(
-            title=tr("Новая модель памяти и трансляции"),
-            subtitle=tr(PC_MODEL_SUBTITLE if PC_MODEL_GPU is not False else PC_MODEL_NO_GPU),
-            active=self.settings.get("pc_model", False) and PC_MODEL_GPU is not False)
-        # Without an AMD GPU it shows the mode in use (off); the saved choice is kept.
-        self.pc_model_row.set_sensitive(PC_MODEL_GPU is not False)
-        mode.add(self.pc_model_row)
+        self.memory_model_row = combo_row(tr("Модель памяти и трансляции"), tr(PC_MODEL_SUBTITLE),
+                                          MEMORY_MODELS, self.settings.get("memory_model", "auto"))
+        mode.add(self.memory_model_row)
         page.add(mode)
 
         self.mods_group = Adw.PreferencesGroup(
@@ -836,6 +833,7 @@ class LauncherWindow(Adw.ApplicationWindow):
                 "wrong_eboot": tr("eboot.bin не от версии 1.09: скопируйте eboot.bin из дампа обновления 1.09 в папку игры с заменой"),
                 "other_title": tr("Поддерживается только CUSA03173 с обновлением 1.09 (найдено {})").format(title),
                 "unreadable": tr("eboot.bin не читается как расшифрованный исполняемый файл PS4: сделайте дамп заново"),
+                "damaged_files": tr("Файлы игры повреждены при распаковке: шейдеры не распаковываются, игра зависнет на загрузке. Распакуйте игру и обновление 1.09 заново исправленным инструментом (issue #81)"),
             }[kind]
             self.game_row.set_subtitle(f"{path}\n{tooltip}")
         else:
@@ -939,8 +937,7 @@ class LauncherWindow(Adw.ApplicationWindow):
         s["frame_stats"] = self.stats_row.get_active()
         s["save_log"] = self.save_log_row.get_active()
         s["crash_diag"] = self.crash_diag_row.get_active()
-        if self.pc_model_row.get_sensitive():
-            s["pc_model"] = self.pc_model_row.get_active()
+        s["memory_model"] = combo_value(self.memory_model_row)
         s["as_0_3"] = self.as_0_3_row.get_active()
         s["gpu_profile"] = self.profile_row.get_active()
         s["vk_validation"] = self.validation_row.get_active()

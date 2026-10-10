@@ -100,6 +100,8 @@ public:
     Frame* PrepareBlankFrame(bool present_thread);
 
     void Present(Frame* frame, bool is_reusing_frame = false, bool is_game_frame = true);
+    /// bbport: waits until the GPU has finished the commands that render `frame` (any thread).
+    void WaitRendered(const Frame* frame);
     Frame* PrepareLastFrame();
 
 private:

@@ -141,6 +141,14 @@ inline std::atomic<std::uint64_t> gpu_frames{0};
 inline std::atomic<std::uint64_t> t_resident{0}, t_protect{0}, t_image_create{0}, t_refresh{0},
     t_staging{0}, t_host_wait{0}, t_copy{0}, copy_bytes{0}, t_read_faults{0}, read_faults{0},
     t_write_faults{0}, t_copy_cpu{0}, copy_sys_us{0}, copy_minflt{0};
+/// Layer memory module (BB_LAYER_MEMORY), wall time per kind (ns, inclusive): 0 mprotect for write
+/// traps, 1 promotions, 2 demotions, 3 trap processing, 4 yielding VRAM, 5 volatile refreshes,
+/// 6 republishing paged entries, 7 paged uploads; and the mprotect calls.
+inline std::array<std::atomic<std::uint64_t>, 12> t_layer{};
+/// Page table entries written (blocks); 8-11 of t_layer: their staging request, guest view, mirrors,
+/// copy command.
+inline std::atomic<std::uint64_t> layer_entries_written{0};
+inline std::atomic<std::uint64_t> layer_mprotects{0};
 /// Diagnostics are collected only with BB_FRAME_STATS=1.
 inline const bool enabled = [] {
     const char* env = std::getenv("BB_FRAME_STATS");
@@ -186,6 +194,9 @@ inline std::atomic<std::uint64_t> vk_image_bytes{0};
 inline std::atomic<std::uint64_t> residency_alloc_bytes{0}, residency_unused_bytes{0};
 /// The texture cache collector: the usage it compares, the mark it starts at, images it freed.
 inline std::atomic<std::uint64_t> gc_used_bytes{0}, gc_trigger_bytes{0}, gc_freed_images{0};
+/// Its critical mark (images used a moment ago evicted past it): VRAM copies of the game's
+/// memory stop short of it and yield first (BufferCache::VramPromotionsPaused, LayerProcessIdle).
+inline std::atomic<std::uint64_t> gc_critical_bytes{0};
 /// Seconds of a steady clock, updated at every guest submission (cheap ages for caches).
 inline std::atomic<std::uint32_t> coarse_second{0};
 /// VRAM blocks moved back in place when idle, unbound with the memory the game unmapped, and

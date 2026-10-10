@@ -4,6 +4,7 @@
 // bbport: glue between the C loader and the vendored shadPS4 video core.
 #include "bbport_overlay.h"
 #include "bbport_settings.h"
+#include "game_profile.h"
 #include "bbport_copy.h"
 #include <sys/resource.h>
 #include "bbport_free_check.h"
@@ -296,6 +297,8 @@ static void RunOnMainThread(std::function<void()> task) {
 
 extern "C" int bbgpu_init(const BbGpuConfig* config) {
     BbSettings::Load();
+    // What the translator knows about this game (games/), before anything asks for it.
+    Game::Select(config->serial);
 #ifdef BB_PGO_GENERATE
     StartProfileWriter();
 #endif

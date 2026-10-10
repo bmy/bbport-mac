@@ -69,8 +69,10 @@ constexpr std::array<CallSite, 2> MemcpySites = {{
 }};
 std::array<std::atomic<u64>, MemcpySites.size()> hits{};
 
-/// The game's memcpy at those sites: the copy, then the GPU side is told of the data now there.
+/// The game's memcpy at those sites: the GPU side is told before (its write traps lift: no fault
+/// per page) and after the copy (the data now there), as for file reads.
 void* LoaderCopy(void* dst, const void* src, std::size_t size) {
+    runtime_memory_note_write(reinterpret_cast<u64>(dst), size);
     std::memcpy(dst, src, size);
     runtime_memory_note_write(reinterpret_cast<u64>(dst), size);
     return dst;

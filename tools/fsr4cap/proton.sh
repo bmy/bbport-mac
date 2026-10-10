@@ -43,8 +43,9 @@ steam_tool_dir() {
 }
 
 # Proton builds to try, best first, one folder per line: GE-Proton 10 or newer (newest first),
-# Proton-CachyOS, Valve's Proton - Experimental, Valve's Proton 11.0 and 10.0. Each once, also
-# when reached through a symlink ("Proton-GE Latest").
+# Proton-CachyOS (Steam's or a distribution package under /usr/share/steam), Valve's Proton -
+# Experimental, Valve's Proton 11.0 and 10.0. Each once, also when reached through a symlink
+# ("Proton-GE Latest").
 proton_candidates() {
     if [[ -n ${PROTONPATH:-} ]]; then
         echo "$PROTONPATH"
@@ -56,6 +57,12 @@ proton_candidates() {
         tools+=("$root/compatibilitytools.d")
     done < <(steam_roots)
     tools+=("$HOME/.steam/root/compatibilitytools.d" "$HOME/.local/share/Steam/compatibilitytools.d")
+    # Where Steam also looks: distribution packages (Arch/CachyOS proton-cachyos, Fedora, ...)
+    # install system-wide, and STEAM_EXTRA_COMPAT_TOOLS_PATHS (colon-separated) adds folders.
+    local extra
+    IFS=: read -ra extra <<< "${STEAM_EXTRA_COMPAT_TOOLS_PATHS:-}"
+    tools+=("${extra[@]}" /usr/local/share/steam/compatibilitytools.d
+            /usr/share/steam/compatibilitytools.d)
     {
         # GE-Proton: version order (`ls | tail -1` took GE-Proton9-27 over GE-Proton10-x).
         for root in "${tools[@]}"; do

@@ -449,12 +449,23 @@ static void touch_for_write(void *buffer,uint64_t size) {
         *b=*b;
     }
 }
+/* A page protected again between the touch and the kernel's copy (the GPU side re-arms its write
+ * traps): EFAULT with nothing read. Touched again, the read is tried again a few times. */
+static ssize_t read_retrying(int h,void *buffer,uint64_t size,int64_t offset,int positional) {
+    ssize_t n=-1;
+    for (int attempt=0; attempt<8; ++attempt) {
+        n=positional ? pread(h,buffer,size,offset) : read(h,buffer,size);
+        if (n>=0 || errno!=EFAULT) break;
+        touch_for_write(buffer,size);
+    }
+    return n;
+}
 static int64_t do_read(int fd,void *buffer,uint64_t size) {
     int h=host_fd(fd);
     if (h<0) return -EBADF;
     runtime_memory_note_write((uintptr_t)buffer,size);
     touch_for_write(buffer,size);
-    ssize_t n=read(h,buffer,size);
+    ssize_t n=read_retrying(h,buffer,size,0,0);
     if (n<0) { if (audio_trace()) printf("Audio trace: read(fd %d, %llu) failed, errno %d\n",fd,(unsigned long long)size,errno); return -errno; }
     if (n>0) runtime_memory_note_write((uintptr_t)buffer,(uint64_t)n); /* and once the data is there */
     __atomic_add_fetch(&reads,1,__ATOMIC_RELAXED); __atomic_add_fetch(&bytes_read,(uint64_t)n,__ATOMIC_RELAXED);
@@ -466,16 +477,26 @@ static int64_t do_pread(int fd,void *buffer,uint64_t size,int64_t offset) {
     if (h<0) return -EBADF;
     runtime_memory_note_write((uintptr_t)buffer,size);
     touch_for_write(buffer,size);
-    ssize_t n=pread(h,buffer,size,offset);
+    ssize_t n=read_retrying(h,buffer,size,offset,1);
     if (n<0) { if (audio_trace()) printf("Audio trace: pread(fd %d, %llu @%lld) failed, errno %d\n",fd,(unsigned long long)size,(long long)offset,errno); return -errno; }
     if (n>0) runtime_memory_note_write((uintptr_t)buffer,(uint64_t)n); /* and once the data is there */
     __atomic_add_fetch(&reads,1,__ATOMIC_RELAXED); __atomic_add_fetch(&bytes_read,(uint64_t)n,__ATOMIC_RELAXED);
     trace_read(fd,n);
     return n;
 }
+/* Pages the GPU side keeps without access (data newer in VRAM, runtime_memory_trap reasons from
+ * 16 up) would make the kernel's copy fail with EFAULT: a user-mode read of each page first goes
+ * through the handler, which copies the data back. */
+static void touch_for_read(const void *buffer,uint64_t size) {
+    if (!size) return;
+    uintptr_t p=(uintptr_t)buffer & ~(uintptr_t)4095, end=(uintptr_t)buffer+size;
+    for (; p<end; p+=4096)
+        (void)*(volatile const unsigned char *)(p<(uintptr_t)buffer ? (uintptr_t)buffer : p);
+}
 static int64_t do_write(int fd,const void *buffer,uint64_t size) {
     int h=host_fd_written(fd);
     if (h<0) return -EBADF;
+    touch_for_read(buffer,size);
     ssize_t n=write(h,buffer,size);
     if (n<0) return -errno;
     __atomic_add_fetch(&writes,1,__ATOMIC_RELAXED);
@@ -484,6 +505,7 @@ static int64_t do_write(int fd,const void *buffer,uint64_t size) {
 static int64_t do_pwrite(int fd,const void *buffer,uint64_t size,int64_t offset) {
     int h=host_fd_written(fd);
     if (h<0) return -EBADF;
+    touch_for_read(buffer,size);
     ssize_t n=pwrite(h,buffer,size,offset);
     return n<0 ? -errno : n;
 }

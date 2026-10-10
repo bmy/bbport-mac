@@ -351,11 +351,12 @@ enum class InterruptSelect : u32 {
     IrqUndocumented = 3,
 };
 
+/// bbport: the GPU clock of end-of-pipe timestamps and COPY_DATA, as the CPU writes it: the PS4's
+/// counts at 100 MHz; here the host's monotonic clock in 10 ns ticks (the GPU's own timestamps are
+/// turned into the same time line, vk_timestamps.h). It was the wall clock in nanoseconds.
 static u64 GetGpuClock64() {
-    auto now = std::chrono::high_resolution_clock::now();
-    auto duration = now.time_since_epoch();
-    auto ticks = std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
-    return static_cast<u64>(ticks);
+    const auto now = std::chrono::steady_clock::now().time_since_epoch();
+    return static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(now).count()) / 10;
 }
 
 static u64 GetGpuPerfCounter() {
@@ -1209,22 +1210,23 @@ struct PM4CmdMemSemaphore {
         return sem_sel == Select::SignalSemaphore;
     }
 
+    // bbport: atomic (a signal in stream order comes from the thread that sees the GPU finish).
     [[nodiscard]] bool Signaled() const {
-        return *Address<u64*>() > 0;
+        return __atomic_load_n(Address<u64*>(), __ATOMIC_ACQUIRE) > 0;
     }
 
     void Decrement() const {
-        *Address<u64*>() -= 1;
+        __atomic_fetch_sub(Address<u64*>(), 1, __ATOMIC_ACQ_REL);
     }
 
     void Signal() const {
         auto* ptr = Address<u64*>();
         switch (signal_type) {
         case SignalType::Increment:
-            *ptr += 1;
+            __atomic_fetch_add(ptr, 1, __ATOMIC_ACQ_REL);
             break;
         case SignalType::Write:
-            *ptr = 1;
+            __atomic_store_n(ptr, 1, __ATOMIC_RELEASE);
             break;
         default:
             UNREACHABLE_MSG("Unknown signal type {}", static_cast<u32>(signal_type.Value()));

@@ -3,7 +3,8 @@
  * --gamepads: the connected gamepads, "GUID<tab>name" per line (the launcher's controller list,
  * BB_GAMEPAD). --displays: the monitors, "name<tab>WxH<tab>primary (1 or 0)" per line in SDL's
  * order (the launcher's monitor list, BB_DISPLAY; issue #69). --read-input: one key or button for the
- * launcher's controls (below). */
+ * launcher's controls (below). --device: "vendorID<tab>name" of the GPU the game takes (run.sh:
+ * memory model and driver workarounds by vendor and chip). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -197,6 +198,7 @@ int main(int argc, char **argv) {
         return list_displays();
     }
     const int live_mode = argc > 1 && !strcmp(argv[1], "--live-resolution");
+    const int device_mode = argc > 1 && !strcmp(argv[1], "--device");
     const VkApplicationInfo app = {
         .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
         .pApplicationName = "bbport scene scaling probe",
@@ -239,6 +241,14 @@ int main(int argc, char **argv) {
     } else {
         for (uint32_t i = 1; i < count; ++i)
             if (better_device(devices[i], selected)) selected = devices[i];
+    }
+    if (device_mode) {
+        VkPhysicalDeviceProperties props;
+        vkGetPhysicalDeviceProperties(selected, &props);
+        printf("%#06x\t%s\n", props.vendorID, props.deviceName);
+        free(devices);
+        vkDestroyInstance(instance, NULL);
+        return 0;
     }
     if (live_mode) {
         printf("%d\n", live_resolution_suits(selected));

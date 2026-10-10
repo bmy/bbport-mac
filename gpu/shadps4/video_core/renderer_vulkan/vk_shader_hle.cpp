@@ -9,14 +9,13 @@
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/host_shaders/buffer_multi_copy_comp.h"
+#include "game_profile.h"
 #include "bbport_toggles.h"
 #include "video_core/renderer_vulkan/vk_gpu_profiler.h"
 
 extern std::unique_ptr<AmdGpu::Liverpool> liverpool;
 
 namespace Vulkan {
-
-static constexpr u64 COPY_SHADER_HASH = 0xfefebf9f;
 
 // bbport: the copy shader runs ~57 times per frame with ~1024 small ranges each. As one
 // vkCmdCopyBuffer with that many regions it cost ~37 ns of GPU time per range (~2.1 ms per
@@ -266,15 +265,24 @@ static bool ExecuteCopyShaderHLE(const Shader::Info& info, const AmdGpu::Compute
 
 bool ExecuteShaderHLE(const Shader::Info& info, const AmdGpu::Regs& regs,
                       const AmdGpu::ComputeProgram& cs_program, Rasterizer& rasterizer) {
-    switch (info.pgm_hash) {
-    case COPY_SHADER_HASH: {
+    // The game's buffer copy shader, from its profile (games/); nothing else is replaced.
+    const u64 copy_shader = Game::BufferCopyShader();
+    if (copy_shader != 0 && info.pgm_hash == copy_shader) {
         // bbport: with the game's memory in place the game's shader runs (translated), reading its
         // copy list when the GPU executes it. BB_COPY_SHADER_NATIVE=0: the list read on the CPU
         // when the dispatch is recorded, copies of our own (before). Experiment bit 2 inverts it
-        // while the game runs.
-        static const bool native_env = [] {
+        // while the game runs. The layer's paged stores now write through to guest memory while
+        // keeping the current mirrors in sync, so the original shader is the default here too.
+        static const bool native_env = [copy_shader] {
             const char* env = std::getenv("BB_COPY_SHADER_NATIVE");
-            return !env || env[0] != '0';
+            const bool native = !env || env[0] != '0';
+            const bool translated = VideoCore::GuestInPlace() && native != BbToggle::Experiment(2);
+            std::printf("GPU: buffer copy shader %llx: %s%s (BB_COPY_SHADER_NATIVE=0: HLE)\n",
+                        (unsigned long long)copy_shader,
+                        translated ? "original translated shader" : "HLE",
+                        translated && VideoCore::BufferCache::LayerPagedActive()
+                            ? ", paged writes through to guest memory" : "");
+            return native;
         }();
         if (VideoCore::GuestInPlace() && native_env != BbToggle::Experiment(2)) {
             return false;
@@ -287,9 +295,7 @@ bool ExecuteShaderHLE(const Shader::Info& info, const AmdGpu::Regs& regs,
         buffer_cache.force_writes_in_place = false;
         return done;
     }
-    default:
-        return false;
-    }
+    return false;
 }
 
 } // namespace Vulkan

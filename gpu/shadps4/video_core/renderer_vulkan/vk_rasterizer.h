@@ -219,6 +219,16 @@ public:
     static bool OcclusionTranslated();
     /// ZPASS_DONE events translated so far.
     u64 OcclusionEvents() const;
+    /// bbport BB_GUEST_IN_PLACE (in stream order): the GPU clock (PS4: 100 MHz) written as 64 bits
+    /// at `address` by the GPU, at the end of the pipe or when it gets there (vk_timestamps.h).
+    /// False (the caller writes it with the CPU): BB_GPU_TIMESTAMPS=0, no timestamps, the old model.
+    bool WriteTimestampOnGpu(VAddr address, bool end_of_pipe);
+    /// A fault on a page of occlusion counters watched for the game's first access
+    /// (BB_OCCLUSION_READ_TRACE); false: not such a page.
+    bool OnOcclusionPageAccess(VAddr addr, u64 rip, bool write, bool gpu_thread);
+    /// A CPU access hit a page whose newest data the GPU wrote into a VRAM copy only
+    /// (BB_LAYER_READ_TRAPS): copied back first. False: not such a page.
+    bool OnVramDataAccess(VAddr addr, bool assume_locks);
     /// End of a guest submission: submits the work recorded so far when signals wait for it and
     /// the last submission is BB_HONEST_FLUSH_US (1000) old: the GPU starts on it as the hardware
     /// would, instead of at the end of the frame, and the guest's mid-frame waits end sooner.
@@ -665,6 +675,7 @@ private:
     }
     std::unique_ptr<ConstantRing> constant_ring;
     std::unique_ptr<class OcclusionQueries> occlusion;
+    std::unique_ptr<class GpuTimestamps> timestamps;
     std::unique_ptr<class IndirectGuard> indirect_guard; ///< stage B only (lazily)
     /// Submissions (prepared draws) kept alive until stage B reaches the position.
     std::deque<std::pair<u64, std::shared_ptr<const void>>> pipe_keepalive;

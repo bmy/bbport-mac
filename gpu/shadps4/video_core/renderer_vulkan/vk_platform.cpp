@@ -193,9 +193,9 @@ std::vector<const char*> GetInstanceExtensions(Frontend::WindowSystemType window
         break;
     }
 
-    if (window_type != Frontend::WindowSystemType::Headless) {
-        extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
-    }
+    // The headless renderer creates the same logical device with VK_KHR_swapchain enabled;
+    // its instance dependency is required even when no surface is created by a GPU test.
+    extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
 
     if (EmulatorSettings.IsHdrAllowed()) {
         extensions.push_back(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);

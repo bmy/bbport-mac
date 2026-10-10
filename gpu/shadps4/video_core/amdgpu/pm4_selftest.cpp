@@ -2,6 +2,7 @@
 #include "video_core/amdgpu/pm4_selftest.h"
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -25,6 +26,9 @@ constexpr u32 Pairs = 8; // depth blocks (Liverpool::num_counter_pairs on a base
 constexpr u64 OccVisible = 0x000, OccEmpty = 0x100;
 constexpr u64 CopyImm32 = 0x200, CopyImm64 = 0x208, CopyMem = 0x210, CopyClock = 0x218;
 constexpr u64 CondFalse = 0x300, CondSkipped = 0x304, CondTrue = 0x308, CondRun = 0x30c;
+constexpr u64 SemLabel = 0x380, SemOrdered = 0x388, SemWaited = 0x390, SemAfterWait = 0x398;
+constexpr u32 SemLabelValue = 0x5e5e, SemAfterValue = 0xa11;
+constexpr u64 ClockEop1 = 0x3a0, ClockEop2 = 0x3a8;
 
 struct Builder {
     std::vector<u32> words;
@@ -74,6 +78,26 @@ struct Builder {
         words.push_back(0); // no vertices
         words.push_back(2); // auto index
     }
+    // An end-of-pipe label (32-bit, or the GPU clock; no interrupt): written once the work before
+    // it is done.
+    void EopLabel(VAddr address, u32 value, DataSelect data = DataSelect::Data32Low) {
+        Header(PM4ItOpcode::EventWriteEop, 5);
+        words.push_back(u32(EventType::CacheFlushAndInvTsEvent) |
+                        u32(EventIndex::EopReserved) << 8);
+        words.push_back(u32(address));
+        words.push_back((u32(address >> 32) & 0xffff) | u32(data) << 29);
+        words.push_back(value);
+        words.push_back(0);
+    }
+    // MEM_SEMAPHORE (command processor client, increment): signal, or wait and decrement.
+    void MemSemaphore(VAddr address, bool signal) {
+        Header(PM4ItOpcode::MemSemaphore, 2);
+        words.push_back(u32(address) & ~7u);
+        words.push_back((u32(address >> 32) & 0xff) |
+                        u32(signal ? PM4CmdMemSemaphore::Select::SignalSemaphore
+                                   : PM4CmdMemSemaphore::Select::WaitSemaphore)
+                            << 29);
+    }
 };
 
 struct State {
@@ -84,6 +108,10 @@ struct State {
     u64 skips_before = 0, skips = 0;
     u64 events_before = 0;
     bool failed_setup = false;
+    // MEM_SEMAPHORE order: the label seen when the signal was first seen (probed per submission).
+    bool sem_probe = false, sem_seen = false;
+    u32 sem_label = 0;
+    u64 clock_cpu1 = 0, clock_cpu2 = 0; // the CPU's GPU clock when the timestamps were decoded
 };
 State state;
 
@@ -122,7 +150,7 @@ void Report(const Hooks& hooks) {
         std::printf("PM4 self-test: %-34s %s (%s)\n", name, ok ? "PASS" : "FAIL", detail.c_str());
         failures += ok ? 0 : 1;
     };
-    // Occlusion: a submission with draws, and nothing between two events.
+    // Occlusion: draws across submissions/render-pass cuts, and nothing between two events.
     const auto samples = [&](VAddr results, bool& valid) {
         u64 total = 0;
         valid = true;
@@ -137,7 +165,7 @@ void Report(const Hooks& hooks) {
     const u64 visible = samples(s + OccVisible, valid_visible);
     const u64 empty = samples(s + OccEmpty, valid_empty);
     const u64 events = hooks.occlusion_events() - state.events_before;
-    check("occlusion: samples of a submission", valid_visible && visible > 0,
+    check("occlusion: samples across submissions", valid_visible && visible > 0,
           std::to_string(visible) + " samples, valid " + std::to_string(valid_visible) + ", " +
               std::to_string(events) + " events translated");
     check("occlusion: nothing between two events", valid_empty && empty == 0,
@@ -155,6 +183,31 @@ void Report(const Hooks& hooks) {
                   Read<u32>(s + CondSkipped), Read<u32>(s + CondRun));
     check("COND_EXEC false skips, true runs",
           Read<u32>(s + CondSkipped) == 0 && Read<u32>(s + CondRun) == 0x600du, detail);
+    std::snprintf(detail, sizeof(detail), "signal seen %d, label then %#x",
+                  int(state.sem_seen), state.sem_label);
+    check("MEM_SEMAPHORE signal after earlier work",
+          state.sem_seen && state.sem_label == SemLabelValue, detail);
+    std::snprintf(detail, sizeof(detail), "semaphore %llu, write after the wait %#x",
+                  (unsigned long long)Read<u64>(s + SemWaited), Read<u32>(s + SemAfterWait));
+    check("MEM_SEMAPHORE wait and decrement",
+          Read<u64>(s + SemWaited) == 0 && Read<u32>(s + SemAfterWait) == SemAfterValue, detail);
+    // The GPU clock: 100 MHz, in the CPU's time line (what the GPU wrote lands within 100 ms
+    // of when it was decoded), the interval between the two timestamps as the CPU saw it.
+    const u64 gpu1 = Read<u64>(s + ClockEop1), gpu2 = Read<u64>(s + ClockEop2);
+    const u64 copied = Read<u64>(s + CopyClock);
+    const double gpu_interval = double(gpu2 - gpu1);
+    const double cpu_interval = double(state.clock_cpu2 - state.clock_cpu1);
+    const auto near = [](u64 gpu, u64 cpu) { // 100 MHz: from 1 ms before to 100 ms after
+        return gpu + 100'000 >= cpu && gpu < cpu + 10'000'000;
+    };
+    std::snprintf(detail, sizeof(detail), "%.3f s apart (CPU %.3f s); %+.2f ms, copy %+.2f ms",
+                  gpu_interval / 1e8, cpu_interval / 1e8,
+                  (double(gpu1) - double(state.clock_cpu1)) / 1e5,
+                  (double(copied) - double(state.clock_cpu1)) / 1e5);
+    check("GPU clock: 100 MHz, the CPU's time line",
+          gpu2 > gpu1 && std::abs(gpu_interval - cpu_interval) < 0.05 * cpu_interval &&
+              near(gpu1, state.clock_cpu1) && near(copied, state.clock_cpu1),
+          detail);
     std::snprintf(detail, sizeof(detail), "%llu of 4 predicated draws skipped, 2 expected",
                   (unsigned long long)state.skips);
     check("SET_PREDICATION zpass and bool32", state.skips == 2, detail);
@@ -179,6 +232,17 @@ Injection Next(u32 num_dwords, const Hooks& hooks) {
     }
     s.before.words.clear();
     s.after.words.clear();
+    if (s.sem_probe) {
+        // The label first, the signal after it; the signal never seen before the label.
+        const u64 signal = __atomic_load_n(reinterpret_cast<const u64*>(s.scratch + SemOrdered),
+                                           __ATOMIC_ACQUIRE);
+        if (signal != 0) {
+            s.sem_label = __atomic_load_n(reinterpret_cast<const u32*>(s.scratch + SemLabel),
+                                          __ATOMIC_ACQUIRE);
+            s.sem_seen = true;
+            s.sem_probe = false;
+        }
+    }
     if (s.failed_setup || s.step > 6 || now - s.first < std::chrono::seconds(40) ||
         now - s.last_step < std::chrono::seconds(1)) {
         return {};
@@ -206,13 +270,13 @@ Injection Next(u32 num_dwords, const Hooks& hooks) {
         s.events_before = hooks.occlusion_events();
         break;
     case 1:
-        if (num_dwords < 1024 && now - s.last_step < std::chrono::seconds(4)) {
-            return {}; // a submission with draws, if one comes
-        }
+        // A large PM4 submission can contain only compute/state commands. Keep this interval
+        // open until the next timed step instead: actual draws and multiple pass/command-buffer
+        // boundaries occur meanwhile, irrespective of how the label backend cuts rendering.
         s.before.Zpass(base + OccVisible);
-        s.after.Zpass(base + OccVisible + 8);
         break;
     case 2:
+        s.before.Zpass(base + OccVisible + 8);
         s.before.Zpass(base + OccEmpty);
         s.before.Zpass(base + OccEmpty + 8);
         break;
@@ -231,6 +295,11 @@ Injection Next(u32 num_dwords, const Hooks& hooks) {
         s.after.WriteData(base + CondTrue, 1);
         s.after.CondExec(base + CondTrue, 5);
         s.after.WriteData(base + CondRun, 0x600d);
+        s.clock_cpu1 = GetGpuClock64();
+        s.after.EopLabel(base + ClockEop1, 0, DataSelect::GpuClock64);
+        s.after.EopLabel(base + SemLabel, SemLabelValue);
+        s.after.MemSemaphore(base + SemOrdered, true);
+        s.sem_probe = true;
         break;
     case 4:
         s.skips_before = hooks.predicated_skips();
@@ -246,6 +315,11 @@ Injection Next(u32 num_dwords, const Hooks& hooks) {
         break;
     case 5:
         s.skips = hooks.predicated_skips() - s.skips_before;
+        s.clock_cpu2 = GetGpuClock64();
+        s.after.EopLabel(base + ClockEop2, 0, DataSelect::GpuClock64);
+        s.after.MemSemaphore(base + SemWaited, true);
+        s.after.MemSemaphore(base + SemWaited, false); // waits for the signal, then decrements
+        s.after.WriteData(base + SemAfterWait, SemAfterValue);
         break;
     case 6:
         Report(hooks);

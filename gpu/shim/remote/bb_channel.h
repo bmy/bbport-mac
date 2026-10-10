@@ -228,6 +228,9 @@ public:
         const std::uint64_t head = c.head.load(std::memory_order_acquire);
         const std::uint64_t available = head - tail;
         const std::uint32_t offset = static_cast<std::uint32_t>(tail % RingBytes);
+        if (offset % 8 != 0) { // positions are shared memory too
+            Corrupt("misaligned ring position");
+        }
         const std::uint8_t* ring = layout->rings[In()];
         std::uint32_t first_word;
         std::memcpy(&first_word, ring + offset, sizeof(first_word));
@@ -308,6 +311,9 @@ private:
         std::scoped_lock lock{write_mutex};
         std::uint64_t head = c.head.load(std::memory_order_relaxed);
         const std::uint32_t offset = static_cast<std::uint32_t>(head % RingBytes);
+        if (offset % 8 != 0) { // positions are shared memory too
+            Corrupt("misaligned ring position");
+        }
         // A message never wraps: the rest of the ring is skipped (a zero size says so).
         const std::uint32_t skip = offset + total > RingBytes ? RingBytes - offset : 0;
         WaitUntil(c.space_word, c.space_sleepers, [&] {

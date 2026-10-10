@@ -276,6 +276,11 @@ void MapMemory(const MapArgs& args) {
         std::fprintf(stderr, "GPU process: refused a mapping over the control block\n");
         return;
     }
+    if (!(args.flags & MapUnshared) &&
+        (args.offset > g.pool_bytes || args.size > g.pool_bytes - args.offset)) {
+        std::fprintf(stderr, "GPU process: refused a mapping past the end of the shared pool\n");
+        return;
+    }
     if (args.kind == MapShared && args.address < GuestBegin &&
         MirrorFor(args.address).Overlaps(args.address, args.size)) {
         if (!MapAlias(args)) {

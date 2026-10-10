@@ -213,6 +213,21 @@ else
     bash build.sh
     probe=${BB_PROBE:-out/bb-probe}  # BB_PROBE: a wrapper (gdb) around it
 fi
+# Online play (BB_ONLINE=1, launcher: Online; the online module gpu/bbnet): the game's own server
+# goes to the community server, summon signs to the shadNet WebAPI (scripts/online.py).
+if [[ ${BB_ONLINE:-0} == 1 && -f scripts/online.py ]]; then
+    export BB_SHADNET_SERVER=${BB_SHADNET_SERVER:-srv.shadps4.net:31313}
+    # HTTPS needs CA certificates: OpenSSL from Nix looks only in its own store path (the
+    # packaged wrapper brings a bundle; from source the system's is taken).
+    if [[ ! -r ${SSL_CERT_FILE:-} ]]; then
+        for bundle in "${NIX_SSL_CERT_FILE:-}" /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/cert.pem /etc/ssl/ca-bundle.pem; do
+            [[ -n $bundle && -r $bundle ]] && { export SSL_CERT_FILE=$bundle; break; }
+        done
+    fi
+    [[ -n ${BB_SHADNET_WEBAPI:-} ]] || export BB_SHADNET_WEBAPI=http://${BB_SHADNET_SERVER%:*}:31315
+    SHADPS4_HTTP_HOST_OVERRIDES_JSON=$("$PYTHON" scripts/online.py overrides --user "${BB_USER_DIR:-$data/user}") || true
+    export SHADPS4_HTTP_HOST_OVERRIDES_JSON
+fi
 probe_args=("$out/boot-linked.bin" --content-profile "$out/content.bin" --patches "$out/patches.bin" --app0 "$game" --user "${BB_USER_DIR:-$data/user}" --timeout "${BB_TIMEOUT:-0}" "$@")
 if [[ -n ${mod_game:-} ]]; then
     "$probe" "${probe_args[@]}" &

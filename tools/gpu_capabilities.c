@@ -112,7 +112,8 @@ static int list_displays(void) {
     return 0;
 }
 
-/* --read-input key|pad: a small window; prints "key <SDL key name>" or "pad <SDL button name>"
+/* --read-input key|pad: a small window; prints "key <SDL key name>" ("Mouse Left", "Wheel Up", ...
+ * for the mouse) or "pad <SDL button name>"|pad: a small window; prints "key <SDL key name>" or "pad <SDL button name>"
  * (lefttrigger/righttrigger for the triggers) for the first key or gamepad button pressed, the
  * names bbport.ini's key.* and pad.* lines take. Escape, closing it or 15 s: nothing. */
 static int read_input(const char *kind) {
@@ -123,8 +124,8 @@ static int read_input(const char *kind) {
     }
     SDL_Window *window = NULL;
     SDL_Renderer *renderer = NULL;
-    const char *prompt = want_key && want_pad ? "Press a key or a gamepad button"
-                         : want_key           ? "Press a key"
+    const char *prompt = want_key && want_pad ? "Press a key, a mouse button or a gamepad button"
+                         : want_key           ? "Press a key or a mouse button"
                                               : "Press a gamepad button";
     if (!SDL_CreateWindowAndRenderer("bbport", 520, 90, 0, &window, &renderer)) {
         fprintf(stderr, "read-input: %s\n", SDL_GetError());
@@ -159,6 +160,21 @@ static int read_input(const char *kind) {
                     done = 1;
                 } else if (want_key) {
                     printf("key %s\n", SDL_GetScancodeName(e.key.scancode));
+                    done = 1;
+                }
+                break;
+            case SDL_EVENT_MOUSE_BUTTON_DOWN: /* the names runtime_pad.c's key.* lines take */
+                if (want_key && e.button.button >= SDL_BUTTON_LEFT && e.button.button <= SDL_BUTTON_X2) {
+                    static const char *const names[] = {"", "Mouse Left", "Mouse Middle", "Mouse Right",
+                                                        "Mouse X1", "Mouse X2"};
+                    printf("key %s\n", names[e.button.button]);
+                    done = 1;
+                }
+                break;
+            case SDL_EVENT_MOUSE_WHEEL:
+                if (want_key && e.wheel.y != 0) {
+                    const float y = e.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -e.wheel.y : e.wheel.y;
+                    printf("key %s\n", y > 0 ? "Wheel Up" : "Wheel Down");
                     done = 1;
                 }
                 break;

@@ -34,7 +34,6 @@ name=bbport-mac-$version
 stage=$repo/out/package
 top=$stage/$name
 app=$top/bbport.app
-[[ $stage == "$repo/out/package" && $app == "$stage/"*/bbport.app ]] || die "unexpected staging path $stage"
 rm -rf "$stage"
 mkdir -p "$top"
 

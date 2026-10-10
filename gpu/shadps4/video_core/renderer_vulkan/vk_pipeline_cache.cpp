@@ -287,6 +287,58 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(PipelineSelection& se
     return info;
 }
 
+// bbport (macOS): defined before the constructor, which destroys `compiler` if it throws: libc++
+// needs the complete type there.
+/// bbport BB_ASYNC_PIPELINES: worker threads creating graphics pipelines (the driver's compile,
+/// vkCreateGraphicsPipelines, with its own VkPipelineCache synchronization). Jobs run in order.
+class PipelineCompiler {
+public:
+    explicit PipelineCompiler(u32 threads) {
+        for (u32 i = 0; i < threads; ++i) {
+            workers.emplace_back([this] { Run(); });
+        }
+    }
+    ~PipelineCompiler() {
+        {
+            std::scoped_lock lk{mutex};
+            stop = true;
+        }
+        cv.notify_all();
+        for (auto& worker : workers) {
+            worker.join();
+        }
+    }
+    void Submit(std::function<void()> job) {
+        {
+            std::scoped_lock lk{mutex};
+            jobs.push_back(std::move(job));
+        }
+        cv.notify_one();
+    }
+
+private:
+    void Run() {
+        for (;;) {
+            std::function<void()> job;
+            {
+                std::unique_lock lk{mutex};
+                cv.wait(lk, [&] { return stop || !jobs.empty(); });
+                if (jobs.empty()) {
+                    return; // stopping, every job done
+                }
+                job = std::move(jobs.front());
+                jobs.pop_front();
+            }
+            job();
+        }
+    }
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::deque<std::function<void()>> jobs;
+    std::vector<std::thread> workers;
+    bool stop = false;
+};
+
 PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
                              AmdGpu::Liverpool* liverpool_, u32 sparse_page_shift)
     : instance{instance_}, scheduler{scheduler_}, liverpool{liverpool_},
@@ -367,55 +419,6 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
     pipeline_cache = std::move(cache);
 }
 
-/// bbport BB_ASYNC_PIPELINES: worker threads creating graphics pipelines (the driver's compile,
-/// vkCreateGraphicsPipelines, with its own VkPipelineCache synchronization). Jobs run in order.
-class PipelineCompiler {
-public:
-    explicit PipelineCompiler(u32 threads) {
-        for (u32 i = 0; i < threads; ++i) {
-            workers.emplace_back([this] { Run(); });
-        }
-    }
-    ~PipelineCompiler() {
-        {
-            std::scoped_lock lk{mutex};
-            stop = true;
-        }
-        cv.notify_all();
-        for (auto& worker : workers) {
-            worker.join();
-        }
-    }
-    void Submit(std::function<void()> job) {
-        {
-            std::scoped_lock lk{mutex};
-            jobs.push_back(std::move(job));
-        }
-        cv.notify_one();
-    }
-
-private:
-    void Run() {
-        for (;;) {
-            std::function<void()> job;
-            {
-                std::unique_lock lk{mutex};
-                cv.wait(lk, [&] { return stop || !jobs.empty(); });
-                if (jobs.empty()) {
-                    return; // stopping, every job done
-                }
-                job = std::move(jobs.front());
-                jobs.pop_front();
-            }
-            job();
-        }
-    }
-    std::mutex mutex;
-    std::condition_variable cv;
-    std::deque<std::function<void()>> jobs;
-    std::vector<std::thread> workers;
-    bool stop = false;
-};
 
 struct PipelineCache::PendingPipeline {
     std::mutex mutex;

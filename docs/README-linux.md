@@ -21,7 +21,9 @@ directly on the PC:
 One step remains to the full Wine + DXVK model: the new model on NVIDIA as well, then removing the
 old memory model (see below).
 
-> **No game files are included.** You need your own dump of Bloodborne (CUSA03173, v1.09).
+> **No game files are included.** You need your own dump of Bloodborne with update 1.09: any retail
+> release (CUSA00900 in the US, CUSA03173 for the European Game of the Year edition, ...), as they
+> share the same executable.
 > This project is not affiliated with Sony Interactive Entertainment, FromSoftware or AMD.
 
 **Status: experimental, playable.** The game boots, loads saves and plays (the Hunter's Dream
@@ -143,7 +145,10 @@ neither has nor includes.
 - Your decrypted game dump: the `CUSA03173` folder (eboot.bin, sce_module, ...), version 1.09.
   A dumped update is a separate folder: copy it over the base game, replacing files. The base
   game alone (1.00) crashes at start (guest offset 0x20348b8); the launcher and `run.sh` check
-  the executable and say what is missing (`BB_SKIP_GAME_CHECK=1` skips the check).
+  the executable and say what is missing (`BB_SKIP_GAME_CHECK=1` skips the check). The other
+  retail releases (the US `CUSA00900`, the Asian `CUSA03023`, ...) run the same 1.09 executable. Some dumps ship it
+  with Lance McDonald's 60 fps patch baked in, which crashes when the gestures menu opens: the
+  check asks for a clean eboot.bin then (bbport has its own 60 fps).
 - To build: GCC, CMake, Ninja, Python 3, glslang, SDL3, Vulkan headers and the libraries in
   `shell.nix`. With [Nix](https://nixos.org) everything comes from `shell.nix` automatically.
 
@@ -259,6 +264,13 @@ DLSS gets the inputs FSR 3.1 gets (scene color, depth, motion vectors, jitter). 
 libraries, on other GPUs or with `BB_DLSS=0` it is listed as unavailable, and a DLSS setting falls
 back to FSR 3.1.
 
+The AppImage built with `DLSS_SDK_ROOT` carries the bridge and NVIDIA's library (NVIDIA's RTX SDK
+license allows that in an application; its text is `NVIDIA-DLSS-LICENSE.txt` in the package). A
+newer `libnvidia-ngx-dlss.so.<version>` (from the SDK's `lib/Linux_x86_64/rel`) is chosen in the
+launcher: *Upscaler → DLSS: NVIDIA's library → Choose a file…*, as the FSR 4.1.1 DLL; it is
+copied to `<user>/dlss/`, which the game prefers. A game's `nvngx_dlss.dll` is the Windows
+library: NVIDIA's Linux driver does not load it.
+
 From source the script takes its tools from the system (MinGW GCC, CMake, Ninja, Python 3,
 SPIRV-Tools, Git) or from Nix; the AppImage has them prebuilt.
 
@@ -337,6 +349,14 @@ matrices), `BB_READBACKS=0|1|2` (reads of GPU-written memory by the game: 1 by d
 precise and slow, 0 off).
 More in [docs/](docs); recent changes: [docs/CHANGES_0.4.md](docs/CHANGES_0.4.md) (in Russian),
 [docs/CHANGES_2026-10-06.md](docs/CHANGES_2026-10-06.md).
+
+**Online play (shadNet).** A separate module, `out/gpu/libbbnet.so` (`gpu/bbnet`: shadPS4's network
+and PSN libraries from shadp2p, a shadPS4 fork, with the shadNet client), built when protobuf,
+nlohmann_json, OpenSSL, zlib and miniupnpc are there (`shell.nix`) and included in the AppImage.
+The launcher's *Online* page turns it on (`BB_ONLINE=1`): messages, bloodstains and ghosts come
+from The Hunter's Dream, bells and summons go through a shadNet server (`srv.shadps4.net:31313` by
+default) with a shadNet account (Online ID and password). Offline the module is never loaded; a
+build without it plays offline only.
 
 ## Repository layout
 

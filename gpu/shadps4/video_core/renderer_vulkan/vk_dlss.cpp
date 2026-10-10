@@ -88,6 +88,39 @@ Module LoadModule(const std::filesystem::path& path) {
 void* FindSymbol(Module module, const char* name) {
     return dlsym(module, name);
 }
+/// The player's DLSS folder (<user>/dlss, BB_GPU_USER_DIR; beside bb-probe without it): NGX's
+/// logs, and NVIDIA's library when the player chose one in the launcher (newer than the package's,
+/// or the only one: the package may come without it).
+std::filesystem::path UserDlssDirectory() {
+    if (const char* user = std::getenv("BB_GPU_USER_DIR"); user && user[0]) {
+        std::error_code error;
+        const auto absolute = std::filesystem::absolute(std::filesystem::path{user} / "dlss", error);
+        return error ? std::filesystem::path{user} / "dlss" : absolute;
+    }
+    return ExecutableDirectory() / "dlss";
+}
+
+/// Where NVIDIA's DLSS library is: the player's own first, then beside bb-probe; empty: nowhere.
+std::filesystem::path NgxDirectory() {
+    for (const auto& directory : {UserDlssDirectory(), ExecutableDirectory()}) {
+        if (HasNgx(directory)) {
+            return directory;
+        }
+    }
+    return {};
+}
+
+/// Where the bridge is: beside bb-probe (the package, a build with DLSS_SDK_ROOT), else the
+/// player's DLSS folder; empty: nowhere.
+std::filesystem::path BridgeDirectory() {
+    for (const auto& directory : {ExecutableDirectory(), UserDlssDirectory()}) {
+        std::error_code error;
+        if (std::filesystem::is_regular_file(directory / BridgeName, error)) {
+            return directory;
+        }
+    }
+    return {};
+}
 #endif
 
 void BridgeLog(int warning, const char* message) {
@@ -140,8 +173,7 @@ Dlss* Dlss::Get() {
         if (setting && setting[0] == '0') {
             return nullptr;
         }
-        const auto directory = ExecutableDirectory();
-        if (!std::filesystem::is_regular_file(directory / BridgeName) || !HasNgx(directory)) {
+        if (BridgeDirectory().empty()) {
             return nullptr;
         }
         auto* created = new Dlss;
@@ -157,8 +189,7 @@ Dlss* Dlss::Get() {
 }
 
 Dlss::Dlss() : impl{std::make_unique<Impl>()} {
-    const auto directory = ExecutableDirectory();
-    impl->module = LoadModule(directory / BridgeName);
+    impl->module = LoadModule(BridgeDirectory() / BridgeName);
     const auto get_api =
         impl->module ? reinterpret_cast<BbDlssGetApiFn>(FindSymbol(impl->module, "BbDlssGetApi"))
                      : nullptr;
@@ -167,14 +198,17 @@ Dlss::Dlss() : impl{std::make_unique<Impl>()} {
         impl->Disable("the DLSS bridge library is missing or from another version");
         return;
     }
-    // NGX writes its logs and model updates here: beside the saves and shader caches.
-    std::filesystem::path data = directory / "dlss";
-    if (const char* user = std::getenv("BB_GPU_USER_DIR"); user && user[0]) {
-        data = std::filesystem::path{user} / "dlss";
+    const auto ngx = NgxDirectory();
+    if (ngx.empty()) {
+        impl->Disable("NVIDIA's DLSS library is missing: choose it in the launcher (Upscaler)");
+        return;
     }
+    // NGX writes its logs and model updates here: beside the saves and shader caches.
+    const auto data = UserDlssDirectory();
     std::error_code error;
     std::filesystem::create_directories(data, error);
-    if (!impl->api->Configure(directory.wstring().c_str(), data.wstring().c_str(), BridgeLog)) {
+    std::printf("DLSS: NVIDIA's library from %s\n", ngx.string().c_str());
+    if (!impl->api->Configure(ngx.wstring().c_str(), data.wstring().c_str(), BridgeLog)) {
         impl->Disable("bridge configuration failed");
     }
 }

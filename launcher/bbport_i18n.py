@@ -82,8 +82,10 @@ EN = {
         "The 1.09 update is needed: copy the dumped 1.09 update into the game folder, replacing files (found version {})",
     "eboot.bin не от версии 1.09: скопируйте eboot.bin из дампа обновления 1.09 в папку игры с заменой":
         "eboot.bin is not from 1.09: copy eboot.bin from the dumped 1.09 update into the game folder, replacing it",
-    "Поддерживается только CUSA03173 с обновлением 1.09 (найдено {})":
-        "Only CUSA03173 with update 1.09 is supported (found {})",
+    "Это не магазинное издание Bloodborne (найдено {}): нужен Bloodborne любого региона с обновлением 1.09":
+        "Not a retail release of Bloodborne (found {}): Bloodborne from any region with update 1.09 is needed",
+    "eboot.bin с вшитым патчем 60 FPS от Lance McDonald: из-за него игра падает в меню жестов. Скопируйте чистый eboot.bin из дампа обновления 1.09 в папку игры с заменой":
+        "This eboot.bin has Lance McDonald's 60 fps patch baked in, which crashes the game in the gestures menu: copy a clean eboot.bin from the dumped 1.09 update into the game folder, replacing it",
     "eboot.bin не читается как расшифрованный исполняемый файл PS4: сделайте дамп заново":
         "eboot.bin cannot be read as a decrypted PS4 executable: dump the game again",
     "Файлы игры повреждены при распаковке: шейдеры не распаковываются, игра зависнет на загрузке. Распакуйте игру и обновление 1.09 заново исправленным инструментом (issue #81)":
@@ -197,6 +199,59 @@ EN = {
         "Build FSR 4.1.1 from amd_fidelityfx_upscaler_dx12.dll 4.1.x (OptiScaler: the FSR4_LATEST folder, or from a game with FSR 4.1). Needs GE-Proton 10+, Proton Experimental or Proton-CachyOS; 2–5 minutes (RDNA4: twice as long, with the FP8 variant)",
     "Сборка не удалась (код {}): подробности в журнале": "The build failed (code {}): details in the log",
     "Сглаживание в разрешении вывода без модели FSR": "Anti-aliasing at the output resolution, no FSR model",
+    "DLSS найден (нужна видеокарта NVIDIA RTX)": "DLSS found (needs an NVIDIA RTX GPU)",
+    # Online page (from the Linux co-op fork)
+    "Эта сборка без модуля онлайна (libbbnet.so): игра только офлайн": "This build has no online module (libbbnet.so): offline play only",
+    'Online ID — это имя учётной записи (NPID), зарегистрированное на сервере, а не адрес email': 'The Online ID is the account name (NPID) you registered on the server, not your email address',
+    'UPnP (открыть порт на роутере автоматически)': 'UPnP (open a port on the router automatically)',
+    'srv.shadps4.net:31313 — публичный сервер shadPS4. Для частного сервера укажите host:port от его владельца. WebAPI: оставьте пустым, тогда берётся адрес сервера с портом 31315': "srv.shadps4.net:31313 is shadPS4's public server. For a private server, enter host:port from the person who runs it. WebAPI: leave it empty to use the server address with port 31315",
+    'Адрес WebAPI': 'WebAPI address',
+    'Адрес сервера': 'Server address',
+    'Выключено: игра остаётся офлайн, как раньше': 'Off: the game stays offline, as before',
+    'Выключите при Tailscale или другом VPN': 'Turn it off with Tailscale or another VPN',
+    'Играть онлайн': 'Play online',
+    'Играть офлайн': 'Play offline',
+    'Игровой сервер': 'Game server',
+    'Игровой сервер (сообщения, пятна крови, призраки)': 'Game server (messages, bloodstains, ghosts)',
+    'Имя учётной записи shadNet, не email. Зарегистрируйтесь на shadnet.shadps4.net или спросите владельца частного сервера. Пароль хранится на этом компьютере вместе с настройками лаунчера': 'Your shadNet account name, not your email. Register at shadnet.shadps4.net or ask the owner of a private server. The password is saved on this computer with the launcher settings',
+    'Онлайн': 'Online',
+    'Отмена': 'Cancel',
+    'Пароль': 'Password',
+    'Проверить': 'Test',
+    'Проверить соединение': 'Test the connection',
+    'Проверка…': 'Checking…',
+    'Сервер shadNet': 'shadNet server',
+    'Сервер кооператива (колокола и призывы)': 'Co-op server (bells and summons)',
+    'Соединение': 'Connection',
+    "Сообщения, пятна крови и призраки приходят с The Hunter's Dream; колокола и призывы идут через сервер shadNet. Игра по сети совместима с версией для Windows: нужны версия игры 1.09 и тот же сервер": "Messages, bloodstains and ghosts come from The Hunter's Dream; bells and summons go through a shadNet server. Online play works together with the Windows version: everyone needs game version 1.09 and the same server",
+    'У всех в сессии должны быть одна версия игры (1.09) и один сервер. Читы меняют игру и для других игроков: выключайте их при совместной игре': 'Everyone in a session needs the same game version (1.09) and the same server. Cheats change the game for the other players too: turn them off when you play together',
+    'Учётная запись': 'Account',
+    'Учётная запись для игры онлайн указана, но «Играть онлайн» выключено': 'An online account is filled in, but “Play online” is off',
+    'доступен': 'reachable',
+    'недоступен': 'not reachable',
+    "DLSS: библиотека NVIDIA": "DLSS: NVIDIA's library",
+    "Выбрать файл…": "Choose a file…",
+    "Убрать выбранную": "Remove the chosen one",
+    "Своя: {}": "Your own: {}",
+    "Из сборки: {}": "From this build: {}",
+    "Нет: выберите libnvidia-ngx-dlss.so.* из DLSS SDK NVIDIA ({})": "None: choose libnvidia-ngx-dlss.so.* from NVIDIA's DLSS SDK ({})",
+    "Эта сборка без моста DLSS (libbbport_dlss.so): DLSS работать не будет": "This build has no DLSS bridge (libbbport_dlss.so): DLSS will not work",
+    "Библиотека DLSS NVIDIA (libnvidia-ngx-dlss.so.*)": "NVIDIA's DLSS library (libnvidia-ngx-dlss.so.*)",
+    "Нужна библиотека для Linux": "A Linux library is needed",
+    "{} — библиотека DLSS для Windows; на Linux NVIDIA её не загружает. Нужна libnvidia-ngx-dlss.so.<версия> из DLSS SDK NVIDIA: {}":
+        "{} is the Windows DLSS library; NVIDIA's Linux driver does not load it. libnvidia-ngx-dlss.so.<version> from NVIDIA's DLSS SDK is needed: {}",
+    "Не удалось прочитать файл": "Could not read the file",
+    "Это не библиотека DLSS": "This is not the DLSS library",
+    "Нужен файл libnvidia-ngx-dlss.so.<версия> из DLSS SDK NVIDIA: {}": "libnvidia-ngx-dlss.so.<version> from NVIDIA's DLSS SDK is needed: {}",
+    "Не удалось скопировать библиотеку": "Could not copy the library",
+    "DLSS {}: готово": "DLSS {}: ready",
+    "Клавиатура и мышь": "Keyboard and mouse",
+    "Камера мышью": "Mouse look",
+    "Щелчок в окне игры захватывает мышь, F1 — отпускает": "A click in the game window takes the mouse, F1 releases it",
+    "Чувствительность мыши": "Mouse sensitivity",
+    "Инвертировать мышь по вертикали": "Invert mouse Y axis",
+    "DLSS не найден: выберите библиотеку NVIDIA ниже (и нужна сборка с мостом DLSS). Игра включит FSR 3.1":
+        "DLSS not found: choose NVIDIA's library below (a build with the DLSS bridge is needed too). The game will use FSR 3.1",
     "Нет или повреждён файл {}": "Missing or damaged file {}",
     # Effects
     "Эффекты игры": "Game effects",
@@ -547,8 +602,10 @@ ZH_CN = {
         "需要 1.09 更新：请将转储出的 1.09 更新文件复制到游戏文件夹并覆盖（当前检测到版本 {}）",
     "eboot.bin не от версии 1.09: скопируйте eboot.bin из дампа обновления 1.09 в папку игры с заменой":
         "eboot.bin 不是 1.09 版本：请将 1.09 更新转储中的 eboot.bin 复制到游戏文件夹并覆盖",
-    "Поддерживается только CUSA03173 с обновлением 1.09 (найдено {})":
-        "仅支持已安装 1.09 更新的 CUSA03173（当前检测到 {}）",
+    "Это не магазинное издание Bloodborne (найдено {}): нужен Bloodborne любого региона с обновлением 1.09":
+        "这不是 Bloodborne 的正式发行版（当前检测到 {}）：需要任意地区已安装 1.09 更新的 Bloodborne",
+    "eboot.bin с вшитым патчем 60 FPS от Lance McDonald: из-за него игра падает в меню жестов. Скопируйте чистый eboot.bin из дампа обновления 1.09 в папку игры с заменой":
+        "此 eboot.bin 内置了 Lance McDonald 的 60 FPS 补丁，会导致游戏在打开手势菜单时崩溃：请将 1.09 更新转储中干净的 eboot.bin 复制到游戏文件夹并覆盖",
     "eboot.bin не читается как расшифрованный исполняемый файл PS4: сделайте дамп заново":
         "无法将 eboot.bin 识别为已解密的 PS4 可执行文件：请重新转储游戏",
     "Файлы игры повреждены при распаковке: шейдеры не распаковываются, игра зависнет на загрузке. Распакуйте игру и обновление 1.09 заново исправленным инструментом (issue #81)":
@@ -663,6 +720,30 @@ ZH_CN = {
         "从 amd_fidelityfx_upscaler_dx12.dll 4.1.x 构建 FSR 4.1.1（OptiScaler：FSR4_LATEST 文件夹，或来自支持 FSR 4.1 的游戏）。需要 GE-Proton 10+、Proton Experimental 或 Proton-CachyOS；耗时 2–5 分钟（RDNA4：耗时加倍，并额外构建 FP8 版本）",
     "Сборка не удалась (код {}): подробности в журнале": "构建失败（代码 {}）：详情见日志",
     "Сглаживание в разрешении вывода без модели FSR": "在输出分辨率下进行抗锯齿，不使用 FSR 模型",
+    "DLSS найден (нужна видеокарта NVIDIA RTX)": "已找到 DLSS（需要 NVIDIA RTX 显卡）",
+    "DLSS: библиотека NVIDIA": "DLSS：NVIDIA 库",
+    "Выбрать файл…": "选择文件…",
+    "Убрать выбранную": "移除所选",
+    "Своя: {}": "自选：{}",
+    "Из сборки: {}": "随版本附带：{}",
+    "Нет: выберите libnvidia-ngx-dlss.so.* из DLSS SDK NVIDIA ({})": "无：请选择 NVIDIA DLSS SDK 中的 libnvidia-ngx-dlss.so.*（{}）",
+    "Эта сборка без моста DLSS (libbbport_dlss.so): DLSS работать не будет": "此版本没有 DLSS 桥接（libbbport_dlss.so）：DLSS 无法工作",
+    "Библиотека DLSS NVIDIA (libnvidia-ngx-dlss.so.*)": "NVIDIA DLSS 库（libnvidia-ngx-dlss.so.*）",
+    "Нужна библиотека для Linux": "需要 Linux 版本的库",
+    "{} — библиотека DLSS для Windows; на Linux NVIDIA её не загружает. Нужна libnvidia-ngx-dlss.so.<версия> из DLSS SDK NVIDIA: {}":
+        "{} 是 Windows 版 DLSS 库，NVIDIA 的 Linux 驱动不会加载它。需要 NVIDIA DLSS SDK 中的 libnvidia-ngx-dlss.so.<版本>：{}",
+    "Не удалось прочитать файл": "无法读取文件",
+    "Это не библиотека DLSS": "这不是 DLSS 库",
+    "Нужен файл libnvidia-ngx-dlss.so.<версия> из DLSS SDK NVIDIA: {}": "需要 NVIDIA DLSS SDK 中的 libnvidia-ngx-dlss.so.<版本>：{}",
+    "Не удалось скопировать библиотеку": "无法复制该库",
+    "DLSS {}: готово": "DLSS {}：已就绪",
+    "Клавиатура и мышь": "键盘和鼠标",
+    "Камера мышью": "鼠标控制视角",
+    "Щелчок в окне игры захватывает мышь, F1 — отпускает": "在游戏窗口中单击以捕获鼠标，按 F1 释放",
+    "Чувствительность мыши": "鼠标灵敏度",
+    "Инвертировать мышь по вертикали": "反转鼠标纵轴",
+    "DLSS не найден: выберите библиотеку NVIDIA ниже (и нужна сборка с мостом DLSS). Игра включит FSR 3.1":
+        "未找到 DLSS：请在下方选择 NVIDIA 的库（还需要带 DLSS 桥接的版本）。游戏将改用 FSR 3.1",
     "Нет или повреждён файл {}": "文件 {} 缺失或已损坏",
     # Effects
     "Эффекты игры": "游戏效果",

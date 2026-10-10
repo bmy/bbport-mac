@@ -242,3 +242,22 @@ add_executable(fsr4-bench EXCLUDE_FROM_ALL tools/fsr4_bench.cpp
     shadps4/video_core/renderer_vulkan/fsr411/fsr411.cpp)
 target_include_directories(fsr4-bench PRIVATE shadps4/video_core/renderer_vulkan/fsr411)
 target_link_libraries(fsr4-bench PRIVATE ffx-vulkan::fsr4-v07-vulkan ffx-vulkan::fsr4-v07-assets Vulkan::Vulkan)
+
+# bbport online module (gpu/bbnet, libbbnet.so): built when its libraries are there (shell.nix);
+# BB_NET=OFF leaves it out. Without it the port plays offline.
+option(BB_NET "Build the online module (shadNet)" ON)
+if (BB_NET)
+    find_package(Protobuf CONFIG QUIET)
+    find_package(nlohmann_json CONFIG QUIET)
+    find_package(OpenSSL QUIET)
+    find_package(ZLIB QUIET)
+    find_path(MINIUPNPC_INCLUDE miniupnpc.h PATH_SUFFIXES miniupnpc)
+    find_library(MINIUPNPC_LIBRARY NAMES miniupnpc)
+    if (Protobuf_FOUND AND nlohmann_json_FOUND AND OpenSSL_FOUND AND ZLIB_FOUND AND
+        MINIUPNPC_INCLUDE AND MINIUPNPC_LIBRARY)
+        add_subdirectory(bbnet)
+        message(STATUS "Online module: on (libbbnet.so)")
+    else()
+        message(STATUS "Online module: off (protobuf, nlohmann_json, OpenSSL, zlib or miniupnpc missing)")
+    endif()
+endif()

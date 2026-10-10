@@ -20,8 +20,11 @@ on:
         required: false
         default: ''
 
+# Read-only by default. The build runs third-party build scripts (dependencies' configure and
+# make files, Homebrew, pip), so it never holds a token that can write to the repository; only
+# the publish job, which runs nothing but GitHub's own CLI, gets write access.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -31,12 +34,18 @@ jobs:
   build:
     runs-on: macos-26
     timeout-minutes: 240
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      publish: ${{ steps.version.outputs.publish }}
     steps:
       - name: Check out
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
+          persist-credentials: false # no token left in .git/config for the build's scripts
 
       - name: Rosetta 2
         run: |
@@ -60,7 +69,13 @@ jobs:
             version=$(git describe --tags --always)-ci
             publish=0
           fi
-          [[ $version =~ ^[A-Za-z0-9._-]+$ ]] || { echo "::error::version '$version': letters, digits, dot, dash or underscore only"; exit 1; }
+          # A release is <upstream version>-v<build> (0.5-v1, 0.5.1-v2); a test build's describe
+          # output only needs to start with a letter or digit (never an option for gh or git).
+          if (( publish )); then
+            [[ $version =~ ^[0-9]+(\.[0-9]+)*-v[0-9]+$ ]] || { echo "::error::version '$version': expected <upstream>-v<n>, e.g. 0.5-v1"; exit 1; }
+          else
+            [[ $version =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "::error::version '$version': letters, digits, dot, dash or underscore only"; exit 1; }
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
           echo "Version: $version (publish: $publish)"
@@ -126,14 +141,37 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-      # Creates the tag at the commit built when it doesn't exist yet.
+  # Publishing: the only job with write access. It runs no build code: the notes from the
+  # repository, the zip from the build job's artifact, and GitHub's CLI. Creates the tag at the
+  # commit built when it doesn't exist yet.
+  publish:
+    needs: build
+    if: needs.build.outputs.publish == '1'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the release notes
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: docs/release
+
+      - name: Download the zip
+        uses: actions/download-artifact@v4
+        with:
+          name: bbport-${{ needs.build.outputs.version }}
+          path: dist
+
       - name: Publish the release
-        if: steps.version.outputs.publish == '1'
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.version.outputs.version }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.build.outputs.version }}
         run: |
+          [[ $TAG =~ ^[0-9]+(\.[0-9]+)*-v[0-9]+$ ]] || { echo "::error::version '$TAG'"; exit 1; }
           notes=docs/release/$TAG.md
           [[ -f $notes ]] || notes=docs/release/NEXT.md
+          (cd dist && shasum -a 256 -c ./*.zip.sha256)
           gh release create "$TAG" dist/*.zip dist/*.zip.sha256 \
             --target "$GITHUB_SHA" --title "bbport-mac-$TAG" --notes-file "$notes" --latest

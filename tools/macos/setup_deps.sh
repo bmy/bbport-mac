@@ -48,15 +48,24 @@ X86_CMAKE=(-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64
 export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig:$PREFIX/share/pkgconfig"
 unset PKG_CONFIG_PATH
 
-latest_tag() {  # latest_tag <git url> <regex>: highest version tag matching the regex
-    git ls-remote --tags --refs "$1" | sed 's|.*refs/tags/||' | grep -E "$2" | sort -V | tail -1
+# Every source is pinned to a tag and the commit it pointed to when it was pinned. A tag that
+# has since moved stops the build instead of building whatever it points to now. To update a
+# dependency, change both, and the commit with:
+#   git ls-remote https://github.com/<owner>/<repo>.git 'refs/tags/<tag>^{}' 'refs/tags/<tag>'
+# (the line ending in ^{} is the commit, when there is one). After an update, do a security
+# review of the change (docs/security-review.md).
+verify_rev() {  # verify_rev <dir> <commit>
+    local actual
+    actual=$(git -C "$1" rev-parse HEAD)
+    [[ $actual == "$2" ]] || die "$1: expected commit $2, got $actual (the tag moved?)"
 }
-fetch() {  # fetch <name> <git url> <tag>
+fetch() {  # fetch <name> <git url> <tag> <commit>
     local dir=$SRC/$1
-    if [[ ! -d $dir/.git ]] || [[ $(git -C "$dir" describe --tags 2>/dev/null) != "$3" ]]; then
+    if [[ ! -d $dir/.git ]] || [[ $(git -C "$dir" rev-parse HEAD 2>/dev/null) != "$4" ]]; then
         rm -rf "$dir"
         git -c advice.detachedHead=false clone -q --depth 1 --branch "$3" "$2" "$dir"
     fi
+    verify_rev "$dir" "$4"
 }
 cmake_build() {  # cmake_build <name> [cmake args...]
     local name=$1; shift
@@ -77,12 +86,14 @@ quiet() {  # quiet <label> <command...>: run with output in a log; print its tai
 }
 
 step "Vulkan-Headers + Vulkan-Loader"
-VK_TAG=$(latest_tag https://github.com/KhronosGroup/Vulkan-Loader.git '^v1\.4\.[0-9]+$')
+VK_TAG=v1.4.365
+VK_HEADERS_REV=c46850864f4661461b0f6cb9922c058ffea4915e
+VK_LOADER_REV=f866657ff687a36d767cd7783bab800e31ebafaa
 echo "tag: $VK_TAG"
 if ! have lib/libvulkan.1.dylib; then
-    fetch Vulkan-Headers https://github.com/KhronosGroup/Vulkan-Headers.git "$VK_TAG"
+    fetch Vulkan-Headers https://github.com/KhronosGroup/Vulkan-Headers.git "$VK_TAG" "$VK_HEADERS_REV"
     cmake_build Vulkan-Headers
-    fetch Vulkan-Loader https://github.com/KhronosGroup/Vulkan-Loader.git "$VK_TAG"
+    fetch Vulkan-Loader https://github.com/KhronosGroup/Vulkan-Loader.git "$VK_TAG" "$VK_LOADER_REV"
     cmake_build Vulkan-Loader -DVULKAN_HEADERS_INSTALL_DIR="$PREFIX" -DBUILD_TESTS=OFF
 fi
 
@@ -92,26 +103,26 @@ rm -rf "$PREFIX/lib/libMoltenVK.dylib" "$PREFIX/share/vulkan/icd.d/MoltenVK_icd.
        "$SRC/MoltenVK-macos" "$SRC/MoltenVK-macos.tar"
 
 step "SDL3"
-SDL_TAG=$(latest_tag https://github.com/libsdl-org/SDL.git '^release-3\.[0-9]+\.[0-9]+$')
+SDL_TAG=release-3.4.18 SDL_REV=829a65d769d935c4852f8159e964312c0957260a
 echo "tag: $SDL_TAG"
 if ! have lib/libSDL3.dylib; then
-    fetch SDL https://github.com/libsdl-org/SDL.git "$SDL_TAG"
+    fetch SDL https://github.com/libsdl-org/SDL.git "$SDL_TAG" "$SDL_REV"
     cmake_build SDL -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF
 fi
 
 step "fmt"
-FMT_TAG=$(latest_tag https://github.com/fmtlib/fmt.git '^12\.[0-9]+\.[0-9]+$')
+FMT_TAG=12.2.0 FMT_REV=1be298e1bd68957e4cd352e1f676f00e07dcfb57
 echo "tag: $FMT_TAG"
 if ! have lib/libfmt.dylib; then
-    fetch fmt https://github.com/fmtlib/fmt.git "$FMT_TAG"
+    fetch fmt https://github.com/fmtlib/fmt.git "$FMT_TAG" "$FMT_REV"
     cmake_build fmt -DFMT_TEST=OFF -DFMT_DOC=OFF
 fi
 
 step "xxHash"
-XXH_TAG=$(latest_tag https://github.com/Cyan4973/xxHash.git '^v0\.8\.[0-9]+$')
+XXH_TAG=v0.8.4 XXH_REV=c87183a77d67f7d37e3d2d1b7eaac5e7c695e4f0
 echo "tag: $XXH_TAG"
 if ! have lib/libxxhash.dylib; then
-    fetch xxHash https://github.com/Cyan4973/xxHash.git "$XXH_TAG"
+    fetch xxHash https://github.com/Cyan4973/xxHash.git "$XXH_TAG" "$XXH_REV"
     quiet "xxHash configure" cmake -S "$SRC/xxHash/build/cmake" -B "$SRC/xxHash/build-x86_64" "${X86_CMAKE[@]}" \
           -DXXHASH_BUILD_XXHSUM=OFF
     quiet "xxHash build" cmake --build "$SRC/xxHash/build-x86_64" -j "$JOBS"
@@ -119,10 +130,10 @@ if ! have lib/libxxhash.dylib; then
 fi
 
 step "FFmpeg (decoders the game's movies need; x86-64)"
-FF_TAG=$(latest_tag https://git.ffmpeg.org/ffmpeg.git '^n[0-9]+\.[0-9]+(\.[0-9]+)?$')
+FF_TAG=n9.0.2 FF_REV=946fcce07b6dcd0331c8cc609192aeff5e1924f8
 echo "tag: $FF_TAG"
 if ! have lib/libavformat.dylib; then
-    fetch ffmpeg https://git.ffmpeg.org/ffmpeg.git "$FF_TAG"
+    fetch ffmpeg https://git.ffmpeg.org/ffmpeg.git "$FF_TAG" "$FF_REV"
     cd "$SRC/ffmpeg"
     # Configure natively and cross-compile to x86-64 (the standard universal-build recipe).
     if ! quiet "ffmpeg configure" ./configure --prefix="$PREFIX" \
@@ -144,10 +155,10 @@ if ! have lib/libavformat.dylib; then
 fi
 
 step "VulkanMemoryAllocator (header-only)"
-VMA_TAG=$(latest_tag https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git '^v3\.[0-9]+\.[0-9]+$')
+VMA_TAG=v3.4.0 VMA_REV=3aa921224c154a0d2c43912bc88e1c42ce1f7607
 echo "tag: $VMA_TAG"
 if ! have include/vk_mem_alloc.h; then
-    fetch VulkanMemoryAllocator https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git "$VMA_TAG"
+    fetch VulkanMemoryAllocator https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git "$VMA_TAG" "$VMA_REV"
     cmake_build VulkanMemoryAllocator -DVMA_BUILD_DOCUMENTATION=OFF -DVMA_BUILD_SAMPLES=OFF
 fi
 
@@ -158,21 +169,22 @@ if ! have include/xbyak/xbyak.h; then
     git -C "$SRC/xbyak" init -q
     git -C "$SRC/xbyak" fetch -q --depth 1 https://github.com/herumi/xbyak.git "$XBYAK_REV"
     git -C "$SRC/xbyak" -c advice.detachedHead=false checkout -q FETCH_HEAD
+    verify_rev "$SRC/xbyak" "$XBYAK_REV"
     mkdir -p "$PREFIX/include"
     cp -R "$SRC/xbyak/xbyak" "$PREFIX/include/"
 fi
 
 step "miniz (static, x86-64)"
-MZ_TAG=$(latest_tag https://github.com/richgel999/miniz.git '^3\.[0-9]+\.[0-9]+$')
+MZ_TAG=3.1.2 MZ_REV=77d0dce8627735138c51770d1799a1ef48f2117d
 echo "tag: $MZ_TAG"
 if ! have lib/libminiz.a; then
-    fetch miniz https://github.com/richgel999/miniz.git "$MZ_TAG"
+    fetch miniz https://github.com/richgel999/miniz.git "$MZ_TAG" "$MZ_REV"
     cmake_build miniz -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DBUILD_EXAMPLES=OFF -DBUILD_FUZZERS=OFF -DBUILD_TESTS=OFF
 fi
 
 step "Zydis (static, x86-64)"
-ZY_TAG=$(latest_tag https://github.com/zyantific/zydis.git '^v4\.[0-9]+\.[0-9]+$')
+ZY_TAG=v4.1.1 ZY_REV=a2278f1d254e492f6a6b39f6cb5d1f5d515659dc
 echo "tag: $ZY_TAG"
 # Zydis' installed config looks for Zycore as its own package, so Zycore is built and installed
 # first from the revision Zydis ships (its submodule), then Zydis.
@@ -180,6 +192,7 @@ if ! have lib/libZydis.a || ! have lib/cmake/zycore/zycore-config.cmake; then
     rm -rf "$SRC/zydis" "$PREFIX/lib/libZydis.a" "$PREFIX/lib/cmake/zydis"
     git -c advice.detachedHead=false clone -q --depth 1 --recurse-submodules --shallow-submodules \
         --branch "$ZY_TAG" https://github.com/zyantific/zydis.git "$SRC/zydis"
+    verify_rev "$SRC/zydis" "$ZY_REV"
     quiet "zycore configure" cmake -S "$SRC/zydis/dependencies/zycore" -B "$SRC/zydis/build-zycore" \
         "${X86_CMAKE[@]}" -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DZYCORE_BUILD_SHARED_LIB=OFF -DZYCORE_BUILD_EXAMPLES=OFF -DZYCORE_BUILD_TESTS=OFF
@@ -205,7 +218,9 @@ if ! have lib/kosmickrisp/libvulkan_kosmickrisp.dylib || [[ $(cat "$kk_stamp" 2>
     if [[ ! -x $PREFIX/pyenv/bin/python3 ]]; then
         "$("$BREW" --prefix python@3.13)/bin/python3.13" -m venv "$PREFIX/pyenv"
     fi
-    quiet "kosmickrisp python modules" "$PREFIX/pyenv/bin/pip" install mako packaging pyyaml
+    # Mesa's build scripts need these; pinned like the sources above.
+    quiet "kosmickrisp python modules" "$PREFIX/pyenv/bin/pip" install --only-binary :all: \
+        mako==1.3.10 markupsafe==3.0.2 packaging==25.0 pyyaml==6.0.2
     kk=$SRC/mesa-kosmickrisp
     if [[ $(git -C "$kk" rev-parse HEAD 2>/dev/null) != "$KK_REV" ]]; then
         rm -rf "$kk" && mkdir -p "$kk"
@@ -213,6 +228,7 @@ if ! have lib/kosmickrisp/libvulkan_kosmickrisp.dylib || [[ $(cat "$kk_stamp" 2>
         git -C "$kk" remote add origin https://github.com/shadexternals/mesa-kosmickrisp.git
         git -C "$kk" fetch -q --depth 1 origin "$KK_REV"
         git -C "$kk" -c advice.detachedHead=false checkout -q FETCH_HEAD
+        verify_rev "$kk" "$KK_REV"
         echo "fetching Mesa"
         git -C "$kk" submodule update -q --init --depth 1
     fi
@@ -253,14 +269,15 @@ for lib in "$PREFIX"/lib/*.dylib "$PREFIX"/lib/*.a "$PREFIX"/lib/kosmickrisp/*.d
 done
 (( bad == 0 )) || die "a library lacks x86_64 (see above)"
 
+q=$(printf '%q' "$PREFIX")   # quoted for the shell that sources env.sh
 cat > "$PREFIX/env.sh" <<EOF
 # source this before building or running the macOS port
-export BB_DEPS="$PREFIX"
-export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig:$PREFIX/share/pkgconfig"
+export BB_DEPS=$q
+export PKG_CONFIG_LIBDIR=$q/lib/pkgconfig:$q/share/pkgconfig
 unset PKG_CONFIG_PATH
 # Vulkan driver: KosmicKrisp (Mesa on Metal), as upstream shadPS4 bundles on macOS.
-export VK_DRIVER_FILES="$PREFIX/lib/kosmickrisp/kosmickrisp_mesa_icd.json"
-export DYLD_LIBRARY_PATH="$PREFIX/lib\${DYLD_LIBRARY_PATH:+:\$DYLD_LIBRARY_PATH}"
+export VK_DRIVER_FILES=$q/lib/kosmickrisp/kosmickrisp_mesa_icd.json
+export DYLD_LIBRARY_PATH=$q/lib\${DYLD_LIBRARY_PATH:+:\$DYLD_LIBRARY_PATH}
 export MACOSX_DEPLOYMENT_TARGET=14.0
 EOF
 step "Done. Next: source \"$PREFIX/env.sh\""

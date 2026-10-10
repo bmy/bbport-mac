@@ -4,12 +4,20 @@
  * BB_GAMEPAD). --displays: the monitors, "name<tab>WxH<tab>primary (1 or 0)" per line in SDL's
  * order (the launcher's monitor list, BB_DISPLAY; issue #69). --read-input: one key or button for the
  * launcher's controls (below). --device: "vendorID<tab>name" of the GPU the game takes (run.sh:
- * memory model and driver workarounds by vendor and chip). */
+ * memory model and driver workarounds by vendor and chip). --memory-import: whether the GPU can
+ * use memory the program already has in place (VK_EXT_external_memory_host, what the new memory
+ * model needs off Linux's dma-buf), tried for real on anonymous and shared memory. */
+#define _DEFAULT_SOURCE
+#define _DARWIN_C_SOURCE
+#include <fcntl.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <vulkan/vulkan.h>
 #include <SDL3/SDL.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 static VkDeviceSize largest_local_heap(VkPhysicalDevice device) {
     VkPhysicalDeviceMemoryProperties memory;
@@ -187,6 +195,267 @@ static int read_input(const char *kind) {
     return 0;
 }
 
+
+/* ---- --memory-import ---------------------------------------------------------------------- */
+
+static const char *yes_no(int value) { return value ? "yes" : "no"; }
+
+static void print_memory_types(VkPhysicalDevice device) {
+    VkPhysicalDeviceMemoryProperties memory;
+    vkGetPhysicalDeviceMemoryProperties(device, &memory);
+    for (uint32_t i = 0; i < memory.memoryHeapCount; ++i)
+        printf("  heap %u: %llu MiB%s\n", i, (unsigned long long)(memory.memoryHeaps[i].size >> 20),
+               memory.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT ? ", device-local" : "");
+    for (uint32_t i = 0; i < memory.memoryTypeCount; ++i) {
+        const VkMemoryPropertyFlags f = memory.memoryTypes[i].propertyFlags;
+        printf("  type %u (heap %u):%s%s%s%s\n", i, memory.memoryTypes[i].heapIndex,
+               f & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT ? " device-local" : "",
+               f & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT ? " host-visible" : "",
+               f & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT ? " coherent" : "",
+               f & VK_MEMORY_PROPERTY_HOST_CACHED_BIT ? " cached" : "");
+    }
+}
+
+/* Imports `size` bytes at `pointer` as Vulkan memory, binds a buffer to it, has the GPU fill part
+ * of it and checks the program sees the GPU's writes there and the GPU sees the program's. */
+static void try_import(VkPhysicalDevice physical, VkDevice device, uint32_t queue_family,
+                       const char *what, void *pointer, VkDeviceSize size) {
+    PFN_vkGetMemoryHostPointerPropertiesEXT get_props =
+        (PFN_vkGetMemoryHostPointerPropertiesEXT)vkGetDeviceProcAddr(
+            device, "vkGetMemoryHostPointerPropertiesEXT");
+    const VkExternalMemoryHandleTypeFlagBits handle =
+        VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
+    VkMemoryHostPointerPropertiesEXT host = {.sType = VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
+    VkResult r = get_props ? get_props(device, handle, pointer, &host) : VK_ERROR_EXTENSION_NOT_PRESENT;
+    if (r != VK_SUCCESS || !host.memoryTypeBits) {
+        printf("%s: the driver won't take this memory (result %d, memory types %#x)\n", what, r,
+               host.memoryTypeBits);
+        return;
+    }
+    VkPhysicalDeviceMemoryProperties memory;
+    vkGetPhysicalDeviceMemoryProperties(physical, &memory);
+    uint32_t type = UINT32_MAX;
+    for (uint32_t i = 0; i < memory.memoryTypeCount && type == UINT32_MAX; ++i)
+        if (host.memoryTypeBits & (1u << i)) type = i;
+    const VkExternalMemoryBufferCreateInfo external_buffer = {
+        .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO, .handleTypes = handle};
+    const VkBufferCreateInfo buffer_info = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .pNext = &external_buffer, .size = size,
+        .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+                 VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
+    VkBuffer buffer = VK_NULL_HANDLE, other = VK_NULL_HANDLE;
+    VkDeviceMemory bound = VK_NULL_HANDLE, other_memory = VK_NULL_HANDLE;
+    VkCommandPool pool = VK_NULL_HANDLE;
+    VkFence fence = VK_NULL_HANDLE;
+    if ((r = vkCreateBuffer(device, &buffer_info, NULL, &buffer)) != VK_SUCCESS) {
+        printf("%s: memory types %#x, but no buffer for it (result %d)\n", what, host.memoryTypeBits, r);
+        return;
+    }
+    VkMemoryRequirements reqs;
+    vkGetBufferMemoryRequirements(device, buffer, &reqs);
+    const VkImportMemoryHostPointerInfoEXT import = {
+        .sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT, .handleType = handle,
+        .pHostPointer = pointer};
+    const VkMemoryAllocateInfo allocate = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                                           .pNext = &import, .allocationSize = size,
+                                           .memoryTypeIndex = type};
+    if (!(reqs.memoryTypeBits & host.memoryTypeBits)) {
+        printf("%s: the buffer can't use the imported memory's types (%#x vs %#x)\n", what,
+               reqs.memoryTypeBits, host.memoryTypeBits);
+        goto done;
+    }
+    if ((r = vkAllocateMemory(device, &allocate, NULL, &bound)) != VK_SUCCESS) {
+        printf("%s: import failed (result %d)\n", what, r);
+        goto done;
+    }
+    if ((r = vkBindBufferMemory(device, buffer, bound, 0)) != VK_SUCCESS) {
+        printf("%s: imported, but binding a buffer failed (result %d)\n", what, r);
+        goto done;
+    }
+    /* The GPU writes the first half; the program's pattern in the second half is copied by the
+     * GPU into a buffer of the driver's own memory and compared. */
+    uint32_t *words = pointer;
+    const VkDeviceSize half = size / 2, count = half / 4;
+    for (VkDeviceSize i = 0; i < count; ++i) words[count + i] = (uint32_t)(i * 2654435761u);
+    const VkBufferCreateInfo other_info = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = half,
+        .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT, .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
+    vkCreateBuffer(device, &other_info, NULL, &other);
+    VkMemoryRequirements other_reqs;
+    vkGetBufferMemoryRequirements(device, other, &other_reqs);
+    uint32_t visible = UINT32_MAX;
+    for (uint32_t i = 0; i < memory.memoryTypeCount && visible == UINT32_MAX; ++i)
+        if ((other_reqs.memoryTypeBits & (1u << i)) &&
+            (memory.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) &&
+            (memory.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT))
+            visible = i;
+    const VkMemoryAllocateInfo other_alloc = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                                              .allocationSize = other_reqs.size,
+                                              .memoryTypeIndex = visible};
+    if (visible == UINT32_MAX || vkAllocateMemory(device, &other_alloc, NULL, &other_memory) != VK_SUCCESS ||
+        vkBindBufferMemory(device, other, other_memory, 0) != VK_SUCCESS) {
+        printf("%s: imported, but no memory for the comparison buffer\n", what);
+        goto done;
+    }
+    const VkCommandPoolCreateInfo pool_info = {.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+                                               .queueFamilyIndex = queue_family};
+    vkCreateCommandPool(device, &pool_info, NULL, &pool);
+    const VkCommandBufferAllocateInfo cb_info = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, .commandPool = pool,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY, .commandBufferCount = 1};
+    VkCommandBuffer cb;
+    vkAllocateCommandBuffers(device, &cb_info, &cb);
+    const VkCommandBufferBeginInfo begin = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+                                            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
+    vkBeginCommandBuffer(cb, &begin);
+    vkCmdFillBuffer(cb, buffer, 0, half, 0x5eedf00du);
+    const VkBufferCopy copy = {.srcOffset = half, .dstOffset = 0, .size = half};
+    vkCmdCopyBuffer(cb, buffer, other, 1, &copy);
+    const VkMemoryBarrier to_host = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+                                     .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                                     .dstAccessMask = VK_ACCESS_HOST_READ_BIT};
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1,
+                         &to_host, 0, NULL, 0, NULL);
+    vkEndCommandBuffer(cb);
+    const VkFenceCreateInfo fence_info = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    vkCreateFence(device, &fence_info, NULL, &fence);
+    VkQueue queue;
+    vkGetDeviceQueue(device, queue_family, 0, &queue);
+    const VkSubmitInfo submit = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1,
+                                 .pCommandBuffers = &cb};
+    if ((r = vkQueueSubmit(queue, 1, &submit, fence)) != VK_SUCCESS ||
+        (r = vkWaitForFences(device, 1, &fence, VK_TRUE, 5000000000ull)) != VK_SUCCESS) {
+        printf("%s: imported, but the GPU test didn't finish (result %d)\n", what, r);
+        goto done;
+    }
+    VkDeviceSize gpu_wrote = 0, gpu_read = 0;
+    for (VkDeviceSize i = 0; i < count; ++i) gpu_wrote += words[i] == 0x5eedf00du;
+    uint32_t *copied = NULL;
+    if (vkMapMemory(device, other_memory, 0, half, 0, (void **)&copied) == VK_SUCCESS) {
+        for (VkDeviceSize i = 0; i < count; ++i) gpu_read += copied[i] == (uint32_t)(i * 2654435761u);
+        vkUnmapMemory(device, other_memory);
+    }
+    printf("%s: IMPORTED (memory type %u). The program sees the GPU's writes: %s; the GPU sees "
+           "the program's data: %s\n", what, type, gpu_wrote == count ? "yes" : "NO",
+           gpu_read == count ? "yes" : "NO");
+done:
+    if (fence) vkDestroyFence(device, fence, NULL);
+    if (pool) vkDestroyCommandPool(device, pool, NULL);
+    if (other) vkDestroyBuffer(device, other, NULL);
+    if (other_memory) vkFreeMemory(device, other_memory, NULL);
+    vkDestroyBuffer(device, buffer, NULL);
+    if (bound) vkFreeMemory(device, bound, NULL);
+}
+
+static int memory_import(VkPhysicalDevice physical) {
+    VkPhysicalDeviceProperties props;
+    vkGetPhysicalDeviceProperties(physical, &props);
+    VkPhysicalDeviceFeatures features;
+    vkGetPhysicalDeviceFeatures(physical, &features);
+    printf("GPU: %s (vendor %#06x), Vulkan %u.%u.%u, driver %#x\n", props.deviceName,
+           props.vendorID, VK_API_VERSION_MAJOR(props.apiVersion),
+           VK_API_VERSION_MINOR(props.apiVersion), VK_API_VERSION_PATCH(props.apiVersion),
+           props.driverVersion);
+    printf("Program: %s, page size %ld\n",
+#if defined(__x86_64__)
+           "x86-64 (under Rosetta on Apple Silicon)",
+#else
+           "native",
+#endif
+           sysconf(_SC_PAGESIZE));
+    const int host_import = has_extension(physical, "VK_EXT_external_memory_host");
+    printf("VK_EXT_external_memory_host (host memory import): %s\n", yes_no(host_import));
+    printf("VK_KHR_external_memory_fd: %s; VK_EXT_external_memory_dma_buf: %s; "
+           "VK_EXT_external_memory_metal: %s\n",
+           yes_no(has_extension(physical, "VK_KHR_external_memory_fd")),
+           yes_no(has_extension(physical, "VK_EXT_external_memory_dma_buf")),
+           yes_no(has_extension(physical, "VK_EXT_external_memory_metal")));
+    printf("Sparse binding: %s; sparse buffers: %s; buffer device address: %s\n",
+           yes_no(features.sparseBinding), yes_no(features.sparseResidencyBuffer),
+           yes_no(has_extension(physical, "VK_KHR_buffer_device_address") ||
+                  props.apiVersion >= VK_API_VERSION_1_2));
+    printf("Memory:\n");
+    print_memory_types(physical);
+    if (!host_import) {
+        printf("Result: no host memory import; the new memory model has no way in on this "
+               "driver.\n");
+        return 0;
+    }
+    VkPhysicalDeviceExternalMemoryHostPropertiesEXT host = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT};
+    VkPhysicalDeviceProperties2 props2 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+                                          .pNext = &host};
+    vkGetPhysicalDeviceProperties2(physical, &props2);
+    const VkDeviceSize align = host.minImportedHostPointerAlignment;
+    printf("Imported pointers must be aligned to %llu bytes\n", (unsigned long long)align);
+
+    uint32_t families = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(physical, &families, NULL);
+    VkQueueFamilyProperties *family = calloc(families ? families : 1, sizeof(*family));
+    vkGetPhysicalDeviceQueueFamilyProperties(physical, &families, family);
+    uint32_t queue_family = 0;
+    for (uint32_t i = 0; i < families; ++i)
+        if (family[i].queueFlags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_TRANSFER_BIT)) {
+            queue_family = i;
+            break;
+        }
+    free(family);
+    const float priority = 1.0f;
+    const VkDeviceQueueCreateInfo queue = {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+                                           .queueFamilyIndex = queue_family, .queueCount = 1,
+                                           .pQueuePriorities = &priority};
+    const char *extensions[] = {"VK_KHR_external_memory", "VK_EXT_external_memory_host",
+                                "VK_KHR_portability_subset"};
+    const uint32_t extension_count = has_extension(physical, "VK_KHR_portability_subset") ? 3 : 2;
+    const VkDeviceCreateInfo device_info = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+                                            .queueCreateInfoCount = 1, .pQueueCreateInfos = &queue,
+                                            .enabledExtensionCount = extension_count,
+                                            .ppEnabledExtensionNames = extensions};
+    VkDevice device = VK_NULL_HANDLE;
+    VkResult r = vkCreateDevice(physical, &device_info, NULL, &device);
+    if (r != VK_SUCCESS) {
+        printf("Result: the extension is listed, but a device with it can't be created (result %d)\n", r);
+        return 0;
+    }
+    /* 64 MiB, as the runtime's direct memory chunks come; anonymous memory, and a shared memory
+     * object like the runtime's own (shm_open), the kind the game's memory actually is. */
+    const VkDeviceSize size = 64ull << 20;
+    const size_t page = (size_t)sysconf(_SC_PAGESIZE);
+    void *anon = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (anon != MAP_FAILED) {
+        try_import(physical, device, queue_family, "Anonymous memory", anon, size);
+        munmap(anon, size);
+    }
+    char name[64];
+    snprintf(name, sizeof name, "/bbport-import-%ld", (long)getpid());
+    const int fd = shm_open(name, O_RDWR | O_CREAT | O_EXCL, 0600);
+    if (fd >= 0) {
+        shm_unlink(name);
+        void *shared = MAP_FAILED;
+        if (ftruncate(fd, (off_t)size) == 0)
+            shared = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        if (shared != MAP_FAILED) {
+            try_import(physical, device, queue_family, "Shared memory (as the game's)", shared, size);
+            /* The game maps its memory at 4 KiB granularity: a pointer that is only 4 KiB aligned. */
+            if (align <= page && page > 4096) {
+                printf("(4 KiB-aligned pointers can't be tried: the page size here is %zu)\n", page);
+            } else if (align <= 4096) {
+                try_import(physical, device, queue_family, "Shared memory at a 4 KiB offset",
+                           (char *)shared + 4096, size - 8192);
+            } else {
+                printf("Shared memory at a 4 KiB offset: not allowed (the driver needs %llu-byte "
+                       "alignment; the game maps 4 KiB pieces)\n", (unsigned long long)align);
+            }
+            munmap(shared, size);
+        }
+        close(fd);
+    }
+    vkDestroyDevice(device, NULL);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc > 1 && !strcmp(argv[1], "--read-input")) {
         return read_input(argc > 2 ? argv[2] : "any");
@@ -199,6 +468,7 @@ int main(int argc, char **argv) {
     }
     const int live_mode = argc > 1 && !strcmp(argv[1], "--live-resolution");
     const int device_mode = argc > 1 && !strcmp(argv[1], "--device");
+    const int import_mode = argc > 1 && !strcmp(argv[1], "--memory-import");
     const VkApplicationInfo app = {
         .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
         .pApplicationName = "bbport scene scaling probe",
@@ -249,6 +519,12 @@ int main(int argc, char **argv) {
         free(devices);
         vkDestroyInstance(instance, NULL);
         return 0;
+    }
+    if (import_mode) {
+        const int result = memory_import(selected);
+        free(devices);
+        vkDestroyInstance(instance, NULL);
+        return result;
     }
     if (live_mode) {
         printf("%d\n", live_resolution_suits(selected));

@@ -53,5 +53,7 @@ log=$data/out/last-run.log
 [[ -f $log ]] && mv -f "$log" "$data/out/previous-run.log"
 exec > >(tee "$log") 2>&1
 version=$(cat .version 2>/dev/null || git log -1 --format='%h' 2>/dev/null || echo unknown)
-echo "macOS run: $(sw_vers -productVersion), bbport $version, game $BB_GAME_DIR, fps $BB_FPS, upscaler ${BB_UPSCALER:-from $ini}"
+# Paths in the log as ~/…, so a log shared in a report doesn't show the account name.
+tilde() { [[ $1 == "$HOME"/* ]] && printf '~/%s' "${1#"$HOME"/}" || printf '%s' "$1"; }
+echo "macOS run: $(sw_vers -productVersion), bbport $version, game $(tilde "$BB_GAME_DIR"), fps $BB_FPS, upscaler ${BB_UPSCALER:-from $(tilde "$ini")}"
 exec bash run.sh "$@"

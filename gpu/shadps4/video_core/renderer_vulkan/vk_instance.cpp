@@ -997,6 +997,45 @@ void Instance::CollectToolingInfo() const {
     }
 }
 
+#ifdef __APPLE__
+/// The renderer's Vulkan heapUsage omits allocations KosmicKrisp keeps under its own Metal
+/// ledger. Sample that ledger at most every 250 ms so the texture collector can see native
+/// renderer pressure as well as allocations Vulkan attributes directly to the renderer.
+struct MacProcessMemory {
+    u64 outside_graphics = 0;
+    u64 graphics = 0;
+    bool valid = false;
+};
+
+static MacProcessMemory CurrentMacProcessMemory() {
+    static std::atomic<u64> other_cached{0}, graphics_cached{0};
+    static std::atomic<s64> sampled_ns{-1};
+    const s64 now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch())
+                        .count();
+    const s64 sampled = sampled_ns.load(std::memory_order_relaxed);
+    if (sampled < 0 || now - sampled >= 250'000'000) {
+        task_vm_info_data_t info{};
+        mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+        if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&info),
+                      &count) == KERN_SUCCESS &&
+            count >= TASK_VM_INFO_REV3_COUNT) {
+            const u64 footprint = info.phys_footprint;
+            const s64 graphics_signed =
+                info.ledger_tag_graphics_footprint + info.ledger_tag_graphics_footprint_compressed;
+            const u64 graphics = graphics_signed > 0 ? u64(graphics_signed) : 0;
+            other_cached.store(footprint > graphics ? footprint - graphics : 0,
+                               std::memory_order_relaxed);
+            graphics_cached.store(graphics, std::memory_order_relaxed);
+            sampled_ns.store(now, std::memory_order_relaxed);
+        }
+    }
+    const s64 last_sample = sampled_ns.load(std::memory_order_relaxed);
+    return {other_cached.load(std::memory_order_relaxed),
+            graphics_cached.load(std::memory_order_relaxed), last_sample >= 0};
+}
+#endif
+
 u64 Instance::GetDeviceMemoryUsage() const {
     vk::PhysicalDeviceMemoryBudgetPropertiesEXT memory_budget_props{};
     vk::PhysicalDeviceMemoryProperties2 props = {
@@ -1011,6 +1050,15 @@ u64 Instance::GetDeviceMemoryUsage() const {
     return total_usage;
 }
 
+u64 Instance::GetDeviceGraphicsMemoryUsage() const {
+#ifdef __APPLE__
+    const MacProcessMemory process_memory = CurrentMacProcessMemory();
+    return process_memory.valid ? process_memory.graphics : 0;
+#else
+    return GetDeviceMemoryUsage();
+#endif
+}
+
 #ifdef __APPLE__
 /// bbport (macOS): the Mac's memory is shared by the CPU and the GPU, and Metal's limit (the
 /// heap size, recommendedMaxWorkingSetSize, ~75% of the Mac's memory) is for everything this
@@ -1022,32 +1070,12 @@ u64 Instance::GetDeviceMemoryUsage() const {
 /// issue #6), and counting it shrank the texture cache until it evicted images in use without
 /// freeing any of that.
 static u64 UnifiedMemoryBudget(u64 limit, u64 gpu_usage) {
-    // Sampled at most every 250 ms (this runs at every texture collector tick).
-    static std::atomic<u64> other_cached{0}, graphics_cached{0};
-    static std::atomic<s64> sampled_ns{-1};
-    const s64 now = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                        std::chrono::steady_clock::now().time_since_epoch())
-                        .count();
-    const s64 sampled = sampled_ns.load(std::memory_order_relaxed);
-    if (sampled < 0 || now - sampled >= 250'000'000) {
-        task_vm_info_data_t info{};
-        mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
-        if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&info),
-                      &count) != KERN_SUCCESS ||
-            count < TASK_VM_INFO_REV3_COUNT) {
-            return limit;
-        }
-        const u64 footprint = info.phys_footprint;
-        const s64 graphics_signed =
-            info.ledger_tag_graphics_footprint + info.ledger_tag_graphics_footprint_compressed;
-        const u64 graphics = graphics_signed > 0 ? u64(graphics_signed) : 0;
-        other_cached.store(footprint > graphics ? footprint - graphics : 0,
-                           std::memory_order_relaxed);
-        graphics_cached.store(graphics, std::memory_order_relaxed);
-        sampled_ns.store(now, std::memory_order_relaxed);
+    const MacProcessMemory process_memory = CurrentMacProcessMemory();
+    if (!process_memory.valid) {
+        return limit;
     }
-    const u64 other = other_cached.load(std::memory_order_relaxed);
-    const u64 graphics = graphics_cached.load(std::memory_order_relaxed);
+    const u64 other = process_memory.outside_graphics;
+    const u64 graphics = process_memory.graphics;
     constexpr u64 Floor = u64{2} << 30;
     const u64 budget = limit > other + Floor ? limit - other : Floor;
     // Printed when the budget or the graphics memory moves by 1 GiB or more: the second line

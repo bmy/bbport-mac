@@ -1330,18 +1330,16 @@ void TextureCache::UntrackImageTail(ImageId image_id) {
 void TextureCache::GarbageCollectImages() {
     if (instance.CanReportMemoryUsage()) {
         total_used_memory = instance.GetDeviceMemoryUsage();
+        BbStats::gc_pressure_bytes.store(
+            std::max(total_used_memory, instance.GetDeviceGraphicsMemoryUsage()),
+            std::memory_order_relaxed);
         // bbport: on integrated GPUs (Steam Deck) the usage covers system-memory heaps holding
         // much more than images (buffers backing guest memory), and the startup budget left
         // ~1 GB after its 8 GB system reserve: usage stayed above the critical mark, so the
         // collector evicted images used two or three frames ago on every submission and wrote
         // GPU-written ones back. Compare with the driver's current budget instead.
-        // BB_GC_BUDGET_MB=N: this rule with a fixed budget on any GPU (tests on a desktop).
-        static const u64 forced_budget = [] {
-            const char* env = std::getenv("BB_GC_BUDGET_MB");
-            return env ? std::strtoull(env, nullptr, 10) << 20 : 0;
-        }();
-        if (instance.IsIntegrated() || forced_budget) {
-            const u64 budget = forced_budget ? forced_budget : instance.GetDeviceMemoryBudgetNow();
+        if (instance.IsIntegrated()) {
+            const u64 budget = instance.GetDeviceMemoryBudgetNow();
             static bool budget_logged = false;
             if (!budget_logged && budget != 0) {
                 budget_logged = true;
@@ -1355,6 +1353,8 @@ void TextureCache::GarbageCollectImages() {
                 critical_gc_memory = budget / 100 * 95;
             }
         }
+    } else {
+        BbStats::gc_pressure_bytes.store(total_used_memory, std::memory_order_relaxed);
     }
     BbStats::gc_used_bytes.store(total_used_memory, std::memory_order_relaxed);
     BbStats::gc_trigger_bytes.store(trigger_gc_memory, std::memory_order_relaxed);

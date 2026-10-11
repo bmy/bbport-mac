@@ -128,7 +128,7 @@ index 3a0aa03..e82fc93 100644
  }
  
 diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.c b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
-index 5df1a87..119c031 100644
+index 22f4bf7..1864468 100644
 --- a/src/kosmickrisp/vulkan/kk_cmd_buffer.c
 +++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
 @@ -9,6 +9,7 @@
@@ -139,74 +139,15 @@ index 5df1a87..119c031 100644
  #include "kk_descriptor_set_layout.h"
  #include "kk_entrypoints.h"
  #include "kk_format.h"
-@@ -51,12 +52,14 @@ kk_cmd_release_resources(struct kk_device *dev, struct kk_cmd_buffer *cmd)
-    /* Release all command buffers used */
-    util_dynarray_foreach(&cmd->submit_cmd_bufs, mtl_command_buffer *, cmd_buf) {
-       mtl_release(*cmd_buf);
-+      kk_bbstat_add(KK_BBSTAT_MTL_CMD_BUFS_RELEASED, 1);
-    }
-    util_dynarray_clear(&cmd->submit_cmd_bufs);
- 
+@@ -51,6 +52,7 @@ kk_cmd_release_resources(struct kk_device *dev, struct kk_cmd_buffer *cmd)
     /* Release all BOs used as descriptor buffers for submissions */
     util_dynarray_foreach(&cmd->large_bos, struct kk_bo *, bo) {
        kk_destroy_bo(dev, *bo);
 +      kk_bbstat_add(KK_BBSTAT_LARGE_UPLOADS_DESTROYED, 1);
     }
     util_dynarray_clear(&cmd->large_bos);
- }
-@@ -67,6 +70,11 @@ kk_destroy_encoder_state(struct kk_encoder_state *es)
-    assert(es->encoder == NULL);
-    assert(es->cmd_buf == NULL);
- 
-+   if (es->allocator) {
-+      kk_bbstat_add(KK_BBSTAT_ALLOCATORS, -1);
-+      kk_bbstat_add(KK_BBSTAT_ALLOCATOR_BYTES, -(int64_t)es->bb_allocated_B);
-+   }
-+   es->bb_allocated_B = 0u;
-    mtl_release(es->allocator);
-    es->allocator = NULL;
- 
-@@ -102,6 +110,9 @@ static bool
- kk_init_encoder_state(struct kk_encoder_state *es, mtl_device *handle)
- {
-    es->allocator = mtl_new_command_allocator(handle);
-+   es->bb_allocated_B = 0u;
-+   if (es->allocator)
-+      kk_bbstat_add(KK_BBSTAT_ALLOCATORS, 1);
-    es->ts_resolves = UTIL_DYNARRAY_INIT;
-    return es->allocator != NULL;
- }
-@@ -179,6 +190,13 @@ alloc_fail:
- static void
- kk_reset_encoder_state(struct kk_encoder_state *es)
- {
-+   /* bbport (BB_KK_STATS): what the allocator holds before it is reset for reuse. */
-+   if (kk_bbstats_enabled()) {
-+      const uint64_t held_B = mtl_command_allocator_allocated_size(es->allocator);
-+      kk_bbstat_add(KK_BBSTAT_ALLOCATOR_BYTES,
-+                    (int64_t)held_B - (int64_t)es->bb_allocated_B);
-+      es->bb_allocated_B = held_B;
-+   }
-    mtl_command_allocator_reset(es->allocator);
- }
- 
-@@ -284,6 +302,7 @@ cs_start_render(struct kk_cmd_buffer *cmd)
-    assert(state->render_pass_descriptor);
- 
-    cmd->gfx.cmd_buf = mtl_new_command_buffer(dev->mtl_handle);
-+   kk_bbstat_add(KK_BBSTAT_MTL_CMD_BUFS_CREATED, 1);
-    mtl_begin_command_buffer(cmd->gfx.cmd_buf, cmd->gfx.allocator);
-    cmd->gfx.encoder = mtl_new_render_command_encoder_with_descriptor(
-       cmd->gfx.cmd_buf, state->render_pass_descriptor);
-@@ -334,6 +353,7 @@ kk_start_compute_encoder(struct kk_cmd_buffer *cmd, bool pre_gfx)
-    struct kk_encoder_state *es = pre_gfx ? cmd->pre_gfx : cmd->post_gfx;
- 
-    es->cmd_buf = mtl_new_command_buffer(kk_cmd_buffer_device(cmd)->mtl_handle);
-+   kk_bbstat_add(KK_BBSTAT_MTL_CMD_BUFS_CREATED, 1);
-    mtl_begin_command_buffer(es->cmd_buf, es->allocator);
-    es->encoder = mtl_new_compute_command_encoder(es->cmd_buf);
- 
-@@ -723,6 +743,7 @@ kk_pool_alloc(struct kk_cmd_buffer *cmd, uint32_t size_B, uint32_t alignment_B)
+    util_dynarray_clear(&cmd->post_render_writes);
+@@ -694,6 +696,7 @@ kk_pool_alloc(struct kk_cmd_buffer *cmd, uint32_t size_B, uint32_t alignment_B)
           return (struct kk_ptr){0};
        }
        util_dynarray_append(&cmd->large_bos, buffer);
@@ -214,21 +155,8 @@ index 5df1a87..119c031 100644
  
        return (struct kk_ptr){
           .gpu = buffer->gpu,
-diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.h b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
-index 44d779a..ec7d3c9 100644
---- a/src/kosmickrisp/vulkan/kk_cmd_buffer.h
-+++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
-@@ -220,6 +220,8 @@ struct kk_encoder_state {
-    mtl_command_encoder *encoder;
-    mtl_command_allocator *allocator;
-    mtl_command_buffer *cmd_buf;
-+   /* bbport (BB_KK_STATS): allocator size last seen, for the running total. */
-+   uint64_t bb_allocated_B;
-    /* Pending timestamp resolves (struct kk_ts_resolve), flushed at cs_end. */
-    struct util_dynarray ts_resolves;
- };
 diff --git a/src/kosmickrisp/vulkan/kk_cmd_meta.c b/src/kosmickrisp/vulkan/kk_cmd_meta.c
-index a4f81dc..f7312eb 100644
+index 9163df5..2268d08 100644
 --- a/src/kosmickrisp/vulkan/kk_cmd_meta.c
 +++ b/src/kosmickrisp/vulkan/kk_cmd_meta.c
 @@ -11,6 +11,7 @@
@@ -248,10 +176,10 @@ index a4f81dc..f7312eb 100644
     *map_out = buf.cpu;
  
 diff --git a/src/kosmickrisp/vulkan/kk_cmd_pool.c b/src/kosmickrisp/vulkan/kk_cmd_pool.c
-index 5acf935..66ae3ed 100644
+index e2c2fc8..9edfddc 100644
 --- a/src/kosmickrisp/vulkan/kk_cmd_pool.c
 +++ b/src/kosmickrisp/vulkan/kk_cmd_pool.c
-@@ -28,6 +28,7 @@ kk_cmd_bo_create(struct kk_cmd_pool *pool, struct kk_cmd_bo **bo_out)
+@@ -32,6 +32,7 @@ kk_cmd_bo_create(struct kk_cmd_pool *pool, struct kk_cmd_bo **bo_out)
        return vk_error(pool, VK_ERROR_OUT_OF_DEVICE_MEMORY);
     }
  
@@ -259,7 +187,7 @@ index 5acf935..66ae3ed 100644
     *bo_out = bo;
     return VK_SUCCESS;
  }
-@@ -38,6 +39,7 @@ kk_cmd_bo_destroy(struct kk_cmd_pool *pool, struct kk_cmd_bo *bo)
+@@ -42,6 +43,7 @@ kk_cmd_bo_destroy(struct kk_cmd_pool *pool, struct kk_cmd_bo *bo)
     struct kk_device *dev = kk_cmd_pool_device(pool);
     kk_destroy_bo(dev, bo->bo);
     vk_free(&pool->vk.alloc, bo);
@@ -267,7 +195,7 @@ index 5acf935..66ae3ed 100644
  }
  
  static void
-@@ -47,6 +49,8 @@ kk_cmd_pool_destroy_bos(struct kk_cmd_pool *pool)
+@@ -51,6 +53,8 @@ kk_cmd_pool_destroy_bos(struct kk_cmd_pool *pool)
        kk_cmd_bo_destroy(pool, bo);
  
     list_inithead(&pool->free_bos);
@@ -276,8 +204,53 @@ index 5acf935..66ae3ed 100644
  }
  
  VkResult
-@@ -103,6 +107,14 @@ kk_CreateCommandPool(VkDevice _device,
-    }
+@@ -94,13 +98,31 @@ kk_cmd_pool_get_allocator(struct kk_cmd_pool *pool)
+                                mtl_command_allocator *);
+ 
+    struct kk_device *dev = kk_cmd_pool_device(pool);
+-   return mtl_new_command_allocator(dev->mtl_handle);
++   mtl_command_allocator *allocator = mtl_new_command_allocator(dev->mtl_handle);
++   if (allocator)
++      kk_bbstat_add(KK_BBSTAT_ALLOCATORS, 1);
++   return allocator;
+ }
+ 
+ void
+ kk_cmd_pool_return_allocator(struct kk_cmd_pool *pool,
+                              mtl_command_allocator *allocator)
+ {
++   /* bbport (BB_KK_STATS): how much the allocator holds when it comes back. */
++   if (kk_bbstats_enabled()) {
++      const int64_t held_B =
++         (int64_t)mtl_command_allocator_allocated_size(allocator);
++      kk_bbstat_add(KK_BBSTAT_ALLOCATOR_SAMPLE_BYTES, held_B);
++      kk_bbstat_add(KK_BBSTAT_ALLOCATOR_SAMPLES, 1);
++      int64_t max_B = p_atomic_read(&kk_bbstats[KK_BBSTAT_ALLOCATOR_MAX_BYTES]);
++      while (held_B > max_B) {
++         const int64_t seen = p_atomic_cmpxchg(
++            &kk_bbstats[KK_BBSTAT_ALLOCATOR_MAX_BYTES], max_B, held_B);
++         if (seen == max_B)
++            break;
++         max_B = seen;
++      }
++   }
+    util_dynarray_append(&pool->metal.free_allocators, allocator);
+ }
+ 
+@@ -113,7 +135,10 @@ kk_cmd_pool_get_cmd_buf(struct kk_cmd_pool *pool)
+                                mtl_command_buffer *);
+ 
+    struct kk_device *dev = kk_cmd_pool_device(pool);
+-   return mtl_new_command_buffer(dev->mtl_handle);
++   mtl_command_buffer *cmd_buf = mtl_new_command_buffer(dev->mtl_handle);
++   if (cmd_buf)
++      kk_bbstat_add(KK_BBSTAT_MTL_CMD_BUFS_CREATED, 1);
++   return cmd_buf;
+ }
+ 
+ void
+@@ -148,6 +173,14 @@ kk_CreateCommandPool(VkDevice _device,
+    pool->metal.free_cmd_bufs = UTIL_DYNARRAY_INIT;
  
     list_inithead(&pool->free_bos);
 +   /* bbport (issue #6): upstream never initialises num_free_bos (vk_alloc2 is not zeroed). A
@@ -291,19 +264,34 @@ index 5acf935..66ae3ed 100644
  
     *pCmdPool = kk_cmd_pool_to_handle(pool);
  
-@@ -121,6 +133,7 @@ kk_DestroyCommandPool(VkDevice _device, VkCommandPool commandPool,
+@@ -160,12 +193,14 @@ kk_cmd_pool_release_mtl_objects(struct kk_cmd_pool *pool)
+    util_dynarray_foreach(&pool->metal.free_allocators, mtl_command_allocator *,
+                          allocator) {
+       mtl_release(*allocator);
++      kk_bbstat_add(KK_BBSTAT_ALLOCATORS, -1);
+    }
+    util_dynarray_clear(&pool->metal.free_allocators);
+ 
+    util_dynarray_foreach(&pool->metal.free_cmd_bufs, mtl_command_buffer *,
+                          cmd_buf) {
+       mtl_release(*cmd_buf);
++      kk_bbstat_add(KK_BBSTAT_MTL_CMD_BUFS_RELEASED, 1);
+    }
+    util_dynarray_clear(&pool->metal.free_cmd_bufs);
+ }
+@@ -182,6 +217,7 @@ kk_DestroyCommandPool(VkDevice _device, VkCommandPool commandPool,
  
     vk_command_pool_finish(&pool->vk);
     kk_cmd_pool_destroy_bos(pool);
 +   kk_bbstat_add(KK_BBSTAT_CMD_POOLS, -1);
-    vk_free2(&device->vk.alloc, pAllocator, pool);
- }
- 
+    kk_cmd_pool_release_mtl_objects(pool);
+    util_dynarray_fini(&pool->metal.free_allocators);
+    util_dynarray_fini(&pool->metal.free_cmd_bufs);
 diff --git a/src/kosmickrisp/vulkan/kk_device.c b/src/kosmickrisp/vulkan/kk_device.c
-index 9950b19..614a16c 100644
+index 9950b19..e6aa58c 100644
 --- a/src/kosmickrisp/vulkan/kk_device.c
 +++ b/src/kosmickrisp/vulkan/kk_device.c
-@@ -29,8 +29,83 @@
+@@ -29,8 +29,94 @@
  #include "vulkan/wsi/wsi_common.h"
  #include "vk_pipeline_cache.h"
  
@@ -359,12 +347,22 @@ index 9950b19..614a16c 100644
 +   long long s[KK_BBSTAT_COUNT];
 +   for (unsigned i = 0; i < KK_BBSTAT_COUNT; i++)
 +      s[i] = (long long)p_atomic_read(&kk_bbstats[i]);
++   s[KK_BBSTAT_ALLOCATOR_SAMPLE_BYTES] =
++      (long long)p_atomic_xchg(&kk_bbstats[KK_BBSTAT_ALLOCATOR_SAMPLE_BYTES], 0);
++   s[KK_BBSTAT_ALLOCATOR_SAMPLES] =
++      (long long)p_atomic_xchg(&kk_bbstats[KK_BBSTAT_ALLOCATOR_SAMPLES], 0);
++   s[KK_BBSTAT_ALLOCATOR_MAX_BYTES] =
++      (long long)p_atomic_xchg(&kk_bbstats[KK_BBSTAT_ALLOCATOR_MAX_BYTES], 0);
++   const long long avg_kib = s[KK_BBSTAT_ALLOCATOR_SAMPLES]
++      ? (s[KK_BBSTAT_ALLOCATOR_SAMPLE_BYTES] / s[KK_BBSTAT_ALLOCATOR_SAMPLES]) >> 10
++      : 0;
 +
 +   fprintf(stderr,
 +           "KosmicKrisp: heaps %lld live, %lld MiB (created %lld, destroyed %lld; "
 +           "upload blocks %lld/%lld, large uploads %lld/%lld); "
 +           "Metal command buffers %lld live (%lld created); "
-+           "command allocators %lld holding %lld MiB; "
++           "command allocators %lld, %lld KiB on average when returned (largest %lld KiB, "
++           "so about %lld MiB in all); "
 +           "images %lld, image views %lld, buffer views %lld, buffers %lld, "
 +           "samplers %lld, shaders %lld, timelines %lld; "
 +           "Metal commits %lld (re-recorded %lld); "
@@ -376,7 +374,8 @@ index 9950b19..614a16c 100644
 +           s[KK_BBSTAT_LARGE_UPLOADS_CREATED], s[KK_BBSTAT_LARGE_UPLOADS_DESTROYED],
 +           s[KK_BBSTAT_MTL_CMD_BUFS_CREATED] - s[KK_BBSTAT_MTL_CMD_BUFS_RELEASED],
 +           s[KK_BBSTAT_MTL_CMD_BUFS_CREATED],
-+           s[KK_BBSTAT_ALLOCATORS], s[KK_BBSTAT_ALLOCATOR_BYTES] >> 20,
++           s[KK_BBSTAT_ALLOCATORS], avg_kib, s[KK_BBSTAT_ALLOCATOR_MAX_BYTES] >> 10,
++           (s[KK_BBSTAT_ALLOCATORS] * avg_kib) >> 10,
 +           s[KK_BBSTAT_IMAGES], s[KK_BBSTAT_IMAGE_VIEWS], s[KK_BBSTAT_BUFFER_VIEWS],
 +           s[KK_BBSTAT_BUFFERS], s[KK_BBSTAT_SAMPLERS], s[KK_BBSTAT_SHADERS],
 +           s[KK_BBSTAT_TIMELINES], s[KK_BBSTAT_COMMITS], s[KK_BBSTAT_RERECORDS],
@@ -388,7 +387,7 @@ index 9950b19..614a16c 100644
     mtl_compiler *handle;
     uint32_t refcount;
 diff --git a/src/kosmickrisp/vulkan/kk_device.h b/src/kosmickrisp/vulkan/kk_device.h
-index e3795ba..9fd8980 100644
+index e3795ba..62c7b1c 100644
 --- a/src/kosmickrisp/vulkan/kk_device.h
 +++ b/src/kosmickrisp/vulkan/kk_device.h
 @@ -18,6 +18,7 @@
@@ -399,7 +398,7 @@ index e3795ba..9fd8980 100644
  #include "util/u_dynarray.h"
  
  #include "vk_device.h"
-@@ -134,4 +135,39 @@ VkResult kk_sampler_heap_add(struct kk_device *dev,
+@@ -134,4 +135,41 @@ VkResult kk_sampler_heap_add(struct kk_device *dev,
                               struct kk_rc_sampler **out);
  void kk_sampler_heap_remove(struct kk_device *dev, struct kk_rc_sampler *rc);
  
@@ -416,7 +415,9 @@ index e3795ba..9fd8980 100644
 +   KK_BBSTAT_MTL_CMD_BUFS_CREATED,
 +   KK_BBSTAT_MTL_CMD_BUFS_RELEASED,
 +   KK_BBSTAT_ALLOCATORS,
-+   KK_BBSTAT_ALLOCATOR_BYTES,
++   KK_BBSTAT_ALLOCATOR_SAMPLE_BYTES, /* since the last print */
++   KK_BBSTAT_ALLOCATOR_SAMPLES,      /* since the last print */
++   KK_BBSTAT_ALLOCATOR_MAX_BYTES,    /* since the last print */
 +   KK_BBSTAT_IMAGES,
 +   KK_BBSTAT_IMAGE_VIEWS,
 +   KK_BBSTAT_BUFFER_VIEWS,
@@ -494,10 +495,10 @@ index 90eb6f6..831611b 100644
  
  void
 diff --git a/src/kosmickrisp/vulkan/kk_queue.c b/src/kosmickrisp/vulkan/kk_queue.c
-index bab5210..2e98abf 100644
+index 5194492..78a8bbe 100644
 --- a/src/kosmickrisp/vulkan/kk_queue.c
 +++ b/src/kosmickrisp/vulkan/kk_queue.c
-@@ -97,6 +97,7 @@ kk_queue_commit(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
+@@ -95,6 +95,7 @@ kk_queue_commit(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
  {
     assert(kk_cmd_buffer_has_work(cmd));
  
@@ -505,7 +506,7 @@ index bab5210..2e98abf 100644
     mtl_commit_options *options = mtl_new_commit_options();
     mtl_commit_options_add_feedback_handler(options, callback, user_data);
  
-@@ -164,6 +165,7 @@ rerecord_and_commit_cmd_buffer(struct kk_queue *queue,
+@@ -160,6 +161,7 @@ rerecord_and_commit_cmd_buffer(struct kk_queue *queue,
     kk_device_make_resources_resident(dev);
  
     queue->commits_in_flight++;
@@ -513,7 +514,7 @@ index bab5210..2e98abf 100644
     kk_queue_commit(queue, rerecord, rerecord_commit_callback, commit);
  
     mtx_unlock(&queue->mutex);
-@@ -321,6 +323,8 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
+@@ -317,6 +319,8 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
                         signal->signal_value);
     }
  
@@ -523,17 +524,17 @@ index bab5210..2e98abf 100644
  }
  
 diff --git a/src/kosmickrisp/vulkan/kk_sampler.c b/src/kosmickrisp/vulkan/kk_sampler.c
-index 65dcadf..4141d0a 100644
+index 65dcadf..cd32bff 100644
 --- a/src/kosmickrisp/vulkan/kk_sampler.c
 +++ b/src/kosmickrisp/vulkan/kk_sampler.c
-@@ -7,6 +7,7 @@
- 
+@@ -8,6 +8,7 @@
  #include "kk_sampler.h"
  
-+#include "kk_device.h"
  #include "kk_entrypoints.h"
++#include "kk_device.h"
  #include "kk_physical_device.h"
  
+ #include "kosmickrisp/bridge/mtl_bridge.h"
 @@ -155,6 +156,7 @@ kk_CreateSampler(VkDevice device, const VkSamplerCreateInfo *pCreateInfo,
        vk_sampler_create(&dev->vk, pCreateInfo, pAllocator, sizeof(*sampler));
     if (!sampler)
@@ -549,10 +550,10 @@ index 65dcadf..4141d0a 100644
 +   kk_bbstat_add(KK_BBSTAT_SAMPLERS, -1);
  }
 diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
-index 3559865..28b5d82 100644
+index cab3359..ae23a4a 100644
 --- a/src/kosmickrisp/vulkan/kk_shader.c
 +++ b/src/kosmickrisp/vulkan/kk_shader.c
-@@ -857,6 +857,7 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
+@@ -864,6 +864,7 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
     ralloc_free((void *)data->code);
  
     vk_shader_free(&dev->vk, pAllocator, &shader->vk);
@@ -560,7 +561,7 @@ index 3559865..28b5d82 100644
  }
  
  static bool
-@@ -993,6 +994,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
+@@ -1000,6 +1001,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
        ralloc_free(nir);
        return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
     }
@@ -568,7 +569,7 @@ index 3559865..28b5d82 100644
  
     gather_shader_info(shader, nir, state);
  
-@@ -1713,6 +1715,7 @@ kk_deserialize_shader(struct vk_device *vk_dev, struct blob_reader *blob,
+@@ -1714,6 +1716,7 @@ kk_deserialize_shader(struct vk_device *vk_dev, struct blob_reader *blob,
        &dev->vk, &kk_shader_ops, info.stage, pAllocator, sizeof(*shader));
     if (shader == NULL)
        return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);

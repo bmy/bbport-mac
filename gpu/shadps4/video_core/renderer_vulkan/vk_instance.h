@@ -526,6 +526,9 @@ public:
     /// Returns the amount of memory used.
     [[nodiscard]] u64 GetDeviceMemoryUsage() const;
 
+    /// bbport: process graphics ledger, including KosmicKrisp-owned allocations on macOS.
+    [[nodiscard]] u64 GetDeviceGraphicsMemoryUsage() const;
+
     /// bbport: the driver's current budget of the heaps GetDeviceMemoryUsage counts
     /// (VK_EXT_memory_budget: what this process can use now, other processes included).
     [[nodiscard]] u64 GetDeviceMemoryBudgetNow() const;

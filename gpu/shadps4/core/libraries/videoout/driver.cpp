@@ -389,7 +389,7 @@ static void PrintMemory() {
     std::printf("Memory: VRAM %llu MiB, GTT %llu MiB, RSS %llu MiB; Vulkan memory %llu MiB "
                 "allocated (VMA blocks %llu MiB, %llu MiB of them used); Vulkan images %llu MiB; "
                 "cached images %llu MiB in %llu; guest blocks in VRAM %llu MiB allocated, "
-                "%llu MiB of it unused (%llu MiB moved back idle, %llu MiB unmapped, %llu MiB freed; %llu chunks, %llu emptied, blocks kept: %llu GPU-written, %llu not direct memory); texture collector: usage %llu MiB, starts at %llu MiB, %llu images freed, %llu GPU-written kept\n",
+                "%llu MiB of it unused (%llu MiB moved back idle, %llu MiB unmapped, %llu MiB freed; %llu chunks, %llu emptied, blocks kept: %llu GPU-written, %llu not direct memory); texture collector: usage %llu MiB, graphics pressure %llu MiB, starts at %llu MiB, %llu images freed, %llu GPU-written kept\n",
                 (unsigned long long)(vram_kib >> 10), (unsigned long long)(gtt_kib >> 10),
                 (unsigned long long)(rss >> 20), (unsigned long long)(device >> 20),
                 (unsigned long long)(vma_blocks >> 20), (unsigned long long)(vma_used >> 20),
@@ -406,6 +406,7 @@ static void PrintMemory() {
                 (unsigned long long)BbStats::evac_kept_gpu.exchange(0),
                 (unsigned long long)BbStats::evac_kept_other.exchange(0),
                 (unsigned long long)(BbStats::gc_used_bytes.load() >> 20),
+                (unsigned long long)(BbStats::gc_pressure_bytes.load() >> 20),
                 (unsigned long long)(BbStats::gc_trigger_bytes.load() >> 20),
                 (unsigned long long)BbStats::gc_freed_images.exchange(0),
                 (unsigned long long)BbStats::gc_kept_images.exchange(0));

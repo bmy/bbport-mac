@@ -1,0 +1,612 @@
+diff --git a/src/kosmickrisp/bridge/mtl_command_buffer.h b/src/kosmickrisp/bridge/mtl_command_buffer.h
+index 2763b0e..0875f35 100644
+--- a/src/kosmickrisp/bridge/mtl_command_buffer.h
++++ b/src/kosmickrisp/bridge/mtl_command_buffer.h
+@@ -12,6 +12,8 @@
+ #include <stdint.h>
+ 
+ void mtl_command_allocator_reset(mtl_command_allocator *allocator);
++/* bbport (BB_KK_STATS): memory the allocator holds for encoding commands. */
++uint64_t mtl_command_allocator_allocated_size(mtl_command_allocator *allocator);
+ 
+ void mtl_begin_command_buffer(mtl_command_buffer *command_buffer,
+                               mtl_command_allocator *allocator);
+diff --git a/src/kosmickrisp/bridge/mtl_command_buffer.m b/src/kosmickrisp/bridge/mtl_command_buffer.m
+index 2b342a0..929f18f 100644
+--- a/src/kosmickrisp/bridge/mtl_command_buffer.m
++++ b/src/kosmickrisp/bridge/mtl_command_buffer.m
+@@ -20,6 +20,15 @@ mtl_command_allocator_reset(mtl_command_allocator *allocator)
+    }
+ }
+ 
++uint64_t
++mtl_command_allocator_allocated_size(mtl_command_allocator *allocator)
++{
++   @autoreleasepool {
++      id<MTL4CommandAllocator> alloc = (id<MTL4CommandAllocator>)allocator;
++      return [alloc allocatedSize];
++   }
++}
++
+ void
+ mtl_begin_command_buffer(mtl_command_buffer *command_buffer,
+                          mtl_command_allocator *allocator)
+diff --git a/src/kosmickrisp/bridge/stubs/mtl_command_buffer.c b/src/kosmickrisp/bridge/stubs/mtl_command_buffer.c
+index 2fe1e3b..21b1157 100644
+--- a/src/kosmickrisp/bridge/stubs/mtl_command_buffer.c
++++ b/src/kosmickrisp/bridge/stubs/mtl_command_buffer.c
+@@ -11,6 +11,12 @@ mtl_command_allocator_reset(mtl_command_allocator *allocator)
+ {
+ }
+ 
++uint64_t
++mtl_command_allocator_allocated_size(mtl_command_allocator *allocator)
++{
++   return 0u;
++}
++
+ void
+ mtl_begin_command_buffer(mtl_command_buffer *command_buffer,
+                          mtl_command_allocator *allocator)
+diff --git a/src/kosmickrisp/vulkan/kk_bo.c b/src/kosmickrisp/vulkan/kk_bo.c
+index 5562b61..5d18277 100644
+--- a/src/kosmickrisp/vulkan/kk_bo.c
++++ b/src/kosmickrisp/vulkan/kk_bo.c
+@@ -66,6 +66,8 @@ kk_alloc_bo(struct kk_device *dev, struct vk_object_base *log_obj,
+    bo->cpu = mtl_get_contents(map);
+ 
+    kk_device_add_heap_to_residency_set(dev, handle);
++   kk_bbstat_add(KK_BBSTAT_HEAPS_CREATED, 1);
++   kk_bbstat_add(KK_BBSTAT_HEAP_BYTES, size_B);
+ 
+    *bo_out = bo;
+    return result;
+@@ -90,8 +92,11 @@ kk_destroy_bo(struct kk_device *dev, struct kk_bo *bo)
+ 
+    mtl_release(bo->map);
+ 
+-   if (bo->mtl_handle)
++   if (bo->mtl_handle) {
+       mtl_release(bo->mtl_handle);
++      kk_bbstat_add(KK_BBSTAT_HEAPS_DESTROYED, 1);
++      kk_bbstat_add(KK_BBSTAT_HEAP_BYTES, -(int64_t)bo->size_B);
++   }
+ 
+    FREE(bo);
+ }
+diff --git a/src/kosmickrisp/vulkan/kk_buffer.c b/src/kosmickrisp/vulkan/kk_buffer.c
+index 525207a..4271999 100644
+--- a/src/kosmickrisp/vulkan/kk_buffer.c
++++ b/src/kosmickrisp/vulkan/kk_buffer.c
+@@ -63,6 +63,7 @@ kk_CreateBuffer(VkDevice device, const VkBufferCreateInfo *pCreateInfo,
+ 
+       kk_device_add_buffer_to_residency_set(dev, buffer->metal.handle);
+       buffer->sparse = true;
++      kk_bbstat_add(KK_BBSTAT_BUFFERS, 1);
+    }
+ 
+    *pBuffer = kk_buffer_to_handle(buffer);
+@@ -83,8 +84,10 @@ kk_DestroyBuffer(VkDevice device, VkBuffer _buffer,
+    if (buffer->sparse)
+       kk_device_remove_buffer_from_residency_set(dev, buffer);
+ 
+-   if (buffer->metal.handle)
++   if (buffer->metal.handle) {
+       mtl_release(buffer->metal.handle);
++      kk_bbstat_add(KK_BBSTAT_BUFFERS, -1);
++   }
+ 
+    vk_buffer_destroy(&dev->vk, pAllocator, &buffer->vk);
+ }
+@@ -189,6 +192,8 @@ kk_bind_buffer_memory(struct kk_device *dev, const VkBindBufferMemoryInfo *info)
+       mtl_retain(buffer->metal.handle);
+    }
+ 
++   if (buffer->metal.handle)
++      kk_bbstat_add(KK_BBSTAT_BUFFERS, 1);
+    if (buffer->vk.base.object_name)
+       mtl_resource_set_label(buffer->metal.handle, buffer->vk.base.object_name);
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_buffer_view.c b/src/kosmickrisp/vulkan/kk_buffer_view.c
+index 3a0aa03..e82fc93 100644
+--- a/src/kosmickrisp/vulkan/kk_buffer_view.c
++++ b/src/kosmickrisp/vulkan/kk_buffer_view.c
+@@ -109,6 +109,7 @@ kk_CreateBufferView(VkDevice _device, const VkBufferViewCreateInfo *pCreateInfo,
+    view->texel_buffer_gpu_id =
+       mtl_texture_get_gpu_resource_id(view->mtl_texel_buffer_handle);
+ 
++   kk_bbstat_add(KK_BBSTAT_BUFFER_VIEWS, 1);
+    *pBufferView = kk_buffer_view_to_handle(view);
+ 
+    return VK_SUCCESS;
+@@ -125,6 +126,7 @@ kk_DestroyBufferView(VkDevice _device, VkBufferView bufferView,
+       return;
+ 
+    mtl_release(view->mtl_texel_buffer_handle);
++   kk_bbstat_add(KK_BBSTAT_BUFFER_VIEWS, -1);
+    vk_buffer_view_destroy(&dev->vk, pAllocator, &view->vk);
+ }
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.c b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+index 22f4bf7..1864468 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+@@ -9,6 +9,7 @@
+ 
+ #include "kk_buffer.h"
+ #include "kk_cmd_pool.h"
++#include "kk_device.h"
+ #include "kk_descriptor_set_layout.h"
+ #include "kk_entrypoints.h"
+ #include "kk_format.h"
+@@ -51,6 +52,7 @@ kk_cmd_release_resources(struct kk_device *dev, struct kk_cmd_buffer *cmd)
+    /* Release all BOs used as descriptor buffers for submissions */
+    util_dynarray_foreach(&cmd->large_bos, struct kk_bo *, bo) {
+       kk_destroy_bo(dev, *bo);
++      kk_bbstat_add(KK_BBSTAT_LARGE_UPLOADS_DESTROYED, 1);
+    }
+    util_dynarray_clear(&cmd->large_bos);
+    util_dynarray_clear(&cmd->post_render_writes);
+@@ -694,6 +696,7 @@ kk_pool_alloc(struct kk_cmd_buffer *cmd, uint32_t size_B, uint32_t alignment_B)
+          return (struct kk_ptr){0};
+       }
+       util_dynarray_append(&cmd->large_bos, buffer);
++      kk_bbstat_add(KK_BBSTAT_LARGE_UPLOADS_CREATED, 1);
+ 
+       return (struct kk_ptr){
+          .gpu = buffer->gpu,
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_meta.c b/src/kosmickrisp/vulkan/kk_cmd_meta.c
+index 9163df5..2268d08 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_meta.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_meta.c
+@@ -11,6 +11,7 @@
+ 
+ #include "kk_buffer.h"
+ #include "kk_cmd_buffer.h"
++#include "kk_device.h"
+ #include "kk_physical_device.h"
+ 
+ #include "kosmickrisp/bridge/mtl_bridge.h"
+@@ -33,6 +34,7 @@ kk_cmd_bind_map_buffer(struct vk_command_buffer *vk_cmd,
+    /* Need to retain since VkBuffers release the metal.handle too */
+    mtl_retain(buf.buffer);
+    buffer->metal.handle = buf.buffer;
++   kk_bbstat_add(KK_BBSTAT_BUFFERS, 1);
+    buffer->vk.device_address = buf.gpu;
+    *map_out = buf.cpu;
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_pool.c b/src/kosmickrisp/vulkan/kk_cmd_pool.c
+index e2c2fc8..9edfddc 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_pool.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_pool.c
+@@ -32,6 +32,7 @@ kk_cmd_bo_create(struct kk_cmd_pool *pool, struct kk_cmd_bo **bo_out)
+       return vk_error(pool, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+    }
+ 
++   kk_bbstat_add(KK_BBSTAT_UPLOAD_BLOCKS_CREATED, 1);
+    *bo_out = bo;
+    return VK_SUCCESS;
+ }
+@@ -42,6 +43,7 @@ kk_cmd_bo_destroy(struct kk_cmd_pool *pool, struct kk_cmd_bo *bo)
+    struct kk_device *dev = kk_cmd_pool_device(pool);
+    kk_destroy_bo(dev, bo->bo);
+    vk_free(&pool->vk.alloc, bo);
++   kk_bbstat_add(KK_BBSTAT_UPLOAD_BLOCKS_DESTROYED, 1);
+ }
+ 
+ static void
+@@ -51,6 +53,8 @@ kk_cmd_pool_destroy_bos(struct kk_cmd_pool *pool)
+       kk_cmd_bo_destroy(pool, bo);
+ 
+    list_inithead(&pool->free_bos);
++   if (kk_bb_pool_fix())
++      pool->num_free_bos = 0u;
+ }
+ 
+ VkResult
+@@ -94,13 +98,31 @@ kk_cmd_pool_get_allocator(struct kk_cmd_pool *pool)
+                                mtl_command_allocator *);
+ 
+    struct kk_device *dev = kk_cmd_pool_device(pool);
+-   return mtl_new_command_allocator(dev->mtl_handle);
++   mtl_command_allocator *allocator = mtl_new_command_allocator(dev->mtl_handle);
++   if (allocator)
++      kk_bbstat_add(KK_BBSTAT_ALLOCATORS, 1);
++   return allocator;
+ }
+ 
+ void
+ kk_cmd_pool_return_allocator(struct kk_cmd_pool *pool,
+                              mtl_command_allocator *allocator)
+ {
++   /* bbport (BB_KK_STATS): how much the allocator holds when it comes back. */
++   if (kk_bbstats_enabled()) {
++      const int64_t held_B =
++         (int64_t)mtl_command_allocator_allocated_size(allocator);
++      kk_bbstat_add(KK_BBSTAT_ALLOCATOR_SAMPLE_BYTES, held_B);
++      kk_bbstat_add(KK_BBSTAT_ALLOCATOR_SAMPLES, 1);
++      int64_t max_B = p_atomic_read(&kk_bbstats[KK_BBSTAT_ALLOCATOR_MAX_BYTES]);
++      while (held_B > max_B) {
++         const int64_t seen = p_atomic_cmpxchg(
++            &kk_bbstats[KK_BBSTAT_ALLOCATOR_MAX_BYTES], max_B, held_B);
++         if (seen == max_B)
++            break;
++         max_B = seen;
++      }
++   }
+    util_dynarray_append(&pool->metal.free_allocators, allocator);
+ }
+ 
+@@ -113,7 +135,10 @@ kk_cmd_pool_get_cmd_buf(struct kk_cmd_pool *pool)
+                                mtl_command_buffer *);
+ 
+    struct kk_device *dev = kk_cmd_pool_device(pool);
+-   return mtl_new_command_buffer(dev->mtl_handle);
++   mtl_command_buffer *cmd_buf = mtl_new_command_buffer(dev->mtl_handle);
++   if (cmd_buf)
++      kk_bbstat_add(KK_BBSTAT_MTL_CMD_BUFS_CREATED, 1);
++   return cmd_buf;
+ }
+ 
+ void
+@@ -148,6 +173,14 @@ kk_CreateCommandPool(VkDevice _device,
+    pool->metal.free_cmd_bufs = UTIL_DYNARRAY_INIT;
+ 
+    list_inithead(&pool->free_bos);
++   /* bbport (issue #6): upstream never initialises num_free_bos (vk_alloc2 is not zeroed). A
++    * junk value above KK_CMD_POOL_BO_MAX makes every upload block be destroyed after use and a
++    * new Metal heap made for the next one. Counted always; fixed with BB_KK_POOL_FIX=1. */
++   kk_bbstat_add(KK_BBSTAT_CMD_POOLS, 1);
++   if (pool->num_free_bos != 0u)
++      kk_bbstat_add(KK_BBSTAT_CMD_POOLS_JUNK_COUNT, 1);
++   if (kk_bb_pool_fix())
++      pool->num_free_bos = 0u;
+ 
+    *pCmdPool = kk_cmd_pool_to_handle(pool);
+ 
+@@ -160,12 +193,14 @@ kk_cmd_pool_release_mtl_objects(struct kk_cmd_pool *pool)
+    util_dynarray_foreach(&pool->metal.free_allocators, mtl_command_allocator *,
+                          allocator) {
+       mtl_release(*allocator);
++      kk_bbstat_add(KK_BBSTAT_ALLOCATORS, -1);
+    }
+    util_dynarray_clear(&pool->metal.free_allocators);
+ 
+    util_dynarray_foreach(&pool->metal.free_cmd_bufs, mtl_command_buffer *,
+                          cmd_buf) {
+       mtl_release(*cmd_buf);
++      kk_bbstat_add(KK_BBSTAT_MTL_CMD_BUFS_RELEASED, 1);
+    }
+    util_dynarray_clear(&pool->metal.free_cmd_bufs);
+ }
+@@ -182,6 +217,7 @@ kk_DestroyCommandPool(VkDevice _device, VkCommandPool commandPool,
+ 
+    vk_command_pool_finish(&pool->vk);
+    kk_cmd_pool_destroy_bos(pool);
++   kk_bbstat_add(KK_BBSTAT_CMD_POOLS, -1);
+    kk_cmd_pool_release_mtl_objects(pool);
+    util_dynarray_fini(&pool->metal.free_allocators);
+    util_dynarray_fini(&pool->metal.free_cmd_bufs);
+diff --git a/src/kosmickrisp/vulkan/kk_device.c b/src/kosmickrisp/vulkan/kk_device.c
+index 9950b19..e6aa58c 100644
+--- a/src/kosmickrisp/vulkan/kk_device.c
++++ b/src/kosmickrisp/vulkan/kk_device.c
+@@ -29,8 +29,94 @@
+ #include "vulkan/wsi/wsi_common.h"
+ #include "vk_pipeline_cache.h"
+ 
++#include <stdio.h>
+ #include <time.h>
+ 
++#include "util/os_time.h"
++#include "util/u_debug.h"
++
++/* bbport (issue #6, diagnostics): see kk_device.h. */
++int64_t kk_bbstats[KK_BBSTAT_COUNT];
++
++static bool
++kk_bb_env_flag(int *cache, const char *name)
++{
++   int on = p_atomic_read(cache);
++   if (on < 0) {
++      on = debug_get_bool_option(name, false) ? 1 : 0;
++      p_atomic_set(cache, on);
++   }
++   return on != 0;
++}
++
++bool
++kk_bbstats_enabled(void)
++{
++   static int enabled = -1;
++   return kk_bb_env_flag(&enabled, "BB_KK_STATS");
++}
++
++bool
++kk_bb_pool_fix(void)
++{
++   static int enabled = -1;
++   return kk_bb_env_flag(&enabled, "BB_KK_POOL_FIX");
++}
++
++void
++kk_bbstats_maybe_print(void)
++{
++   static int64_t next_ns = 0;
++
++   if (!kk_bbstats_enabled())
++      return;
++
++   const int64_t now = os_time_get_nano();
++   const int64_t next = p_atomic_read(&next_ns);
++   if (now < next)
++      return;
++   if (p_atomic_cmpxchg(&next_ns, next, now + 10ll * 1000000000ll) != next)
++      return; /* another thread prints this one */
++
++   long long s[KK_BBSTAT_COUNT];
++   for (unsigned i = 0; i < KK_BBSTAT_COUNT; i++)
++      s[i] = (long long)p_atomic_read(&kk_bbstats[i]);
++   s[KK_BBSTAT_ALLOCATOR_SAMPLE_BYTES] =
++      (long long)p_atomic_xchg(&kk_bbstats[KK_BBSTAT_ALLOCATOR_SAMPLE_BYTES], 0);
++   s[KK_BBSTAT_ALLOCATOR_SAMPLES] =
++      (long long)p_atomic_xchg(&kk_bbstats[KK_BBSTAT_ALLOCATOR_SAMPLES], 0);
++   s[KK_BBSTAT_ALLOCATOR_MAX_BYTES] =
++      (long long)p_atomic_xchg(&kk_bbstats[KK_BBSTAT_ALLOCATOR_MAX_BYTES], 0);
++   const long long avg_kib = s[KK_BBSTAT_ALLOCATOR_SAMPLES]
++      ? (s[KK_BBSTAT_ALLOCATOR_SAMPLE_BYTES] / s[KK_BBSTAT_ALLOCATOR_SAMPLES]) >> 10
++      : 0;
++
++   fprintf(stderr,
++           "KosmicKrisp: heaps %lld live, %lld MiB (created %lld, destroyed %lld; "
++           "upload blocks %lld/%lld, large uploads %lld/%lld); "
++           "Metal command buffers %lld live (%lld created); "
++           "command allocators %lld, %lld KiB on average when returned (largest %lld KiB, "
++           "so about %lld MiB in all); "
++           "images %lld, image views %lld, buffer views %lld, buffers %lld, "
++           "samplers %lld, shaders %lld, timelines %lld; "
++           "Metal commits %lld (re-recorded %lld); "
++           "command pools %lld, %lld of them started with a junk spare-block count%s\n",
++           s[KK_BBSTAT_HEAPS_CREATED] - s[KK_BBSTAT_HEAPS_DESTROYED],
++           s[KK_BBSTAT_HEAP_BYTES] >> 20,
++           s[KK_BBSTAT_HEAPS_CREATED], s[KK_BBSTAT_HEAPS_DESTROYED],
++           s[KK_BBSTAT_UPLOAD_BLOCKS_CREATED], s[KK_BBSTAT_UPLOAD_BLOCKS_DESTROYED],
++           s[KK_BBSTAT_LARGE_UPLOADS_CREATED], s[KK_BBSTAT_LARGE_UPLOADS_DESTROYED],
++           s[KK_BBSTAT_MTL_CMD_BUFS_CREATED] - s[KK_BBSTAT_MTL_CMD_BUFS_RELEASED],
++           s[KK_BBSTAT_MTL_CMD_BUFS_CREATED],
++           s[KK_BBSTAT_ALLOCATORS], avg_kib, s[KK_BBSTAT_ALLOCATOR_MAX_BYTES] >> 10,
++           (s[KK_BBSTAT_ALLOCATORS] * avg_kib) >> 10,
++           s[KK_BBSTAT_IMAGES], s[KK_BBSTAT_IMAGE_VIEWS], s[KK_BBSTAT_BUFFER_VIEWS],
++           s[KK_BBSTAT_BUFFERS], s[KK_BBSTAT_SAMPLERS], s[KK_BBSTAT_SHADERS],
++           s[KK_BBSTAT_TIMELINES], s[KK_BBSTAT_COMMITS], s[KK_BBSTAT_RERECORDS],
++           s[KK_BBSTAT_CMD_POOLS], s[KK_BBSTAT_CMD_POOLS_JUNK_COUNT],
++           kk_bb_pool_fix() ? " (reset to 0: BB_KK_POOL_FIX)" : "");
++}
++
+ struct kk_mtl_compiler {
+    mtl_compiler *handle;
+    uint32_t refcount;
+diff --git a/src/kosmickrisp/vulkan/kk_device.h b/src/kosmickrisp/vulkan/kk_device.h
+index e3795ba..62c7b1c 100644
+--- a/src/kosmickrisp/vulkan/kk_device.h
++++ b/src/kosmickrisp/vulkan/kk_device.h
+@@ -18,6 +18,7 @@
+ #include "kosmickrisp/clc/kk_precompiled_shader.h"
+ #include "libkk_shaders.h"
+ 
++#include "util/u_atomic.h"
+ #include "util/u_dynarray.h"
+ 
+ #include "vk_device.h"
+@@ -134,4 +135,41 @@ VkResult kk_sampler_heap_add(struct kk_device *dev,
+                              struct kk_rc_sampler **out);
+ void kk_sampler_heap_remove(struct kk_device *dev, struct kk_rc_sampler *rc);
+ 
++/* bbport (issue #6, diagnostics): counts of the Metal objects the driver creates and frees,
++ * printed every 10 s while BB_KK_STATS=1 is set. Atomic adds only; no behaviour change. */
++enum kk_bbstat {
++   KK_BBSTAT_HEAPS_CREATED,
++   KK_BBSTAT_HEAPS_DESTROYED,
++   KK_BBSTAT_HEAP_BYTES,
++   KK_BBSTAT_UPLOAD_BLOCKS_CREATED,
++   KK_BBSTAT_UPLOAD_BLOCKS_DESTROYED,
++   KK_BBSTAT_LARGE_UPLOADS_CREATED,
++   KK_BBSTAT_LARGE_UPLOADS_DESTROYED,
++   KK_BBSTAT_MTL_CMD_BUFS_CREATED,
++   KK_BBSTAT_MTL_CMD_BUFS_RELEASED,
++   KK_BBSTAT_ALLOCATORS,
++   KK_BBSTAT_ALLOCATOR_SAMPLE_BYTES, /* since the last print */
++   KK_BBSTAT_ALLOCATOR_SAMPLES,      /* since the last print */
++   KK_BBSTAT_ALLOCATOR_MAX_BYTES,    /* since the last print */
++   KK_BBSTAT_IMAGES,
++   KK_BBSTAT_IMAGE_VIEWS,
++   KK_BBSTAT_BUFFER_VIEWS,
++   KK_BBSTAT_BUFFERS,
++   KK_BBSTAT_SAMPLERS,
++   KK_BBSTAT_SHADERS,
++   KK_BBSTAT_TIMELINES,
++   KK_BBSTAT_COMMITS,
++   KK_BBSTAT_RERECORDS,
++   KK_BBSTAT_CMD_POOLS,
++   KK_BBSTAT_CMD_POOLS_JUNK_COUNT,
++   KK_BBSTAT_COUNT,
++};
++extern int64_t kk_bbstats[KK_BBSTAT_COUNT];
++#define kk_bbstat_add(stat, value) p_atomic_add(&kk_bbstats[stat], (int64_t)(value))
++void kk_bbstats_maybe_print(void);
++bool kk_bbstats_enabled(void);
++/* bbport (issue #6): BB_KK_POOL_FIX=1 starts each command pool's count of spare upload blocks
++ * at zero (upstream leaves it uninitialised). */
++bool kk_bb_pool_fix(void);
++
+ #endif // KK_DEVICE_H
+diff --git a/src/kosmickrisp/vulkan/kk_image.c b/src/kosmickrisp/vulkan/kk_image.c
+index de27a6d..9a568b4 100644
+--- a/src/kosmickrisp/vulkan/kk_image.c
++++ b/src/kosmickrisp/vulkan/kk_image.c
+@@ -582,8 +582,10 @@ kk_image_plane_finish(struct kk_device *dev, struct kk_image_plane *plane,
+                       VkImageCreateFlags create_flags,
+                       const VkAllocationCallbacks *pAllocator)
+ {
+-   if (plane->mtl_handle != NULL)
++   if (plane->mtl_handle != NULL) {
+       mtl_release(plane->mtl_handle);
++      kk_bbstat_add(KK_BBSTAT_IMAGES, -1);
++   }
+    if (plane->mtl_handle_array != NULL)
+       mtl_release(plane->mtl_handle_array);
+ }
+@@ -858,6 +860,8 @@ kk_image_plane_bind(struct kk_device *dev, struct kk_image *image,
+    plane->mem = mem;
+    plane->mem_offset_B = *offset_B;
+    plane->mtl_handle = kk_image_plane_create_texture(plane, &plane->layout, 0u);
++   if (plane->mtl_handle)
++      kk_bbstat_add(KK_BBSTAT_IMAGES, 1);
+    if (image->vk.base.object_name)
+       mtl_resource_set_label(plane->mtl_handle, image->vk.base.object_name);
+ 
+@@ -913,6 +917,8 @@ kk_bind_image_memory(struct kk_device *dev, const VkBindImageMemoryInfo *info)
+       /* Copy swapchain plane data retaining relevant resources. */
+       plane->layout = swapchain_plane->layout;
+       plane->mtl_handle = mtl_retain(swapchain_plane->mtl_handle);
++      if (plane->mtl_handle)
++         kk_bbstat_add(KK_BBSTAT_IMAGES, 1);
+       plane->mtl_handle_array =
+          swapchain_plane->mtl_handle_array
+             ? mtl_retain(swapchain_plane->mtl_handle_array)
+diff --git a/src/kosmickrisp/vulkan/kk_image_view.c b/src/kosmickrisp/vulkan/kk_image_view.c
+index 90eb6f6..831611b 100644
+--- a/src/kosmickrisp/vulkan/kk_image_view.c
++++ b/src/kosmickrisp/vulkan/kk_image_view.c
+@@ -280,6 +280,7 @@ kk_CreateImageView(VkDevice _device, const VkImageViewCreateInfo *pCreateInfo,
+       return result;
+    }
+ 
++   kk_bbstat_add(KK_BBSTAT_IMAGE_VIEWS, 1);
+    *pView = kk_image_view_to_handle(view);
+ 
+    return VK_SUCCESS;
+@@ -297,6 +298,7 @@ kk_DestroyImageView(VkDevice _device, VkImageView imageView,
+ 
+    kk_image_view_finish(dev, view);
+    vk_free2(&dev->vk.alloc, pAllocator, view);
++   kk_bbstat_add(KK_BBSTAT_IMAGE_VIEWS, -1);
+ }
+ 
+ void
+diff --git a/src/kosmickrisp/vulkan/kk_queue.c b/src/kosmickrisp/vulkan/kk_queue.c
+index 5194492..78a8bbe 100644
+--- a/src/kosmickrisp/vulkan/kk_queue.c
++++ b/src/kosmickrisp/vulkan/kk_queue.c
+@@ -95,6 +95,7 @@ kk_queue_commit(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
+ {
+    assert(kk_cmd_buffer_has_work(cmd));
+ 
++   kk_bbstat_add(KK_BBSTAT_COMMITS, 1);
+    mtl_commit_options *options = mtl_new_commit_options();
+    mtl_commit_options_add_feedback_handler(options, callback, user_data);
+ 
+@@ -160,6 +161,7 @@ rerecord_and_commit_cmd_buffer(struct kk_queue *queue,
+    kk_device_make_resources_resident(dev);
+ 
+    queue->commits_in_flight++;
++   kk_bbstat_add(KK_BBSTAT_RERECORDS, 1);
+    kk_queue_commit(queue, rerecord, rerecord_commit_callback, commit);
+ 
+    mtx_unlock(&queue->mutex);
+@@ -317,6 +319,8 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
+                        signal->signal_value);
+    }
+ 
++   kk_bbstats_maybe_print(); /* bbport: BB_KK_STATS */
++
+    return VK_SUCCESS;
+ }
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_sampler.c b/src/kosmickrisp/vulkan/kk_sampler.c
+index 65dcadf..cd32bff 100644
+--- a/src/kosmickrisp/vulkan/kk_sampler.c
++++ b/src/kosmickrisp/vulkan/kk_sampler.c
+@@ -8,6 +8,7 @@
+ #include "kk_sampler.h"
+ 
+ #include "kk_entrypoints.h"
++#include "kk_device.h"
+ #include "kk_physical_device.h"
+ 
+ #include "kosmickrisp/bridge/mtl_bridge.h"
+@@ -155,6 +156,7 @@ kk_CreateSampler(VkDevice device, const VkSamplerCreateInfo *pCreateInfo,
+       vk_sampler_create(&dev->vk, pCreateInfo, pAllocator, sizeof(*sampler));
+    if (!sampler)
+       return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
++   kk_bbstat_add(KK_BBSTAT_SAMPLERS, 1);
+ 
+    bool custom_border = dev->vk.enabled_features.customBorderColors &&
+                         uses_border(pCreateInfo) &&
+@@ -256,4 +258,5 @@ kk_DestroySampler(VkDevice device, VkSampler _sampler,
+       kk_sampler_heap_remove(dev, sampler->planes[plane].hw);
+ 
+    vk_sampler_destroy(&dev->vk, pAllocator, &sampler->vk);
++   kk_bbstat_add(KK_BBSTAT_SAMPLERS, -1);
+ }
+diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
+index cab3359..ae23a4a 100644
+--- a/src/kosmickrisp/vulkan/kk_shader.c
++++ b/src/kosmickrisp/vulkan/kk_shader.c
+@@ -864,6 +864,7 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
+    ralloc_free((void *)data->code);
+ 
+    vk_shader_free(&dev->vk, pAllocator, &shader->vk);
++   kk_bbstat_add(KK_BBSTAT_SHADERS, -1);
+ }
+ 
+ static bool
+@@ -1000,6 +1001,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
+       ralloc_free(nir);
+       return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+    }
++   kk_bbstat_add(KK_BBSTAT_SHADERS, 1);
+ 
+    gather_shader_info(shader, nir, state);
+ 
+@@ -1714,6 +1716,7 @@ kk_deserialize_shader(struct vk_device *vk_dev, struct blob_reader *blob,
+       &dev->vk, &kk_shader_ops, info.stage, pAllocator, sizeof(*shader));
+    if (shader == NULL)
+       return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
++   kk_bbstat_add(KK_BBSTAT_SHADERS, 1);
+ 
+    VkResult result = kk_msl_deserialize(blob, info.stage, shader);
+    if (result != VK_SUCCESS)
+diff --git a/src/kosmickrisp/vulkan/kk_sync.c b/src/kosmickrisp/vulkan/kk_sync.c
+index ffff6d9..e43fa05 100644
+--- a/src/kosmickrisp/vulkan/kk_sync.c
++++ b/src/kosmickrisp/vulkan/kk_sync.c
+@@ -23,6 +23,7 @@ kk_timeline_init(struct vk_device *device, struct vk_sync *sync,
+ 
+    struct kk_device *dev = container_of(device, struct kk_device, vk);
+    timeline->mtl_handle = mtl_new_shared_event(dev->mtl_handle);
++   kk_bbstat_add(KK_BBSTAT_TIMELINES, 1);
+    mtl_shared_event_set_signaled_value(timeline->mtl_handle, initial_value);
+ 
+    return VK_SUCCESS;
+@@ -34,6 +35,7 @@ kk_timeline_finish(struct vk_device *device, struct vk_sync *sync)
+    struct kk_sync_timeline *timeline =
+       container_of(sync, struct kk_sync_timeline, base);
+    mtl_release(timeline->mtl_handle);
++   kk_bbstat_add(KK_BBSTAT_TIMELINES, -1);
+ }
+ 
+ static VkResult
+diff --git a/src/kosmickrisp/vulkan/kk_wsi.c b/src/kosmickrisp/vulkan/kk_wsi.c
+index d863766..b4fedb0 100644
+--- a/src/kosmickrisp/vulkan/kk_wsi.c
++++ b/src/kosmickrisp/vulkan/kk_wsi.c
+@@ -59,6 +59,8 @@ kk_bind_drawable_to_vkimage(VkImage vk_image, void *drawable)
+    struct kk_image_plane *plane = &image->planes[0];
+    if (plane->mtl_handle)
+       mtl_release(plane->mtl_handle);
++   else
++      kk_bbstat_add(KK_BBSTAT_IMAGES, 1); /* bbport: BB_KK_STATS */
+    if (plane->mtl_handle_array)
+       mtl_release(plane->mtl_handle_array);
+    plane->mtl_handle = mtl_retain(texture);

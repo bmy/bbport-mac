@@ -207,13 +207,19 @@ fi
 
 step "KosmicKrisp (Mesa Vulkan-on-Metal driver, x86-64)"
 # The Vulkan driver upstream shadPS4 bundles on macOS; the vendored renderer already carries its
-# driver-specific workarounds. Built with shadPS4's wrapper (meson, cross-compiled to x86-64),
-# pinned to the revision upstream used at the vendored shadPS4 commit.
-KK_REV=${KK_REV:-3af112680499cc5eaf519007404a7366679e1c7f}
+# driver-specific workarounds. Built with shadPS4's wrapper (meson, cross-compiled to x86-64).
+# squidbus's first revision with the newer Mesa (shadPS4 #5138): its command buffer rework pools
+# Metal command buffers and allocators (issue #6); no geometry shaders yet.
+KK_REV=${KK_REV:-a82cadb14cb225eaeadf190d5c9d20ca8ec91744}
 # This port's Mesa patches (tools/macos/kosmickrisp-patches): a change rebuilds the driver.
 KK_PATCHES=$(cat "$REPO"/tools/macos/kosmickrisp-patches/*.patch 2>/dev/null | shasum | cut -c1-16)
 kk_stamp=$PREFIX/lib/kosmickrisp/.bbport-patches
-if ! have lib/kosmickrisp/libvulkan_kosmickrisp.dylib || [[ $(cat "$kk_stamp" 2>/dev/null) != "$KK_PATCHES" ]]; then
+# The stamp holds the revision and the patches, so a change to either rebuilds the driver.
+KK_STAMP="$KK_REV $KK_PATCHES"
+if ! have lib/kosmickrisp/libvulkan_kosmickrisp.dylib || [[ $(cat "$kk_stamp" 2>/dev/null) != "$KK_STAMP" ]]; then
+    # A failed rebuild must not leave the previous driver in place looking current.
+    rm -f "$kk_stamp" "$PREFIX/lib/kosmickrisp/libvulkan_kosmickrisp.dylib" \
+        "$PREFIX/lib/kosmickrisp/kosmickrisp_mesa_icd.json"
     "$BREW" install meson llvm spirv-llvm-translator
     if [[ ! -x $PREFIX/pyenv/bin/python3 ]]; then
         "$("$BREW" --prefix python@3.13)/bin/python3.13" -m venv "$PREFIX/pyenv"
@@ -260,7 +266,7 @@ if ! have lib/kosmickrisp/libvulkan_kosmickrisp.dylib || [[ $(cat "$kk_stamp" 2>
     mkdir -p "$PREFIX/lib/kosmickrisp"
     cp "$kk/build-x86_64/outputs/libvulkan_kosmickrisp.dylib" "$kk/build-x86_64/outputs/kosmickrisp_mesa_icd.json" \
         "$PREFIX/lib/kosmickrisp/"
-    echo "$KK_PATCHES" > "$kk_stamp"
+    echo "$KK_STAMP" > "$kk_stamp"
 fi
 
 step "Verify: every library must contain x86_64"

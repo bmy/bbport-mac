@@ -41,12 +41,54 @@ enum Catalog {
     // Linux defaults to 4 for FSR 4; FSR 3.1 and MetalFX look much better at Quality.
     static let defaultPreset = 1
 
-    static let outputResolutions: [Choice<String>] = [
-        Choice(value: "1280x720", label: "1280×720"),
-        Choice(value: "1920x1080", label: "1920×1080"),
-        Choice(value: "2560x1440", label: "2560×1440"),
-        Choice(value: "3840x2160", label: "3840×2160"),
+    // Output aspect ratios and their resolutions, as the Linux launcher (ASPECTS, OUTPUTS) and
+    // gpu/shim/bbport_settings.cpp (Groups) have them: the game keeps its 1920x1080 frame; another
+    // aspect ratio shows more at the sides (or above and below). Auto: the display's group, and
+    // the display's own size among them. The game itself fits output_res to the aspect ratio and
+    // saves what it uses (2560x1440 becomes 2560x1600 on a 16:10 display).
+    static let aspects = ["auto", "4:3", "16:10", "16:9", "21:9", "32:9"]
+    static let aspectRatios: [String: Double] = [
+        "4:3": 4.0 / 3.0, "16:10": 16.0 / 10.0, "16:9": 16.0 / 9.0, "21:9": 64.0 / 27.0, "32:9": 32.0 / 9.0,
     ]
+    static let outputs: [String: [OutputSize]] = [
+        "4:3": [.init(640, 480), .init(800, 600), .init(1024, 768), .init(1280, 960), .init(1440, 1080),
+                .init(1600, 1200), .init(2048, 1536), .init(2880, 2160)],
+        "16:10": [.init(640, 400), .init(960, 600), .init(1280, 800), .init(1440, 900), .init(1680, 1050),
+                  .init(1920, 1200), .init(2560, 1600), .init(3840, 2400)],
+        "16:9": [.init(640, 360), .init(854, 480), .init(960, 540), .init(1280, 720), .init(1600, 900),
+                 .init(1920, 1080), .init(2560, 1440), .init(3200, 1800), .init(3840, 2160)],
+        "21:9": [.init(860, 360), .init(1280, 540), .init(1720, 720), .init(2560, 1080), .init(3440, 1440),
+                 .init(3840, 1600), .init(5120, 2160)],
+        "32:9": [.init(1280, 360), .init(1920, 540), .init(2560, 720), .init(3840, 1080), .init(5120, 1440),
+                 .init(7680, 2160)],
+    ]
+
+    /// The aspect ratio's group: Auto is the one nearest the display's (16:9 when unknown).
+    static func resolvedAspect(_ aspect: String, monitor: OutputSize?) -> String {
+        if outputs[aspect] != nil { return aspect }
+        guard let monitor, monitor.height > 0 else { return "16:9" }
+        let ratio = Double(monitor.width) / Double(monitor.height)
+        return aspects.dropFirst().min { a, b in
+            abs(log(ratio / aspectRatios[a]!)) < abs(log(ratio / aspectRatios[b]!))
+        } ?? "16:9"
+    }
+
+    /// The resolutions of an aspect ratio; Auto adds the display's own size.
+    static func outputSizes(_ aspect: String, monitor: OutputSize?) -> [OutputSize] {
+        var sizes = outputs[resolvedAspect(aspect, monitor: monitor)] ?? []
+        if aspect == "auto", let monitor, !sizes.contains(monitor),
+           (640...7680).contains(monitor.width), (360...4320).contains(monitor.height) {
+            sizes.append(monitor)
+            sizes.sort { ($0.height, $0.width) < ($1.height, $1.width) }
+        }
+        return sizes
+    }
+
+    /// The size itself if listed, else the one nearest in height (another aspect ratio keeps it).
+    static func nearestOutput(_ sizes: [OutputSize], _ size: OutputSize) -> OutputSize {
+        if sizes.contains(size) { return size }
+        return sizes.min { abs($0.height - size.height) < abs($1.height - size.height) } ?? size
+    }
 
     static let liveResolution: [Choice<String>] = [
         Choice(value: "auto", label: "Auto (by GPU)"),
@@ -255,6 +297,27 @@ struct EffectSetting: Identifiable, Equatable {
     var id: String { key }
 }
 
+/// A resolution, as bbport.ini writes it (`2560x1440`).
+struct OutputSize: Hashable, Sendable {
+    let width: Int
+    let height: Int
+
+    init(_ width: Int, _ height: Int) {
+        self.width = width
+        self.height = height
+    }
+
+    init?(text: String) {
+        let parts = text.lowercased().split(separator: "x")
+        guard parts.count == 2, let width = Int(parts[0]), let height = Int(parts[1]),
+              width > 0, height > 0 else { return nil }
+        self.init(width, height)
+    }
+
+    var text: String { "\(width)x\(height)" }
+    var label: String { "\(width)×\(height)" }
+}
+
 /// The bbport.ini keys the launcher edits (the Linux launcher's INI_DEFAULTS); other keys stay.
 struct GameSettings: Equatable {
     var upscaler = Catalog.defaultUpscaler
@@ -263,6 +326,8 @@ struct GameSettings: Equatable {
     var sharpness = 0.5
     var objectMotion = true
     var showFPS = true
+    var aspect = "auto"
+    /// Any size: the launcher fits it to the aspect ratio's list (LauncherModel.fitOutput).
     var outputRes = "1920x1080"
     var modelLOD = "0"
     var liveResolution = "0"
@@ -293,8 +358,11 @@ struct GameSettings: Equatable {
         }
         objectMotion = GameSettings.flag(values["object_motion"], objectMotion)
         showFPS = GameSettings.flag(values["show_fps"], showFPS)
-        if let raw = values["output_res"], Catalog.contains(Catalog.outputResolutions, raw) {
-            outputRes = raw
+        if let raw = values["aspect_ratio"], Catalog.aspects.contains(raw) {
+            aspect = raw
+        }
+        if let raw = values["output_res"], let size = OutputSize(text: raw) {
+            outputRes = size.text
         }
         if let raw = values["model_lod"], Catalog.contains(Catalog.modelDetail, raw) {
             modelLOD = raw
@@ -321,6 +389,7 @@ struct GameSettings: Equatable {
             (key: "sharpness", value: String(format: "%.2f", sharpness)),
             (key: "object_motion", value: objectMotion ? "1" : "0"),
             (key: "show_fps", value: showFPS ? "1" : "0"),
+            (key: "aspect_ratio", value: aspect),
             (key: "output_res", value: outputRes),
             (key: "model_lod", value: modelLOD),
             (key: "live_resolution", value: liveResolution),

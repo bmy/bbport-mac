@@ -218,6 +218,35 @@ final class LauncherModel: ObservableObject {
     func reloadIni() {
         ini = IniFile.load(iniURL)
         game = GameSettings(ini: ini.values)
+        fitOutput()
+    }
+
+    // MARK: - Output resolution
+
+    /// The game's display in pixels (the one chosen, else the main one): Auto's aspect ratio.
+    var monitorSize: OutputSize? {
+        let screen = prefs.display.isEmpty
+            ? NSScreen.screens.first
+            : NSScreen.screens.first { $0.localizedName == prefs.display }
+        guard let screen else { return nil }
+        let scale = screen.backingScaleFactor
+        return OutputSize(Int((screen.frame.width * scale).rounded()),
+                          Int((screen.frame.height * scale).rounded()))
+    }
+
+    /// The resolutions offered for the chosen aspect ratio and display.
+    var outputChoices: [OutputSize] {
+        Catalog.outputSizes(game.aspect, monitor: monitorSize)
+    }
+
+    /// Keeps the output resolution one of the offered ones (the nearest height), as the Linux
+    /// launcher does when the aspect ratio or the display changes or bbport.ini has another size.
+    func fitOutput() {
+        let current = OutputSize(text: game.outputRes) ?? OutputSize(1920, 1080)
+        let fitted = Catalog.nearestOutput(outputChoices, current)
+        if fitted.text != game.outputRes {
+            game.outputRes = fitted.text
+        }
     }
 
     private func saveIni() throws {
@@ -419,6 +448,7 @@ final class LauncherModel: ObservableObject {
         guard let repo = repoURL, repoCheck.allowsPlay, gameCheck.allowsPlay else { return }
         saveModProfile()
         savePatchProfile()
+        fitOutput() // a display connected or removed since
         do {
             try saveIni()
         } catch {

@@ -264,8 +264,19 @@ struct DisplaySection: View {
 
     var body: some View {
         Section {
+            Picker(selection: $model.game.aspect) {
+                ForEach(Catalog.aspects, id: \.self) { aspect in
+                    Text(aspect == "auto"
+                         ? "Auto (\(Catalog.resolvedAspect(aspect, monitor: model.monitorSize)))"
+                         : aspect)
+                        .tag(aspect)
+                }
+            } label: {
+                Text("Aspect ratio")
+                Text("Wider than 16:9 shows more at the sides, taller more above and below; the HUD keeps to the screen edges")
+            }
             Picker(selection: $model.game.outputRes) {
-                ForEach(Catalog.outputResolutions) { Text($0.label).tag($0.value) }
+                ForEach(model.outputChoices, id: \.self) { Text($0.label).tag($0.text) }
             } label: {
                 Text("Output resolution")
                 Text("The upscaler fills the frame at this size")
@@ -297,6 +308,9 @@ struct DisplaySection: View {
         } header: {
             Text("Display")
         }
+        // Another aspect ratio or display: the resolution of the same height there.
+        .onChange(of: model.game.aspect) { _, _ in model.fitOutput() }
+        .onChange(of: model.prefs.display) { _, _ in model.fitOutput() }
     }
 }
 

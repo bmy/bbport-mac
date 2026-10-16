@@ -1,5 +1,5 @@
 diff --git a/src/kosmickrisp/bridge/mtl_command_buffer.h b/src/kosmickrisp/bridge/mtl_command_buffer.h
-index 2763b0e..0875f35 100644
+index 2763b0e9..0875f35d 100644
 --- a/src/kosmickrisp/bridge/mtl_command_buffer.h
 +++ b/src/kosmickrisp/bridge/mtl_command_buffer.h
 @@ -12,6 +12,8 @@
@@ -12,7 +12,7 @@ index 2763b0e..0875f35 100644
  void mtl_begin_command_buffer(mtl_command_buffer *command_buffer,
                                mtl_command_allocator *allocator);
 diff --git a/src/kosmickrisp/bridge/mtl_command_buffer.m b/src/kosmickrisp/bridge/mtl_command_buffer.m
-index 2b342a0..929f18f 100644
+index 2b342a0f..929f18f2 100644
 --- a/src/kosmickrisp/bridge/mtl_command_buffer.m
 +++ b/src/kosmickrisp/bridge/mtl_command_buffer.m
 @@ -20,6 +20,15 @@ mtl_command_allocator_reset(mtl_command_allocator *allocator)
@@ -32,7 +32,7 @@ index 2b342a0..929f18f 100644
  mtl_begin_command_buffer(mtl_command_buffer *command_buffer,
                           mtl_command_allocator *allocator)
 diff --git a/src/kosmickrisp/bridge/stubs/mtl_command_buffer.c b/src/kosmickrisp/bridge/stubs/mtl_command_buffer.c
-index 2fe1e3b..21b1157 100644
+index 2fe1e3b7..21b1157b 100644
 --- a/src/kosmickrisp/bridge/stubs/mtl_command_buffer.c
 +++ b/src/kosmickrisp/bridge/stubs/mtl_command_buffer.c
 @@ -11,6 +11,12 @@ mtl_command_allocator_reset(mtl_command_allocator *allocator)
@@ -49,7 +49,7 @@ index 2fe1e3b..21b1157 100644
  mtl_begin_command_buffer(mtl_command_buffer *command_buffer,
                           mtl_command_allocator *allocator)
 diff --git a/src/kosmickrisp/vulkan/kk_bo.c b/src/kosmickrisp/vulkan/kk_bo.c
-index 5562b61..5d18277 100644
+index 5562b61f..5d182774 100644
 --- a/src/kosmickrisp/vulkan/kk_bo.c
 +++ b/src/kosmickrisp/vulkan/kk_bo.c
 @@ -66,6 +66,8 @@ kk_alloc_bo(struct kk_device *dev, struct vk_object_base *log_obj,
@@ -75,7 +75,7 @@ index 5562b61..5d18277 100644
     FREE(bo);
  }
 diff --git a/src/kosmickrisp/vulkan/kk_buffer.c b/src/kosmickrisp/vulkan/kk_buffer.c
-index 525207a..4271999 100644
+index 525207a9..42719996 100644
 --- a/src/kosmickrisp/vulkan/kk_buffer.c
 +++ b/src/kosmickrisp/vulkan/kk_buffer.c
 @@ -63,6 +63,7 @@ kk_CreateBuffer(VkDevice device, const VkBufferCreateInfo *pCreateInfo,
@@ -108,7 +108,7 @@ index 525207a..4271999 100644
        mtl_resource_set_label(buffer->metal.handle, buffer->vk.base.object_name);
  
 diff --git a/src/kosmickrisp/vulkan/kk_buffer_view.c b/src/kosmickrisp/vulkan/kk_buffer_view.c
-index 3a0aa03..e82fc93 100644
+index 3a0aa03e..e82fc93f 100644
 --- a/src/kosmickrisp/vulkan/kk_buffer_view.c
 +++ b/src/kosmickrisp/vulkan/kk_buffer_view.c
 @@ -109,6 +109,7 @@ kk_CreateBufferView(VkDevice _device, const VkBufferViewCreateInfo *pCreateInfo,
@@ -128,7 +128,7 @@ index 3a0aa03..e82fc93 100644
  }
  
 diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.c b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
-index 22f4bf7..1864468 100644
+index 22f4bf7f..1864468f 100644
 --- a/src/kosmickrisp/vulkan/kk_cmd_buffer.c
 +++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
 @@ -9,6 +9,7 @@
@@ -156,7 +156,7 @@ index 22f4bf7..1864468 100644
        return (struct kk_ptr){
           .gpu = buffer->gpu,
 diff --git a/src/kosmickrisp/vulkan/kk_cmd_meta.c b/src/kosmickrisp/vulkan/kk_cmd_meta.c
-index 9163df5..2268d08 100644
+index 9163df56..2268d085 100644
 --- a/src/kosmickrisp/vulkan/kk_cmd_meta.c
 +++ b/src/kosmickrisp/vulkan/kk_cmd_meta.c
 @@ -11,6 +11,7 @@
@@ -176,7 +176,7 @@ index 9163df5..2268d08 100644
     *map_out = buf.cpu;
  
 diff --git a/src/kosmickrisp/vulkan/kk_cmd_pool.c b/src/kosmickrisp/vulkan/kk_cmd_pool.c
-index e2c2fc8..9edfddc 100644
+index e2c2fc81..9edfddc1 100644
 --- a/src/kosmickrisp/vulkan/kk_cmd_pool.c
 +++ b/src/kosmickrisp/vulkan/kk_cmd_pool.c
 @@ -32,6 +32,7 @@ kk_cmd_bo_create(struct kk_cmd_pool *pool, struct kk_cmd_bo **bo_out)
@@ -288,7 +288,7 @@ index e2c2fc8..9edfddc 100644
     util_dynarray_fini(&pool->metal.free_allocators);
     util_dynarray_fini(&pool->metal.free_cmd_bufs);
 diff --git a/src/kosmickrisp/vulkan/kk_device.c b/src/kosmickrisp/vulkan/kk_device.c
-index 9950b19..e6aa58c 100644
+index 9950b192..e6aa58c3 100644
 --- a/src/kosmickrisp/vulkan/kk_device.c
 +++ b/src/kosmickrisp/vulkan/kk_device.c
 @@ -29,8 +29,94 @@
@@ -387,7 +387,7 @@ index 9950b19..e6aa58c 100644
     mtl_compiler *handle;
     uint32_t refcount;
 diff --git a/src/kosmickrisp/vulkan/kk_device.h b/src/kosmickrisp/vulkan/kk_device.h
-index e3795ba..62c7b1c 100644
+index e3795ba5..62c7b1cc 100644
 --- a/src/kosmickrisp/vulkan/kk_device.h
 +++ b/src/kosmickrisp/vulkan/kk_device.h
 @@ -18,6 +18,7 @@
@@ -441,7 +441,7 @@ index e3795ba..62c7b1c 100644
 +
  #endif // KK_DEVICE_H
 diff --git a/src/kosmickrisp/vulkan/kk_image.c b/src/kosmickrisp/vulkan/kk_image.c
-index de27a6d..9a568b4 100644
+index 5cbf34b9..4b6e3149 100644
 --- a/src/kosmickrisp/vulkan/kk_image.c
 +++ b/src/kosmickrisp/vulkan/kk_image.c
 @@ -582,8 +582,10 @@ kk_image_plane_finish(struct kk_device *dev, struct kk_image_plane *plane,
@@ -465,7 +465,7 @@ index de27a6d..9a568b4 100644
     if (image->vk.base.object_name)
        mtl_resource_set_label(plane->mtl_handle, image->vk.base.object_name);
  
-@@ -913,6 +917,8 @@ kk_bind_image_memory(struct kk_device *dev, const VkBindImageMemoryInfo *info)
+@@ -917,6 +921,8 @@ kk_bind_image_memory(struct kk_device *dev, const VkBindImageMemoryInfo *info)
        /* Copy swapchain plane data retaining relevant resources. */
        plane->layout = swapchain_plane->layout;
        plane->mtl_handle = mtl_retain(swapchain_plane->mtl_handle);
@@ -475,7 +475,7 @@ index de27a6d..9a568b4 100644
           swapchain_plane->mtl_handle_array
              ? mtl_retain(swapchain_plane->mtl_handle_array)
 diff --git a/src/kosmickrisp/vulkan/kk_image_view.c b/src/kosmickrisp/vulkan/kk_image_view.c
-index 90eb6f6..831611b 100644
+index 90eb6f63..831611b6 100644
 --- a/src/kosmickrisp/vulkan/kk_image_view.c
 +++ b/src/kosmickrisp/vulkan/kk_image_view.c
 @@ -280,6 +280,7 @@ kk_CreateImageView(VkDevice _device, const VkImageViewCreateInfo *pCreateInfo,
@@ -495,7 +495,7 @@ index 90eb6f6..831611b 100644
  
  void
 diff --git a/src/kosmickrisp/vulkan/kk_queue.c b/src/kosmickrisp/vulkan/kk_queue.c
-index 5194492..78a8bbe 100644
+index 5194492b..78a8bbee 100644
 --- a/src/kosmickrisp/vulkan/kk_queue.c
 +++ b/src/kosmickrisp/vulkan/kk_queue.c
 @@ -95,6 +95,7 @@ kk_queue_commit(struct kk_queue *queue, struct kk_cmd_buffer *cmd,
@@ -524,7 +524,7 @@ index 5194492..78a8bbe 100644
  }
  
 diff --git a/src/kosmickrisp/vulkan/kk_sampler.c b/src/kosmickrisp/vulkan/kk_sampler.c
-index 65dcadf..cd32bff 100644
+index 65dcadf4..cd32bffb 100644
 --- a/src/kosmickrisp/vulkan/kk_sampler.c
 +++ b/src/kosmickrisp/vulkan/kk_sampler.c
 @@ -8,6 +8,7 @@
@@ -550,18 +550,18 @@ index 65dcadf..cd32bff 100644
 +   kk_bbstat_add(KK_BBSTAT_SAMPLERS, -1);
  }
 diff --git a/src/kosmickrisp/vulkan/kk_shader.c b/src/kosmickrisp/vulkan/kk_shader.c
-index cab3359..ae23a4a 100644
+index 362739cd..30cf9863 100644
 --- a/src/kosmickrisp/vulkan/kk_shader.c
 +++ b/src/kosmickrisp/vulkan/kk_shader.c
-@@ -864,6 +864,7 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
-    ralloc_free((void *)data->code);
+@@ -868,6 +868,7 @@ kk_shader_destroy(struct vk_device *vk_dev, struct kk_shader *shader,
+    ralloc_free((void *)shader->gs_main.code);
  
     vk_shader_free(&dev->vk, pAllocator, &shader->vk);
 +   kk_bbstat_add(KK_BBSTAT_SHADERS, -1);
  }
  
  static bool
-@@ -1000,6 +1001,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
+@@ -1054,6 +1055,7 @@ kk_compile_shader(struct kk_device *dev, nir_shader *nir,
        ralloc_free(nir);
        return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
     }
@@ -569,16 +569,16 @@ index cab3359..ae23a4a 100644
  
     gather_shader_info(shader, nir, state);
  
-@@ -1714,6 +1716,7 @@ kk_deserialize_shader(struct vk_device *vk_dev, struct blob_reader *blob,
+@@ -1905,6 +1907,7 @@ kk_deserialize_shader(struct vk_device *vk_dev, struct blob_reader *blob,
        &dev->vk, &kk_shader_ops, info.stage, pAllocator, sizeof(*shader));
     if (shader == NULL)
        return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
 +   kk_bbstat_add(KK_BBSTAT_SHADERS, 1);
  
-    VkResult result = kk_msl_deserialize(blob, info.stage, shader);
+    VkResult result = kk_msl_deserialize(blob, &shader->msl_data[info.stage]);
     if (result != VK_SUCCESS)
 diff --git a/src/kosmickrisp/vulkan/kk_sync.c b/src/kosmickrisp/vulkan/kk_sync.c
-index ffff6d9..e43fa05 100644
+index ffff6d9f..e43fa059 100644
 --- a/src/kosmickrisp/vulkan/kk_sync.c
 +++ b/src/kosmickrisp/vulkan/kk_sync.c
 @@ -23,6 +23,7 @@ kk_timeline_init(struct vk_device *device, struct vk_sync *sync,
@@ -598,7 +598,7 @@ index ffff6d9..e43fa05 100644
  
  static VkResult
 diff --git a/src/kosmickrisp/vulkan/kk_wsi.c b/src/kosmickrisp/vulkan/kk_wsi.c
-index d863766..b4fedb0 100644
+index d8637665..b4fedb04 100644
 --- a/src/kosmickrisp/vulkan/kk_wsi.c
 +++ b/src/kosmickrisp/vulkan/kk_wsi.c
 @@ -59,6 +59,8 @@ kk_bind_drawable_to_vkimage(VkImage vk_image, void *drawable)

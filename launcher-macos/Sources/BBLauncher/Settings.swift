@@ -326,7 +326,9 @@ struct GameSettings: Equatable {
     var sharpness = 0.5
     var objectMotion = true
     var showFPS = true
-    var aspect = "auto"
+    /// 16:9 by default on the Mac: the game's camera keeps 16:9 here (its aspect ratio hooks need
+    /// the memory model the Mac does not use), so another aspect ratio squashes the picture.
+    var aspect = "16:9"
     /// Any size: the launcher fits it to the aspect ratio's list (LauncherModel.fitOutput).
     var outputRes = "1920x1080"
     var modelLOD = "0"

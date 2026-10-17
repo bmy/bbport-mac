@@ -141,6 +141,12 @@ OutputSize Monitor() {
 
 int ResolvedAspect(int aspect) {
     if (aspect > AspectAuto && aspect < AspectCount) return aspect;
+#ifdef __APPLE__
+    // bbport (macOS): Auto is 16:9 there. The game's camera and HUD follow another aspect ratio
+    // through guest hooks that install only with its memory in place, which the Mac does not use;
+    // a display-shaped output (16:10 on a MacBook) squashed the picture.
+    return Aspect16x9;
+#endif
     const OutputSize m = Monitor();
     if (m.width <= 0 || m.height <= 0) return Aspect16x9;
     const double ratio = double(m.width) / m.height;
@@ -159,8 +165,13 @@ OutputList Outputs(int aspect) {
     for (int i = 0; i < g.count; ++i) list.sizes[list.count++] = g.sizes[i];
     // Auto: the monitor's own size too (another ratio than its group's sizes, 1366x768, ...).
     const OutputSize m = Monitor();
-    if (aspect == AspectAuto && m.width >= 640 && m.height >= 360 && m.width <= 7680 &&
-        m.height <= 4320 && list.IndexOf(m) < 0) {
+#ifdef __APPLE__
+    const bool add_monitor = false; // bbport (macOS): Auto is 16:9 there (ResolvedAspect)
+#else
+    const bool add_monitor = aspect == AspectAuto && m.width >= 640 && m.height >= 360 &&
+                             m.width <= 7680 && m.height <= 4320 && list.IndexOf(m) < 0;
+#endif
+    if (add_monitor) {
         int at = 0;
         while (at < list.count && (list.sizes[at].height < m.height ||
                                    (list.sizes[at].height == m.height && list.sizes[at].width < m.width))) {

@@ -91,18 +91,33 @@ int main() {
     setenv("BB_RENDER_RES", "", 1);
     assert(!FixedRenderSession() && !ResolutionNeedsRestart());
     unsetenv("BB_RENDER_RES");
-    // Auto: the monitor's group with its own size among them; the chosen height is kept.
     s.output_res = PackSize({1920, 1080});
+#ifdef __APPLE__
+    // bbport (macOS): Auto is 16:9 whatever the monitor, with none of its own sizes; a saved
+    // 16:10 size comes back at the same height class in 16:9.
+    SetMonitor(2560, 1080);
+    assert(ResolvedAspect(AspectAuto) == Aspect16x9 && CurrentOutput() == (OutputSize{1920, 1080}));
+    SetMonitor(1366, 768);
+    assert(ResolvedAspect(AspectAuto) == Aspect16x9 && Outputs(AspectAuto).IndexOf({1366, 768}) < 0);
+    s.output_res = PackSize({2560, 1600});
+    SetMonitor(3024, 1964);
+    assert(ResolvedAspect(AspectAuto) == Aspect16x9 && CurrentOutput() == (OutputSize{2560, 1440}));
+    s.output_res = PackSize({1920, 1080});
+#else
+    // Auto: the monitor's group with its own size among them; the chosen height is kept.
     SetMonitor(2560, 1080);
     assert(ResolvedAspect(AspectAuto) == Aspect21x9 && CurrentOutput() == (OutputSize{2560, 1080}));
     SetMonitor(1366, 768);
     assert(ResolvedAspect(AspectAuto) == Aspect16x9 && Outputs(AspectAuto).IndexOf({1366, 768}) == 4);
     assert(CurrentOutput() == (OutputSize{1920, 1080}));
+#endif
     assert(NearestOutput(Aspect32x9, {1920, 1080}) == (OutputSize{3840, 1080}));
     assert(NearestOutput(Aspect16x10, {1280, 720}) == (OutputSize{1280, 800}));
     assert(NearestOutput(Aspect4x3, {2560, 1080}) == (OutputSize{1440, 1080}));
+#ifndef __APPLE__
     SetMonitor(1024, 768);
     assert(ResolvedAspect(AspectAuto) == Aspect4x3);
+#endif
     std::remove(path);
     std::puts("Upscaler support: saved choices, FSR 3.1 and MetalFX fallbacks PASS");
 }

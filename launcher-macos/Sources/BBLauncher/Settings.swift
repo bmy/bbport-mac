@@ -43,9 +43,8 @@ enum Catalog {
 
     // Output aspect ratios and their resolutions, as the Linux launcher (ASPECTS, OUTPUTS) and
     // gpu/shim/bbport_settings.cpp (Groups) have them: the game keeps its 1920x1080 frame; another
-    // aspect ratio shows more at the sides (or above and below). Auto: the display's group, and
-    // the display's own size among them. The game itself fits output_res to the aspect ratio and
-    // saves what it uses (2560x1440 becomes 2560x1600 on a 16:10 display).
+    // aspect ratio shows more at the sides (or above and below). The game itself fits output_res
+    // to the aspect ratio and saves what it uses (2560x1600 becomes 2560x1440 at 16:9).
     static let aspects = ["auto", "4:3", "16:10", "16:9", "21:9", "32:9"]
     static let aspectRatios: [String: Double] = [
         "4:3": 4.0 / 3.0, "16:10": 16.0 / 10.0, "16:9": 16.0 / 9.0, "21:9": 64.0 / 27.0, "32:9": 32.0 / 9.0,
@@ -63,25 +62,17 @@ enum Catalog {
                  .init(7680, 2160)],
     ]
 
-    /// The aspect ratio's group: Auto is the one nearest the display's (16:9 when unknown).
+    /// The aspect ratio's group. On the Mac, Auto is 16:9, as the game makes it
+    /// (bbport_settings.cpp ResolvedAspect): the camera and HUD follow another aspect ratio through
+    /// guest hooks the Mac does not install, so the display's shape (16:10 on a MacBook) would
+    /// squash the picture. The Linux launcher picks the group nearest the display's instead.
     static func resolvedAspect(_ aspect: String, monitor: OutputSize?) -> String {
-        if outputs[aspect] != nil { return aspect }
-        guard let monitor, monitor.height > 0 else { return "16:9" }
-        let ratio = Double(monitor.width) / Double(monitor.height)
-        return aspects.dropFirst().min { a, b in
-            abs(log(ratio / aspectRatios[a]!)) < abs(log(ratio / aspectRatios[b]!))
-        } ?? "16:9"
+        outputs[aspect] != nil ? aspect : "16:9"
     }
 
-    /// The resolutions of an aspect ratio; Auto adds the display's own size.
+    /// The resolutions of an aspect ratio (on the Mac, Auto adds no display-shaped size).
     static func outputSizes(_ aspect: String, monitor: OutputSize?) -> [OutputSize] {
-        var sizes = outputs[resolvedAspect(aspect, monitor: monitor)] ?? []
-        if aspect == "auto", let monitor, !sizes.contains(monitor),
-           (640...7680).contains(monitor.width), (360...4320).contains(monitor.height) {
-            sizes.append(monitor)
-            sizes.sort { ($0.height, $0.width) < ($1.height, $1.width) }
-        }
-        return sizes
+        outputs[resolvedAspect(aspect, monitor: monitor)] ?? []
     }
 
     /// The size itself if listed, else the one nearest in height (another aspect ratio keeps it).

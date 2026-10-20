@@ -354,9 +354,13 @@ private:
         bool depth_valid = false;
         bool stencil_valid = false;
         bool native_viewport = false; ///< the UI composition's placement depends on it
+        bool no_output_area = false;  ///< NoOutputPassArea: a draw with no pixel shader
         bool operator==(const BeginSignature&) const = default;
     };
     BeginSignature MakeBeginSignature(const GraphicsPipeline* pipeline) const;
+    /// bbport (macOS): whether a draw with no pixel shader and no attachments gets a tiny render
+    /// area (BeginRenderingFull).
+    bool NoOutputPassArea(const GraphicsPipeline* pipeline);
     /// The game's UI in an output of another aspect ratio: where its 16:9 screen ends
     /// (UiComposition::ScreenEdges), 0: not such a pass.
     struct UiPlacement {

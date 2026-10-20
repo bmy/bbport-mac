@@ -268,7 +268,25 @@ Rasterizer::BeginSignature Rasterizer::MakeBeginSignature(const GraphicsPipeline
                                                         regs.viewports[0].yscale * 2) ||
                           (regs.IsClipDisabled() && !regs.viewport_control.xscale_enable &&
                            !regs.viewport_control.yscale_enable);
+    // The same attachments with and without a pixel shader get different render areas.
+    sig.no_output_area = const_cast<Rasterizer*>(this)->NoOutputPassArea(pipeline);
     return sig;
+}
+
+bool Rasterizer::NoOutputPassArea(const GraphicsPipeline* pipeline) {
+    // bbport (macOS; from Wooloomooloo2/bloodborne_mac_port 5137a3e): a draw with no pixel shader
+    // and no attachments (a vertex shader that only writes memory) produces no fragments, but its
+    // render pass began at the device maximum, 16384x16384; Apple's tile-based GPUs walk every
+    // tile of that area (~0.3 ms a pass there, ~20 passes a frame). A 16x16 area keeps the vertex
+    // work. Not while occlusion queries count samples (the PC memory model). Experiment bit 64 of
+    // BB_TOGGLE_FILE: the full area, as before (A/B while the game runs).
+#ifdef __APPLE__
+    return !pipeline->GetStages()[u32(Shader::SwStage::Fragment)] && !OcclusionTranslated() &&
+           !BbToggle::Experiment(64);
+#else
+    (void)pipeline;
+    return false;
+#endif
 }
 
 RenderState Rasterizer::BeginRendering(const GraphicsPipeline* pipeline) {
@@ -655,6 +673,16 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
         state.width = proxy.width;
         state.height = proxy.height;
         target_scale = {float(size.width) / 1920.0f, float(size.height) / 1080.0f};
+    }
+    if (state.num_color_attachments == 0 && !state.depth_stencil_attachment.has_depth &&
+        !state.depth_stencil_attachment.has_stencil && !key.motion_vectors &&
+        NoOutputPassArea(pipeline)) {
+        state.width = 16;
+        state.height = 16;
+        if (static std::atomic_flag told; !told.test_and_set(std::memory_order_relaxed)) {
+            std::printf("Render passes with no output: 16x16 area (experiment bit 64: the full "
+                        "area)\n");
+        }
     }
     if (FrameCapture::Active()) {
         std::array<const VideoCore::ImageInfo*, Gcn::NUM_COLOR_BUFFERS> colors{};

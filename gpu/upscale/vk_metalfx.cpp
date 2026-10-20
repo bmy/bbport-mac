@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "upscale/vk_metalfx.h"
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <utility>
 
+#include "common/thread.h"
 #include "vulkan/instance.h"
 #include "render/scheduler.h"
 
@@ -31,6 +33,21 @@ constexpr VkExternalMemoryHandleTypeFlagBits HeapHandle =
 bool EnvOn(const char* name) {
     const char* value = std::getenv(name);
     return value && value[0] == '1';
+}
+
+} // namespace
+
+struct MetalFxUpscaler::Job {
+    BbMetalFx::Frame frame;
+    u64 copies_tick;
+};
+
+namespace {
+
+u64 NowNs() {
+    return u64(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                   std::chrono::steady_clock::now().time_since_epoch())
+                   .count());
 }
 
 } // namespace
@@ -85,7 +102,9 @@ void MetalFxUpscaler::SetUpEvents() {
     // BB_METALFX_EVENTS=1: Metal and Vulkan wait for each other on the GPU through shared events
     // (timed out on KosmicKrisp: Metal never saw the Vulkan value).
     mode = Mode::SubmitThread;
-    if (!EnvOn("BB_METALFX_EVENTS")) {
+    const char* events_env = std::getenv("BB_METALFX_EVENTS");
+    const bool worker_mode = events_env && events_env[0] == '2';
+    if (!EnvOn("BB_METALFX_EVENTS") && !worker_mode) {
         std::printf("Upscaler: MetalFX on the submission thread (no GPU thread waits)\n");
         return;
     }
@@ -132,11 +151,96 @@ void MetalFxUpscaler::SetUpEvents() {
         return;
     }
     async = true;
+    watch = std::jthread{[this](std::stop_token stop) { WatchLoop(stop); }};
+    if (worker_mode) {
+        mode = Mode::Worker;
+        worker = std::jthread{[this](std::stop_token stop) { WorkerLoop(stop); }};
+        std::printf("Upscaler: MetalFX from a thread of its own (it waits for the input copies; "
+                    "the copy back waits for MetalFX on the GPU; BB_METALFX_EVENTS=2)\n");
+        return;
+    }
     mode = Mode::Events;
     std::printf("Upscaler: MetalFX without CPU waits (Vulkan timelines as Metal shared events)\n");
 }
 
+void MetalFxUpscaler::WorkerLoop(std::stop_token stop) {
+    Common::SetCurrentThreadName("bb:MetalFX");
+    for (;;) {
+        Job job;
+        {
+            std::unique_lock lock{job_mutex};
+            if (!job_cv.wait(lock, stop, [this] { return !jobs.empty(); })) {
+                return;
+            }
+            job = *jobs.front();
+            jobs.pop_front();
+            job_running = true;
+        }
+        // The input copies: their submission's value on the scheduler's timeline.
+        const u64 start = NowNs();
+        scheduler.GetWorkSemaphore()->Wait(job.copies_tick);
+        const u64 waited = NowNs() - start;
+        if (waited >= 500'000'000) {
+            std::printf("Upscaler: MetalFX worker waited %.0f ms for the input copies (tick %llu)\n",
+                        waited / 1e6, (unsigned long long)job.copies_tick);
+            std::fflush(stdout);
+        }
+        std::string error;
+        if (!scaler->Encode(job.frame, error)) {
+            // The copy back must not wait forever.
+            BbMetalFx::SignalEvent(job.frame.signal_event, job.frame.signal_value);
+            std::scoped_lock lock{deferred_mutex};
+            deferred_error = error;
+        }
+        {
+            std::scoped_lock lock{job_mutex};
+            job_running = false;
+        }
+        job_cv.notify_all();
+    }
+}
+
+void MetalFxUpscaler::DrainWorker() {
+    if (mode != Mode::Worker) {
+        return;
+    }
+    std::unique_lock lock{job_mutex};
+    job_cv.wait(lock, [this] { return jobs.empty() && !job_running; });
+}
+
+void MetalFxUpscaler::WatchLoop(std::stop_token stop) {
+    u64 reported = 0;
+    while (!stop.stop_requested()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        const u64 value = issued_value.load(std::memory_order_acquire);
+        if (!value || value == reported) {
+            continue;
+        }
+        const u64 done = BbMetalFx::EventValue(done_event);
+        const u64 waited_ns = NowNs() - issued_at_ns.load(std::memory_order_relaxed);
+        if (done >= value || waited_ns < 500'000'000) {
+            continue;
+        }
+        reported = value;
+        auto* work = scheduler.GetWorkSemaphore();
+        work->Refresh();
+        std::printf("Upscaler: MetalFX frame %llu not done after %.0f ms (mode %s): its input "
+                    "copies are tick %llu, the work timeline is at %llu (Metal sees %llu); "
+                    "MetalFX's own timeline at %llu\n",
+                    (unsigned long long)value, waited_ns / 1e6,
+                    mode == Mode::Worker ? "worker" : "events",
+                    (unsigned long long)issued_copies.load(), (unsigned long long)work->KnownGpuTick(),
+                    (unsigned long long)BbMetalFx::EventValue(work_event),
+                    (unsigned long long)done);
+        std::fflush(stdout);
+    }
+}
+
 MetalFxUpscaler::~MetalFxUpscaler() {
+    // Both threads use the scaler and the events: stopped before those go.
+    DrainWorker();
+    worker = {};
+    watch = {};
     if (scaler || staging[0].buffer) {
         scheduler.Finish();
     }
@@ -248,7 +352,8 @@ bool MetalFxUpscaler::EnsureResources(const Frame& frame) {
         frame.color.format == color_format && frame.hdr == hdr) {
         return true;
     }
-    // The old buffers may still be in a submitted copy.
+    // The old buffers may still be in a submitted copy (or a frame queued for MetalFX).
+    DrainWorker();
     scheduler.Finish();
     scaler.reset();
     for (auto& s : staging) {
@@ -369,6 +474,10 @@ bool MetalFxUpscaler::Run(const Frame& frame) {
             Fail(error, true);
             return false;
         }
+    } else if (mode == Mode::Worker) {
+        // The input copies go to the queue; the worker waits for them, then hands MetalFX the
+        // work (queued below, with the copy back).
+        scheduler.Flush();
     } else if (mode == Mode::Events) {
         scheduler.Flush();
         metal.wait_event = work_event;
@@ -413,9 +522,21 @@ bool MetalFxUpscaler::Run(const Frame& frame) {
     output_barrier(vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eTransfer,
                    vk::AccessFlagBits2::eTransferWrite, vk::PipelineStageFlagBits2::eAllCommands,
                    rw);
-    if (mode == Mode::Events) {
+    if (mode == Mode::Events || mode == Mode::Worker) {
         // The copy back (and, in queue order, everything after it) waits for MetalFX on the GPU.
         ++done_value;
+        if (mode == Mode::Worker) {
+            metal.signal_event = done_event;
+            metal.signal_value = done_value;
+            {
+                std::scoped_lock lock{job_mutex};
+                jobs.push_back(std::make_unique<Job>(Job{metal, copies_tick}));
+            }
+            job_cv.notify_all();
+        }
+        issued_copies.store(copies_tick, std::memory_order_relaxed);
+        issued_at_ns.store(NowNs(), std::memory_order_relaxed);
+        issued_value.store(done_value, std::memory_order_release);
         SubmitInfo info{};
         info.AddWait(done_semaphore, done_value);
         scheduler.Flush(info);
@@ -426,11 +547,21 @@ bool MetalFxUpscaler::Run(const Frame& frame) {
         SubmitInfo info{};
         info.before_submit.push_back(
             [this, metal, copies_tick, work = scheduler.GetWorkSemaphore()] {
+                const u64 start = NowNs();
                 work->Wait(copies_tick);
+                const u64 copied = NowNs();
                 std::string error;
                 if (!scaler->Encode(metal, error)) {
                     std::scoped_lock lock{deferred_mutex};
                     deferred_error = error;
+                }
+                const u64 end = NowNs();
+                if (end - start >= 500'000'000) {
+                    std::printf("Upscaler: MetalFX frame took %.0f ms on the submission thread "
+                                "(input copies, tick %llu: %.0f ms; MetalFX: %.0f ms)\n",
+                                (end - start) / 1e6, (unsigned long long)copies_tick,
+                                (copied - start) / 1e6, (end - copied) / 1e6);
+                    std::fflush(stdout);
                 }
             });
         scheduler.Flush(info);
@@ -450,6 +581,8 @@ MetalFxUpscaler::MetalFxUpscaler(const Instance& instance_, Scheduler& scheduler
 #endif
     fatal = true;
 }
+
+struct MetalFxUpscaler::Job {};
 
 MetalFxUpscaler::~MetalFxUpscaler() = default;
 

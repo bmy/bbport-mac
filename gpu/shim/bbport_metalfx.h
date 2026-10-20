@@ -16,6 +16,10 @@ namespace BbMetalFx {
 /// `heap` (an id<MTLHeap>). Otherwise false with the reason.
 bool Supported(void* heap, std::string& reason);
 
+/// An id<MTLSharedEvent>'s value, and setting it from the CPU (never lowered).
+uint64_t EventValue(void* event);
+void SignalEvent(void* event, uint64_t value);
+
 enum class ColorFormat { Rgba16Float, Rgba8Unorm };
 
 struct Config {
@@ -38,10 +42,11 @@ struct Frame {
     float motion_scale_x, motion_scale_y; ///< 1: pixels, previous minus current position
     bool reset;
     bool depth_reversed;
-    /// Asynchronous (both set): the GPU waits until `wait_event` (an id<MTLSharedEvent>, a
-    /// Vulkan timeline) reaches `wait_value` before reading the inputs, and sets `signal_event`
-    /// to `signal_value` when the output is written; nothing waits on the CPU. A failed command
-    /// buffer still sets it (from its completion handler), and TakeError() reports it later.
+    /// Asynchronous (`signal_event` set): the GPU sets `signal_event` (an id<MTLSharedEvent>) to
+    /// `signal_value` when the output is written; nothing waits on the CPU. With `wait_event` (a
+    /// Vulkan timeline) too, the GPU first waits until it reaches `wait_value` before reading the
+    /// inputs; without, the caller waited for the inputs. A failed command buffer still sets the
+    /// signal (from its completion handler), and TakeError() reports it later.
     void* wait_event = nullptr;
     uint64_t wait_value = 0;
     void* signal_event = nullptr;

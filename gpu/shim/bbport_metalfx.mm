@@ -197,10 +197,10 @@ bool Scaler::Encode(const Frame& frame, std::string& error) {
             error = "commandBuffer failed";
             return false;
         }
-        const bool async = frame.wait_event && frame.signal_event;
+        const bool async = frame.signal_event != nullptr;
         id<MTLSharedEvent> wait_event = (__bridge id<MTLSharedEvent>)frame.wait_event;
         id<MTLSharedEvent> signal_event = (__bridge id<MTLSharedEvent>)frame.signal_event;
-        if (async) {
+        if (async && wait_event) {
             // The Vulkan copies of this frame's inputs (their submission's timeline value).
             [cmd encodeWaitForEvent:wait_event value:frame.wait_value];
         }
@@ -271,6 +271,23 @@ bool Scaler::Encode(const Frame& frame, std::string& error) {
             return false;
         }
         return true;
+    }
+}
+
+uint64_t EventValue(void* event) {
+    if (!event) {
+        return 0;
+    }
+    return ((__bridge id<MTLSharedEvent>)event).signaledValue;
+}
+
+void SignalEvent(void* event, uint64_t value) {
+    if (!event) {
+        return;
+    }
+    id<MTLSharedEvent> shared = (__bridge id<MTLSharedEvent>)event;
+    if (shared.signaledValue < value) {
+        shared.signaledValue = value;
     }
 }
 

@@ -6,15 +6,20 @@
 // copies and records the copy back; MetalFX runs on the submission thread right before the copy
 // back is submitted (it waits for the copies, then for MetalFX). BB_METALFX_SYNC=1: the GPU
 // thread finishes the frame so far and waits for MetalFX itself. BB_METALFX_EVENTS=1 (needs this
-// port's KosmicKrisp patch 0002): GPU-side waits through shared events. Elsewhere it reports
-// itself unsupported.
+// port's KosmicKrisp patch 0002): GPU-side waits through shared events. BB_METALFX_EVENTS=2: a
+// thread of its own waits for the copies on the CPU, then hands MetalFX the work; the copy back
+// waits for MetalFX on the GPU. Elsewhere it reports itself unsupported.
 
 #pragma once
 
 #include <array>
+#include <atomic>
+#include <condition_variable>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 
 #include "common/types.h"
 #include "vulkan/vk_common.h"
@@ -95,8 +100,26 @@ private:
     void SetUpEvents();
     /// Sync: the GPU thread waits for the GPU and MetalFX. SubmitThread (default): MetalFX runs
     /// right before the copy back is submitted, on the submission thread. Events
-    /// (BB_METALFX_EVENTS=1): GPU-side waits through shared events.
-    enum class Mode { Sync, SubmitThread, Events };
+    /// (BB_METALFX_EVENTS=1): GPU-side waits through shared events. Worker
+    /// (BB_METALFX_EVENTS=2): a thread of its own waits for the input copies on the CPU and
+    /// hands MetalFX its work then; the copy back waits for MetalFX on the GPU.
+    enum class Mode { Sync, SubmitThread, Events, Worker };
+    struct Job; ///< a frame for the worker (vk_metalfx.cpp)
+    void WorkerLoop(std::stop_token stop);
+    /// Until the worker has handed every queued frame to MetalFX.
+    void DrainWorker();
+    void WatchLoop(std::stop_token stop);
+    std::mutex job_mutex;
+    std::condition_variable_any job_cv;
+    std::deque<std::unique_ptr<Job>> jobs;
+    bool job_running = false;
+    std::jthread worker;
+    /// BB_METALFX_EVENTS: a frame MetalFX has not finished after 0.5 s is reported (where each
+    /// side got to), once per frame.
+    std::jthread watch;
+    std::atomic<u64> issued_value{0};     ///< the last done value a copy back waits for
+    std::atomic<u64> issued_copies{0};    ///< that frame's input copies (work timeline)
+    std::atomic<u64> issued_at_ns{0};
     Mode mode = Mode::Sync;
     std::mutex deferred_mutex;
     std::string deferred_error; ///< a submission-thread MetalFX failure, reported next frame

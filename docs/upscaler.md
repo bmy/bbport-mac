@@ -135,8 +135,13 @@ The previous frame's matrices are not there; the port keeps them itself.
   in the alpha). Toggle 1<<24 switches it off at run time.
 - MetalFX (`BB_UPSCALER=metalfx`, macOS with KosmicKrisp only, `vk_metalfx.cpp` and
   `shim/bbport_metalfx.mm`): the same inputs, copied into buffers on exportable memory whose
-  MTLHeaps MetalFX reads on KosmicKrisp's MTLDevice; synchronous (CPU waits on both sides).
-  Diagnostics: `BB_METALFX_INVERT_JITTER=1`, `BB_METALFX_INVERT_MOTION=1`,
+  MTLHeaps MetalFX reads on KosmicKrisp's MTLDevice. Hand-over between Vulkan and MetalFX:
+  by default on the submission thread (it waits for the input copies, then for MetalFX);
+  `BB_METALFX_SYNC=1` the GPU thread waits for both; `BB_METALFX_EVENTS=1` both sides wait for
+  each other on the GPU through shared events (KosmicKrisp patch 0002); `BB_METALFX_EVENTS=2` a
+  MetalFX thread waits for the input copies on the CPU and hands MetalFX the work with no
+  GPU-side wait, while the copy back waits for MetalFX on the GPU. A frame slower than 0.5 s is
+  reported in the log with where each side was. Diagnostics: `BB_METALFX_INVERT_JITTER=1`, `BB_METALFX_INVERT_MOTION=1`,
   `BB_METALFX_DEPTH_REVERSED=1`. FSR 4 is not offered on macOS (KosmicKrisp lacks compute
   shader derivatives and accelerated INT8 dot products); DLSS needs NVIDIA hardware.
 - Jitter: viewport offset of scene geometry (drawn with the scene depth, not full-screen

@@ -709,9 +709,16 @@ static int probe_main(int argc, char **argv) {
     if (patch_file) apply_patches(patch_file, segments, ns, relocs, nr);
 #ifdef __APPLE__
     {
+        /* bbport 0.6 installs the hooks in the game's code with either memory model, at the GPU's
+           start (bbport_guest_hooks), and they leave their pages read-only and executable: as
+           apply_patches does, the code is made writable for this; the final protection below. */
         size_t tls_sites=0;
         for (uint64_t i = 0; i < ns; ++i)
-            if (segments[i].flags & 1) tls_sites += runtime_tls_fixup(image + segments[i].address, segments[i].size);
+            if (segments[i].flags & 1) {
+                const uint64_t first=segments[i].address & ~(uint64_t)(page_size-1);
+                protect(image+first,(size_t)(bb_round_page(segments[i].address+segments[i].size)-first),7);
+                tls_sites += runtime_tls_fixup(image + segments[i].address, segments[i].size);
+            }
         printf("TLS: %zu guest TCB loads redirected to the pthread TSD slot\n", tls_sites);
     }
 #endif

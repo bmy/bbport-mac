@@ -360,7 +360,7 @@ private:
     BeginSignature MakeBeginSignature(const GraphicsPipeline* pipeline) const;
     /// bbport (macOS): whether a draw with no pixel shader and no attachments gets a tiny render
     /// area (BeginRenderingFull).
-    bool NoOutputPassArea(const GraphicsPipeline* pipeline);
+    bool NoOutputPassArea(const GraphicsPipeline* pipeline) const;
     /// The game's UI in an output of another aspect ratio: where its 16:9 screen ends
     /// (UiComposition::ScreenEdges), 0: not such a pass.
     struct UiPlacement {

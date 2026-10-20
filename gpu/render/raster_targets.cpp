@@ -268,12 +268,15 @@ Rasterizer::BeginSignature Rasterizer::MakeBeginSignature(const GraphicsPipeline
                                                         regs.viewports[0].yscale * 2) ||
                           (regs.IsClipDisabled() && !regs.viewport_control.xscale_enable &&
                            !regs.viewport_control.yscale_enable);
-    // The same attachments with and without a pixel shader get different render areas.
-    sig.no_output_area = const_cast<Rasterizer*>(this)->NoOutputPassArea(pipeline);
+    // The same attachments with and without a pixel shader get different render areas (only
+    // with no attachments: depth-only draws keep sharing their state).
+    sig.no_output_area = sig.mrt_mask == 0 && !sig.motion &&
+                         !(sig.ids[Gcn::NUM_COLOR_BUFFERS] && (sig.depth_valid || sig.stencil_valid)) &&
+                         NoOutputPassArea(pipeline);
     return sig;
 }
 
-bool Rasterizer::NoOutputPassArea(const GraphicsPipeline* pipeline) {
+bool Rasterizer::NoOutputPassArea(const GraphicsPipeline* pipeline) const {
     // bbport (macOS; from Wooloomooloo2/bloodborne_mac_port 5137a3e): a draw with no pixel shader
     // and no attachments (a vertex shader that only writes memory) produces no fragments, but its
     // render pass began at the device maximum, 16384x16384; Apple's tile-based GPUs walk every

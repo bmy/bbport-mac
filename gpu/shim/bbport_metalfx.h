@@ -63,6 +63,8 @@ public:
     bool Encode(const Frame& frame, std::string& error);
     /// The failure of an earlier asynchronous frame, once.
     bool TakeError(std::string& error);
+    /// Until the last frame handed to Metal is done (call from the thread that encodes).
+    void WaitIdle();
 
     struct Impl;
 

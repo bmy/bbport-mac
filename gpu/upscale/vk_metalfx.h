@@ -105,21 +105,26 @@ private:
     /// hands MetalFX its work then; the copy back waits for MetalFX on the GPU.
     enum class Mode { Sync, SubmitThread, Events, Worker };
     struct Job; ///< a frame for the worker (vk_metalfx.cpp)
+    struct Pending {
+        u64 value;       ///< the done value its copy back waits for
+        u64 copies_tick; ///< its input copies (work timeline)
+        u64 issued_ns;
+    };
     void WorkerLoop(std::stop_token stop);
     /// Until the worker has handed every queued frame to MetalFX.
     void DrainWorker();
     void WatchLoop(std::stop_token stop);
     std::mutex job_mutex;
     std::condition_variable_any job_cv;
-    std::deque<std::unique_ptr<Job>> jobs;
+    std::deque<std::unique_ptr<Job>> jobs; ///< Job is defined in the .cpp (Mac-only types)
     bool job_running = false;
     std::jthread worker;
     /// BB_METALFX_EVENTS: a frame MetalFX has not finished after 0.5 s is reported (where each
     /// side got to), once per frame.
     std::jthread watch;
-    std::atomic<u64> issued_value{0};     ///< the last done value a copy back waits for
-    std::atomic<u64> issued_copies{0};    ///< that frame's input copies (work timeline)
-    std::atomic<u64> issued_at_ns{0};
+    std::mutex pending_mutex;
+    std::deque<Pending> pending; ///< frames whose copy back waits, oldest first
+    std::atomic<u64> encoded_value{0}; ///< Worker: the last frame handed to Metal
     Mode mode = Mode::Sync;
     std::mutex deferred_mutex;
     std::string deferred_error; ///< a submission-thread MetalFX failure, reported next frame

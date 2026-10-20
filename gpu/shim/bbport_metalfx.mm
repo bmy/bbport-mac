@@ -291,6 +291,12 @@ void SignalEvent(void* event, uint64_t value) {
     }
 }
 
+void Scaler::WaitIdle() {
+    if (impl->last) {
+        [impl->last waitUntilCompleted];
+    }
+}
+
 bool Scaler::TakeError(std::string& error) {
     std::scoped_lock lock{impl->errors->mutex};
     if (impl->errors->text.empty()) {

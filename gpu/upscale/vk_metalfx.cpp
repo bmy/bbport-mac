@@ -109,7 +109,7 @@ void MetalFxUpscaler::SetUpEvents() {
         return;
     }
     if (!instance.IsMetalObjectsEnabled()) {
-        std::printf("Upscaler: MetalFX synchronous (the driver lacks VK_EXT_metal_objects: "
+        std::printf("Upscaler: MetalFX on the submission thread (the driver lacks VK_EXT_metal_objects: "
                     "rebuild KosmicKrisp with the port's patches)\n");
         return;
     }
@@ -117,7 +117,7 @@ void MetalFxUpscaler::SetUpEvents() {
     const auto export_objects = reinterpret_cast<PFN_vkExportMetalObjectsEXT>(
         device.getProcAddr("vkExportMetalObjectsEXT"));
     if (!export_objects) {
-        std::printf("Upscaler: MetalFX synchronous (vkExportMetalObjectsEXT is missing)\n");
+        std::printf("Upscaler: MetalFX on the submission thread (vkExportMetalObjectsEXT is missing)\n");
         return;
     }
     const vk::SemaphoreTypeCreateInfo timeline{
@@ -144,22 +144,21 @@ void MetalFxUpscaler::SetUpEvents() {
     done_event = event_of(done_semaphore);
     work_event = event_of(scheduler.GetWorkSemaphore()->Handle());
     if (!done_event || !work_event) {
-        std::printf("Upscaler: MetalFX synchronous (no shared events from the driver)\n");
+        std::printf("Upscaler: MetalFX on the submission thread (no shared events from the driver)\n");
         device.destroySemaphore(done_semaphore);
         done_semaphore = vk::Semaphore{};
         done_event = work_event = nullptr;
         return;
     }
     async = true;
+    mode = worker_mode ? Mode::Worker : Mode::Events;
     watch = std::jthread{[this](std::stop_token stop) { WatchLoop(stop); }};
     if (worker_mode) {
-        mode = Mode::Worker;
         worker = std::jthread{[this](std::stop_token stop) { WorkerLoop(stop); }};
         std::printf("Upscaler: MetalFX from a thread of its own (it waits for the input copies; "
                     "the copy back waits for MetalFX on the GPU; BB_METALFX_EVENTS=2)\n");
         return;
     }
-    mode = Mode::Events;
     std::printf("Upscaler: MetalFX without CPU waits (Vulkan timelines as Metal shared events)\n");
 }
 
@@ -187,11 +186,14 @@ void MetalFxUpscaler::WorkerLoop(std::stop_token stop) {
         }
         std::string error;
         if (!scaler->Encode(job.frame, error)) {
-            // The copy back must not wait forever.
+            // The copy back must not wait forever; earlier frames still on the GPU signal lower
+            // values (a timeline never goes down), so they finish first.
+            scaler->WaitIdle();
             BbMetalFx::SignalEvent(job.frame.signal_event, job.frame.signal_value);
             std::scoped_lock lock{deferred_mutex};
             deferred_error = error;
         }
+        encoded_value.store(job.frame.signal_value, std::memory_order_relaxed);
         {
             std::scoped_lock lock{job_mutex};
             job_running = false;
@@ -212,26 +214,40 @@ void MetalFxUpscaler::WatchLoop(std::stop_token stop) {
     u64 reported = 0;
     while (!stop.stop_requested()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        const u64 value = issued_value.load(std::memory_order_acquire);
-        if (!value || value == reported) {
-            continue;
-        }
         const u64 done = BbMetalFx::EventValue(done_event);
-        const u64 waited_ns = NowNs() - issued_at_ns.load(std::memory_order_relaxed);
-        if (done >= value || waited_ns < 500'000'000) {
+        Pending oldest{};
+        {
+            std::scoped_lock lock{pending_mutex};
+            while (!pending.empty() && pending.front().value <= done) {
+                pending.pop_front();
+            }
+            if (pending.empty()) {
+                continue;
+            }
+            oldest = pending.front();
+        }
+        const u64 waited_ns = NowNs() - oldest.issued_ns;
+        if (oldest.value == reported || waited_ns < 500'000'000) {
             continue;
         }
-        reported = value;
+        reported = oldest.value;
         auto* work = scheduler.GetWorkSemaphore();
         work->Refresh();
-        std::printf("Upscaler: MetalFX frame %llu not done after %.0f ms (mode %s): its input "
-                    "copies are tick %llu, the work timeline is at %llu (Metal sees %llu); "
-                    "MetalFX's own timeline at %llu\n",
-                    (unsigned long long)value, waited_ns / 1e6,
+        char worker_note[96] = "";
+        if (mode == Mode::Worker) {
+            std::snprintf(worker_note, sizeof(worker_note),
+                          "; the worker handed Metal frames up to %llu",
+                          (unsigned long long)encoded_value.load(std::memory_order_relaxed));
+        }
+        std::printf("Upscaler: MetalFX frame %llu: its copy back still waits after %.0f ms "
+                    "(%s mode). Its input copies are tick %llu; the work timeline is at %llu "
+                    "(Metal sees %llu); MetalFX's timeline is at %llu%s\n",
+                    (unsigned long long)oldest.value, waited_ns / 1e6,
                     mode == Mode::Worker ? "worker" : "events",
-                    (unsigned long long)issued_copies.load(), (unsigned long long)work->KnownGpuTick(),
+                    (unsigned long long)oldest.copies_tick,
+                    (unsigned long long)work->KnownGpuTick(),
                     (unsigned long long)BbMetalFx::EventValue(work_event),
-                    (unsigned long long)done);
+                    (unsigned long long)done, worker_note);
         std::fflush(stdout);
     }
 }
@@ -534,9 +550,13 @@ bool MetalFxUpscaler::Run(const Frame& frame) {
             }
             job_cv.notify_all();
         }
-        issued_copies.store(copies_tick, std::memory_order_relaxed);
-        issued_at_ns.store(NowNs(), std::memory_order_relaxed);
-        issued_value.store(done_value, std::memory_order_release);
+        {
+            std::scoped_lock lock{pending_mutex};
+            if (pending.size() >= 256) {
+                pending.pop_front();
+            }
+            pending.push_back({done_value, copies_tick, NowNs()});
+        }
         SubmitInfo info{};
         info.AddWait(done_semaphore, done_value);
         scheduler.Flush(info);

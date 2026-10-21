@@ -452,11 +452,16 @@ void OnFlipStats() {
             std::printf("Recording: %.1f submissions/frame, %.2f command buffers each\n",
                         frames ? double(submits) / frames : 0.0, double(segments) / submits);
         }
-        if (const u64 merged = BbStats::pass_merge_bindings.exchange(0)) {
-            std::printf("Pass merge: %.1f bindings/frame read from stream copies, %.0f KiB/frame "
-                        "(uploads that would have ended a render pass)\n",
-                        frames ? double(merged) / frames : 0.0,
-                        frames ? BbStats::pass_merge_bytes.exchange(0) / (1024.0 * frames) : 0.0);
+        {
+            const u64 merged = BbStats::pass_merge_bindings.exchange(0);
+            const u64 merged_bytes = BbStats::pass_merge_bytes.exchange(0);
+            const u64 flushed = BbStats::pass_merge_flushed.exchange(0);
+            if (merged && frames) {
+                std::printf("Pass merge: %.1f bindings/frame read from stream copies while a render "
+                            "pass was open, %.0f KiB/frame; %.1f ranges/frame uploaded afterwards\n",
+                            double(merged) / frames, merged_bytes / (1024.0 * frames),
+                            double(flushed) / frames);
+            }
         }
         BbWaitTrace::Report(window);
         // Frame pacing: spread of the guest flip intervals (judder that the mean hides).

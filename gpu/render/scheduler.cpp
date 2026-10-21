@@ -315,8 +315,10 @@ void Scheduler::BeginRendering(const RenderState& state) {
     // A cut of the command stream (MaybeSplit) closed this render pass: it goes on in the next
     // command buffer, its attachments not cleared again.
     const bool resume = resume_rendering && !is_rendering && render_state == state;
-    if (!is_rendering && render_state == state && pass_end_stack[0]) {
+    // Not a cut of the command stream resuming (MaybeSplit ends no pass of its own).
+    if (!resume && !is_rendering && render_state == state && pass_end_stack[0]) {
         TracePassBreak(pass_end_stack);
+        pass_end_stack = {};
     }
     resume_rendering = false;
     EndRendering();

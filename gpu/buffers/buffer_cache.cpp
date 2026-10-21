@@ -1147,7 +1147,8 @@ thread_local bool pass_merge_reads = false;
 u64 PassMergeMaxBytes() {
     static const u64 bytes = [] {
         const char* env = std::getenv("BB_PASS_MERGE_MAX_KB");
-        return (env && *env ? std::strtoull(env, nullptr, 10) : 1024ull) * 1024;
+        const u64 kib = env && *env ? std::strtoull(env, nullptr, 10) : 1024ull;
+        return std::clamp<u64>(kib, 16, 64 * 1024) * 1024;
     }();
     return bytes;
 }
@@ -1174,9 +1175,42 @@ bool BufferCache::PassMerge() {
     return enabled && !BbToggle::Experiment(128);
 }
 
+void BufferCache::FlushPassMergeUploads() {
+    if (pass_merge_pending.empty()) {
+        return;
+    }
+    // Uploaded where no render pass is open (or one is about to end anyway), so later draws read
+    // the arena again: data drawn only inside render passes is copied once, not on every draw.
+    auto pending = std::move(pass_merge_pending);
+    pass_merge_pending.clear();
+    for (const auto& [address, size] : pending) {
+        if (!IsRegionCpuModified(address, size) || IsRegionGpuModified(address, size)) {
+            continue; // uploaded since, or the GPU wrote it: its own path now
+        }
+        const u64 first_block = address >> block_shift;
+        const u64 last_block = (address + size - 1) >> block_shift;
+        const auto* arena = GetArena(first_block, last_block);
+        EnsureResident(arena, first_block, last_block);
+        SynchronizeMemory(arena, address, size, false, false);
+        BbStats::pass_merge_flushed.fetch_add(1, std::memory_order_relaxed);
+    }
+    pending.clear();
+    if (pass_merge_pending.empty()) {
+        pass_merge_pending = std::move(pending); // keep the capacity
+    }
+}
+
 std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 size,
                                                         bool is_written, bool is_texel_buffer) {
     BB_SECTION(ObtainBuffer);
+    // bbport (BB_PASS_MERGE): this call's, not nested ones' (deferred operations run while memory
+    // is made resident, such as the fault buffer's, which binds only to make memory resident).
+    struct PassMergeTake {
+        bool on = std::exchange(pass_merge_reads, false);
+        ~PassMergeTake() {
+            pass_merge_reads = on;
+        }
+    } const pass_merge_take;
     const bool stats = BufferStatsEnabled();
     if (stats) {
         PrintBufferStats();
@@ -1325,18 +1359,22 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
         TraceBinding(device_addr, size, false, 3);
         return {&stream_buffer, offset};
     }
+    const u64 first_block = device_addr >> block_shift;
+    const u64 last_block = (device_addr + size - 1) >> block_shift;
+    const auto* arena = GetArena(first_block, last_block);
+    EnsureResident(arena, first_block, last_block);
     // bbport (BB_PASS_MERGE, macOS by default): a larger read-only binding of memory the CPU
-    // changed, drawn in a render pass that is still open (the draw before used the same
-    // attachments), reads a stream copy like the small ones above instead of an upload into the
-    // arena. The upload is a buffer copy, which ends the render pass, and the draw opens it again:
-    // on a tile-based GPU every attachment is stored and loaded again (about 32 times a frame at
-    // 2560x1600 on an M5 Max, 2026-10-21). The arena keeps the change pending (still CPU-modified):
-    // it is uploaded where the range is next bound outside a render pass, or for shaders reading
-    // memory through the page table (SynchronizeDmaBuffers, which the rasterizer excludes here
-    // anyway). Not for GPU-written ranges: the game's memory is older than the arena there.
-    if (pass_merge_reads && !is_written && !is_texel_buffer && size > STREAM_THRESHOLD &&
+    // changed, drawn while a render pass is open, reads a stream copy like the small ones above
+    // instead of an upload into the arena. The upload is a buffer copy, which ends the render
+    // pass, and a draw into the same attachments opens it again: on a tile-based GPU every
+    // attachment is stored and loaded again. The memory is resident as before (page-table
+    // shaders read it there); the arena keeps the change pending (still CPU-modified) and the
+    // range is uploaded where no render pass is open (FlushPassMergeUploads). Not for GPU-written
+    // ranges: the game's memory is older than the arena there.
+    if (pass_merge_take.on && !is_written && !is_texel_buffer && size > STREAM_THRESHOLD &&
         size <= PassMergeMaxBytes() && !no_stream && !GuestInPlace() && !LayerMode() &&
         scheduler.IsRendering() && !stream_buffer.mapped_data.empty() &&
+        pass_merge_pending.size() < MaxPassMergePending &&
         !BbToggle::Disabled(BbToggle::DeferredStreamCopies) && PassMerge() &&
         IsRegionCpuModified(device_addr, size) && !IsRegionGpuModified(device_addr, size)) {
         // No waiting for the GPU to free ring space: without it, the upload as before.
@@ -1350,16 +1388,13 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
                 .size = size,
                 .extra = reinterpret_cast<u64>(static_cast<Buffer*>(&stream_buffer)),
             });
+            pass_merge_pending.emplace_back(device_addr, size);
             BbStats::pass_merge_bindings.fetch_add(1, std::memory_order_relaxed);
             BbStats::pass_merge_bytes.fetch_add(size, std::memory_order_relaxed);
             TraceBinding(device_addr, size, false, 3);
             return {&stream_buffer, *offset};
         }
     }
-    const u64 first_block = device_addr >> block_shift;
-    const u64 last_block = (device_addr + size - 1) >> block_shift;
-    const auto* arena = GetArena(first_block, last_block);
-    EnsureResident(arena, first_block, last_block);
     BB_SECTION(ObtainVram);
     if (!is_written) {
     }

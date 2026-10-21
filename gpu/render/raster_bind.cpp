@@ -291,7 +291,8 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
     pipeline_is_compute = pipeline->IsCompute();
     // bbport (BB_PASS_MERGE): a graphics draw's read-only bindings may read stream copies instead
     // of uploads that would end the open render pass (BufferCache::ObtainBuffer). Not with stages
-    // reading memory through the page table: SynchronizeDmaBuffers uploads for them anyway.
+    // reading memory through the page table (they read the arena). Where no render pass is open,
+    // or a dispatch ends it anyway, the arena uploads such copies left pending happen first.
     struct PassMergeScope {
         explicit PassMergeScope(bool on) {
             VideoCore::BufferCache::SetPassMergeReads(on);
@@ -312,6 +313,9 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
         }
         return true;
     }();
+    if (pipeline->IsCompute() || !scheduler.IsRendering()) {
+        buffer_cache.FlushPassMergeUploads();
+    }
     const PassMergeScope pass_merge_scope{pass_merge};
     if (!pipeline->IsCompute() && !BbToggle::Disabled(BbToggle::SceneMipBias) &&
         std::popcount(static_cast<const GraphicsPipeline*>(pipeline)->GetGraphicsKey().mrt_mask &

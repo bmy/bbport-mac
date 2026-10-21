@@ -161,6 +161,9 @@ public:
     /// BB_PASS_MERGE=0/1: on by default on macOS; experiment bit 128 switches it off in a running
     /// game (A/B).
     [[nodiscard]] static bool PassMerge();
+    /// BB_PASS_MERGE: uploads the ranges given stream copies since the last call (the arena kept
+    /// them pending). Called where no render pass is open, or one is about to end anyway.
+    void FlushPassMergeUploads();
 
     /// bbport BB_GUEST_IN_PLACE: where a command processor write (WRITE_DATA) the GPU performs in
     /// stream order lands: the arena over the game's memory, if the range is bound there in place.
@@ -288,6 +291,11 @@ public:
     [[nodiscard]] bool IsInVramLayer(VAddr addr, u64 size) const;
 
 private:
+    /// BB_PASS_MERGE: ranges read from stream copies whose arena upload is pending (the thread
+    /// binding a draw's resources only).
+    static constexpr size_t MaxPassMergePending = 1024;
+    std::vector<std::pair<VAddr, u32>> pass_merge_pending;
+
     struct ArenaBinds {
         const Buffer* arena;
         boost::container::small_vector<vk::SparseMemoryBind, 32> binds;

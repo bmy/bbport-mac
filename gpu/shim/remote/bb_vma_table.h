@@ -11,6 +11,7 @@
 #include <iterator>
 #include <map>
 #include <mutex>
+#include <pthread.h>
 #include <shared_mutex>
 #include <utility>
 #include <vector>
@@ -18,6 +19,36 @@
 #include "remote/bb_protocol.h"
 
 namespace BbRemote {
+
+/// bbport (macOS native GPU process): a reader-writer lock whose readers don't serialise.
+/// libc++'s std::shared_mutex takes one internal mutex for every lock_shared and unlock_shared, so
+/// the threads reading the table (the command thread, the draw recorder, four draw-preparation
+/// workers) waited on each other there: 8% of the draw recorder's time in a 2560x1600 sample
+/// (2026-10-21). pthread_rwlock_t readers take it with an atomic update while no writer holds it.
+class RwLock {
+public:
+    RwLock() = default;
+    RwLock(const RwLock&) = delete;
+    RwLock& operator=(const RwLock&) = delete;
+    ~RwLock() {
+        pthread_rwlock_destroy(&lock_);
+    }
+    void lock() {
+        pthread_rwlock_wrlock(&lock_);
+    }
+    void unlock() {
+        pthread_rwlock_unlock(&lock_);
+    }
+    void lock_shared() {
+        pthread_rwlock_rdlock(&lock_);
+    }
+    void unlock_shared() {
+        pthread_rwlock_unlock(&lock_);
+    }
+
+private:
+    pthread_rwlock_t lock_ = PTHREAD_RWLOCK_INITIALIZER;
+};
 
 struct VmaEntry {
     std::uint64_t end;
@@ -203,7 +234,7 @@ private:
             __atomic_add_fetch(&table.generation, 1, __ATOMIC_RELEASE);
         }
         VmaTable& table;
-        std::unique_lock<std::shared_mutex> lock;
+        std::unique_lock<RwLock> lock;
     };
 
     std::map<std::uint64_t, VmaEntry>::const_iterator Containing(std::uint64_t address) const {
@@ -233,7 +264,7 @@ private:
         map.erase(map.lower_bound(start), map.lower_bound(end));
     }
 
-    mutable std::shared_mutex mutex;
+    mutable RwLock mutex;
     std::map<std::uint64_t, VmaEntry> map;
     alignas(8) std::uint64_t generation = 0;
     const std::uint64_t id = NextId(); ///< tells tables apart in the per-thread cache

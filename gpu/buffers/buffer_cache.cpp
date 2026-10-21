@@ -1179,6 +1179,7 @@ void BufferCache::FlushPassMergeUploads() {
     if (pass_merge_pending.empty()) {
         return;
     }
+    ++pass_merge_generation; // the ranges may be copied once more
     // Uploaded where no render pass is open (or one is about to end anyway), so later draws read
     // the arena again: data drawn only inside render passes is copied once, not on every draw.
     auto pending = std::move(pass_merge_pending);
@@ -1187,8 +1188,8 @@ void BufferCache::FlushPassMergeUploads() {
         if (!IsRegionCpuModified(address, size) || IsRegionGpuModified(address, size)) {
             continue; // uploaded since, or the GPU wrote it: its own path now
         }
-        if (memory->ClampRangeSize(address, size) != size) {
-            continue; // unmapped since (in part): nothing to keep resident for it
+        if (memory->ClampRangeSize(address, size) == 0) {
+            continue; // unmapped since: nothing to keep resident for it
         }
         const u64 first_block = address >> block_shift;
         const u64 last_block = (address + size - 1) >> block_shift;
@@ -1379,21 +1380,16 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
         scheduler.IsRendering() && !stream_buffer.mapped_data.empty() &&
         !BbToggle::Disabled(BbToggle::DeferredStreamCopies) && PassMerge() &&
         IsRegionCpuModified(device_addr, size) && !IsRegionGpuModified(device_addr, size)) {
-        // The same range bound again in this submission, with no CPU change noted since (a
-        // WRITE_DATA or DMA write, a write fault): the same copy. The game does not change
-        // memory a submitted command buffer reads while the GPU may run it.
-        const u64 epoch = BbMem::cpu_change_epoch.load(std::memory_order_acquire);
-        const u64 tick = scheduler.CurrentTick();
-        auto& memo = pass_merge_memo[(device_addr >> 6 ^ size) % pass_merge_memo.size()];
-        if (memo.address == device_addr && memo.size == size && memo.epoch == epoch &&
-            memo.tick == tick) {
-            BbStats::pass_merge_reused.fetch_add(1, std::memory_order_relaxed);
-            TraceBinding(device_addr, size, false, 3);
-            return {&stream_buffer, memo.offset};
-        }
+        // One copy per range until the next flush (in practice: per render pass). Bound again
+        // there, it takes the upload as before (which ends the pass once; later draws read the
+        // arena): a copy is never reused (a WRITE_DATA, DMA or guest write in between is not
+        // always noted), and a range many draws read is not copied for each.
+        auto& seen = pass_merge_seen[(device_addr >> 6 ^ size) % pass_merge_seen.size()];
+        const bool again = seen.address == device_addr && seen.size == size &&
+                           seen.generation == pass_merge_generation;
         // Not with the pending list full, nor waiting for the GPU to free ring space: then the
         // upload as before.
-        const auto offset = pass_merge_pending.size() < MaxPassMergePending
+        const auto offset = !again && pass_merge_pending.size() < MaxPassMergePending
                                 ? stream_buffer.Reserve(size, instance.UniformMinAlignment(), false)
                                 : std::nullopt;
         if (offset) {
@@ -1406,7 +1402,7 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
                 .extra = reinterpret_cast<u64>(static_cast<Buffer*>(&stream_buffer)),
             });
             pass_merge_pending.emplace_back(device_addr, size);
-            memo = {device_addr, size, *offset, epoch, tick};
+            seen = {device_addr, size, pass_merge_generation};
             BbStats::pass_merge_bindings.fetch_add(1, std::memory_order_relaxed);
             BbStats::pass_merge_bytes.fetch_add(size, std::memory_order_relaxed);
             TraceBinding(device_addr, size, false, 3);

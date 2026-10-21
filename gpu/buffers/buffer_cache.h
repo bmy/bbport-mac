@@ -295,14 +295,15 @@ private:
     /// binding a draw's resources only).
     static constexpr size_t MaxPassMergePending = 1024;
     std::vector<std::pair<VAddr, u32>> pass_merge_pending;
-    /// BB_PASS_MERGE: the stream copy last made of a range, reused in the same submission while no
-    /// CPU change was noted (BbMem::cpu_change_epoch).
-    struct PassMergeCopy {
+    /// BB_PASS_MERGE: the ranges copied since the last flush (pass_merge_generation): one copy
+    /// each, a second binding there uploads as before.
+    struct PassMergeSeen {
         VAddr address = 0;
         u32 size = 0;
-        u64 offset = 0, epoch = 0, tick = 0;
+        u64 generation = ~0ull;
     };
-    std::array<PassMergeCopy, 256> pass_merge_memo{};
+    std::array<PassMergeSeen, 256> pass_merge_seen{};
+    u64 pass_merge_generation = 0;
 
     struct ArenaBinds {
         const Buffer* arena;

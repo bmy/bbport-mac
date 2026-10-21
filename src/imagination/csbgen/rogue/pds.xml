@@ -1,0 +1,233 @@
+<?xml version="1.0" ?>
+
+<!--
+Copyright © 2022 Imagination Technologies Ltd.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice (including the next
+paragraph) shall be included in all copies or substantial portions of the
+Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+-->
+
+<csbgen name="ROGUE" prefix="PDSINST">
+
+  <enum name="CMODE_LD">
+    <doc>MCU (SLC) Cache Mode for Loads.</doc>
+    <value name="CACHED"          value="0">
+      <doc>Normal cache operation.</doc>
+    </value>
+    <value name="BYPASS"          value="1">
+      <doc>Bypass L0 and L1.</doc>
+    </value>
+    <value name="FORCE_LINE_FILL" value="2">
+      <doc>Force line fill of L0 and L1.</doc>
+    </value>
+  </enum>
+
+  <enum name="DOUTD_DEST">
+    <value name="UNIFIED_STORE" value="0">
+      <doc>Unified Store.</doc>
+    </value>
+    <value name="COMMON_STORE"  value="1">
+      <doc>Common Store.</doc>
+    </value>
+  </enum>
+
+  <enum name="DEST">
+    <value name="UNIFIED_STORE" value="0">
+      <doc>DMA to unified store.</doc>
+    </value>
+    <value name="COMMON_STORE"  value="1">
+      <doc>DMA to common store.</doc>
+    </value>
+  </enum>
+
+  <enum name="DOUTI_SHADEMODEL">
+    <doc>Shade Model Control.</doc>
+    <value name="FLAT_VERTEX0" value="0">
+      <doc>Vertex 0 is the flat shaded colour source.</doc>
+    </value>
+    <value name="FLAT_VERTEX1" value="1">
+      <doc>Vertex 1 is the flat shaded colour source.</doc>
+    </value>
+    <value name="FLAT_VERTEX2" value="2">
+      <doc>Vertex 2 is the flat shaded colour source.</doc>
+    </value>
+    <value name="GOURUAD"      value="3">
+      <doc>Gouraud shaded.</doc>
+    </value>
+  </enum>
+
+  <enum name="DOUTI_SIZE">
+    <value name="1D" value="0">
+      <doc>1 Dimension (U).</doc>
+    </value>
+    <value name="2D" value="1">
+      <doc>2 Dimension (UV).</doc>
+    </value>
+    <value name="3D" value="2">
+      <doc>3 Dimension (UVS).</doc>
+    </value>
+    <value name="4D" value="3">
+      <doc>4 Dimension (UVST).</doc>
+    </value>
+  </enum>
+
+  <enum name="DOUTU_SAMPLE_RATE">
+    <doc>Sample rate.</doc>
+    <value name="INSTANCE"  value="0">
+      <doc>Instance rate.</doc>
+    </value>
+    <value name="SELECTIVE" value="1">
+      <doc>Selective sample rate.</doc>
+    </value>
+    <value name="FULL"      value="2">
+      <doc>Full sample rate.</doc>
+    </value>
+  </enum>
+
+  <enum name="SLC_MODE_LD">
+    <doc>SLC Cache Policy for loads.</doc>
+    <value name="BYPASS"       value="0">
+      <doc>Bypass Policy.</doc>
+    </value>
+    <value name="CACHED"       value="1">
+      <doc>Standard Cached Read.</doc>
+    </value>
+    <value name="CACHED_RD_NA" value="3">
+      <doc>Cached Read no allocate.</doc>
+    </value>
+  </enum>
+
+  <enum name="WORDSIZE">
+    <doc>When repeat is enabled the size of the DMA in bytes.</doc>
+    <value name="ONE"   value="0">
+      <doc>DMA of 1 byte.</doc>
+    </value>
+    <value name="TWO"   value="1">
+      <doc>DMA of 2 bytes.</doc>
+    </value>
+    <value name="THREE" value="2">
+      <doc>DMA of 3 bytes.</doc>
+    </value>
+    <value name="FOUR"  value="3">
+      <doc>DMA of 4 bytes.</doc>
+    </value>
+  </enum>
+
+  <struct name="DDMAD_FIELDS_SRC3" length="2">
+    <condition type="if" check="PDS_DDMADT"/>
+      <field name="msize" start="33" end="63" type="uint">
+        <doc>Size of external buffer in bytes.</doc>
+      </field>
+      <field name="test" start="32" end="32" type="bool">
+        <doc>Perform OOB checking.</doc>
+      </field>
+    <condition type="endif" check="PDS_DDMADT"/>
+    <field name="last" start="31" end="31" type="bool">
+      <doc>Last DMA in program.</doc>
+    </field>
+    <field name="wordsize" start="29" end="30" type="WORDSIZE"/>
+    <field name="dest" start="28" end="28" type="DEST"/>
+    <field name="cmode" start="26" end="27" type="CMODE_LD"/>
+    <field name="a0" start="13" end="25" type="uint"/>
+    <field name="repeat" start="12" end="12" type="bool"/>
+    <field name="bsize" start="0" end="11" type="uint"/>
+  </struct>
+
+  <struct name="DOUTU_SRC0" length="2">
+    <doc>Use Interface DOutU : Src0.</doc>
+    <field name="dual_phase" start="41" end ="41" type="bool"/>
+    <field name="temps" start="35" end="40" type="uint">
+      <define name="UNIT_SIZE" value="2"/>
+    </field>
+    <field name="sample_rate" start="33" end="34" type="DOUTU_SAMPLE_RATE"/>
+    <field name="exe_off" start="2" end="31" shift="2" type="address"/>
+  </struct>
+
+  <struct name="DOUT_FIELDS_DOUTD_SRC0" length="2">
+    <doc>DMA Interface DOutD : Src0.</doc>
+    <condition type="if" check="SLC_MCU_CACHE_CONTROLS"/>
+    <field name="slcmode" start="60" end="61" type="SLC_MODE_LD">
+      <doc>SLC cache policy.</doc>
+    </field>
+    <condition type="endif" check="SLC_MCU_CACHE_CONTROLS"/>
+    <field name="doffset" start="40" end="52" type="uint">
+      <doc>Secondary instance data offset in 32-bit words (offset of the instance).</doc>
+    </field>
+    <field name="sbase" start="0" end="39" shift="0" type="address">
+      <doc>Source Base Address for memory fetch.</doc>
+    </field>
+  </struct>
+
+  <struct name="DOUT_FIELDS_DOUTD_SRC1" length="1">
+    <doc>DMA Interface DOutD : Src1.</doc>
+    <field name="last" start="31" end="31" type="bool">
+      <doc>Last Write or DMA in program (This needs to only be set once on with the last DMA or last direct write, which ever is last).</doc>
+    </field>
+    <field name="wordsize" start="29" end="30" type="WORDSIZE"/>
+    <field name="dest" start="28" end="28" type="DOUTD_DEST"/>
+    <field name="cmode" start="26" end="27" type="CMODE_LD">
+      <doc>Cache Mode.</doc>
+    </field>
+    <field name="a0" start="13" end="25" type="uint">
+      <doc>Primary instance data offset in 32-bit words (offset into the current instance).</doc>
+      <define name="UNIT_SIZE" value="4"/>
+    </field>
+    <field name="repeat" start="12" end="12" type="bool"/>
+    <field name="bsize" start="0" end="11" type="uint">
+      <doc>Size of fetch in DWords (0 means don't DMA, 1=1 etc.).</doc>
+    </field>
+  </struct>
+
+  <struct name="DOUT_FIELDS_DOUTI_SRC" length="1">
+    <doc>TSP Parameter Fetch Interface DOutI, This command is only legal in a coefficient loading program.</doc>
+    <field name="depthbias" start="27" end="27" type="bool">
+      <doc>Apply depth bias to this layer.</doc>
+    </field>
+    <field name="primitiveid" start="26" end="26" type="bool">
+      <doc>Ignore the F16 and F32 offsets, and the WMODE and send the primitive ID instead.</doc>
+    </field>
+    <field name="shademodel" start="24" end="25" type="DOUTI_SHADEMODEL">
+      <doc>Shade Model for Layer.</doc>
+    </field>
+    <field name="pointsprite" start="23" end="23" type="bool">
+      <doc>Point sprite Forced.</doc>
+    </field>
+    <field name="wraps" start="22" end="22" type="bool">
+      <doc>Wrap S Coordinate.</doc>
+    </field>
+    <field name="wrapv" start="21" end="21" type="bool">
+      <doc>Wrap V Coordinate.</doc>
+    </field>
+    <field name="wrapu" start="20" end="20" type="bool">
+      <doc>Wrap U Coordinate.</doc>
+    </field>
+    <field name="size" start="18" end="19" type="DOUTI_SIZE"/>
+    <field name="f16" start="17" end="17" type="bool">
+      <doc>Issue is for F16 precision values.</doc>
+    </field>
+    <field name="perspective" start="16" end="16" type="bool"/>
+    <field name="f32_offset" start="8" end="15" type="uint">
+      <doc>The offset within the vertex if all data is treated as F32 (even if submitted as F16).</doc>
+    </field>
+    <field name="f16_offset" start="0" end="7" type="uint">
+      <doc>The offset within vertex taking into account the F16s and F32s present.</doc>
+    </field>
+  </struct>
+
+</csbgen>

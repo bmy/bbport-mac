@@ -1,0 +1,1 @@
+dEQP-VK.api.copy_and_blit.core.use_after_copy.e5b9g9r9_ufloat_pack32.transfer_dst_optimal.*

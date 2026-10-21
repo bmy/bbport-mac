@@ -1,0 +1,318 @@
+/*
+ * Copyright (c) 2025 Tomeu Vizoso <tomeu@tomeuvizoso.net>
+ * SPDX-License-Identifier: MIT
+ */
+
+#include "ethosu_sched.h"
+#include "ethosu_sched_u85.h"
+
+static int
+required_input_size(int value, int stride, int border)
+{
+   return (value - 1) * stride + border;
+}
+
+static struct ethosu_block
+_get_ifm_blocksize(struct ethosu_subgraph *subgraph, struct ethosu_operation *operation, struct ethosu_block ofm_block)
+{
+   struct ethosu_ml_device *device = ethosu_ml_device(subgraph->base.device);
+   struct ethosu_block ifm_block = {0};
+   int kernel_height = (operation->kernel.height - 1) *
+                       operation->kernel.dilation_y + 1;
+   int kernel_width = (operation->kernel.width - 1) *
+                      operation->kernel.dilation_x + 1;
+
+   // IFM block height
+   int h = required_input_size(ofm_block.height, operation->kernel.stride_y,
+                               MIN2(kernel_height, SUB_KERNEL_MAX.height));
+   h = align(h, device->ofm_ublock.height);
+
+   // IFM block width
+   int w = required_input_size(ofm_block.width, operation->kernel.stride_x,
+                               MIN2(kernel_width, SUB_KERNEL_MAX.width));
+   w = align(w, device->ofm_ublock.width);
+
+   ifm_block.height = h;
+   ifm_block.width = w;
+   ifm_block.depth = ofm_block.depth;
+
+   return ifm_block;
+}
+
+static struct ethosu_block
+fit_block_for_ofm(struct ethosu_subgraph *subgraph,
+                  const struct ethosu_operation *operation,
+                  struct ethosu_block block)
+{
+   struct ethosu_ml_device *device =
+      ethosu_ml_device(subgraph->base.device);
+
+   /* Account for the actual accumulator height when selecting Conv1D blocks. */
+   if (operation->ofm.shape.height == 1 &&
+       operation->kernel.height == 1 &&
+       device->ofm_ublock.height == 2)
+      block.height = MIN2(block.height, operation->ofm.shape.height);
+
+   return block;
+}
+
+static bool
+try_block_config(struct ethosu_operation *operation, struct ethosu_block ofm_block, struct ethosu_block ifm_block, struct ethosu_shram_layout *layout)
+{
+   int ifm_element_size = 1 << operation->ifm.precision;
+   int ifm_bytes =
+      ifm_block.width * ifm_block.height * align(ifm_block.depth, 8) *
+      ifm_element_size;
+   int ifm_banks = align(DIV_ROUND_UP(ifm_bytes, BANK_SIZE_BYTES) * 2, IFM_GRANULE);
+   int lut_bytes = operation->lut.size;
+   int lut_banks = MAX2(DIV_ROUND_UP(lut_bytes, 1024), SHRAM_RESERVED_END_BANKS);
+
+   if (operation->type == ETHOSU_OPERATION_TYPE_POOLING &&
+       operation->pooling.type == ETHOSU_POOLING_TYPE_REDUCE_SUM &&
+       operation->ifm.shape.depth != operation->ofm.shape.depth)
+      ifm_banks = MAX2(ifm_banks, IFM_GRANULE * 2);
+
+   int lut_start = SHRAM_TOTAL_BANKS - lut_banks;
+   int ifm_end = SHRAM_RESERVED_OUTPUT_BANKS + ifm_banks;
+   int ifm2_start = ifm_end;
+   int acc_start = lut_start;
+
+   if (operation->type != ETHOSU_OPERATION_TYPE_ELTWISE) {
+      int acc_bytes = (ofm_block.width * ofm_block.height * align(ofm_block.depth, 8) * 32) / 8;
+      int acc_banks = align(DIV_ROUND_UP(acc_bytes, BANK_SIZE_BYTES) * 2, ACC_GRANULE);
+      acc_start -= acc_banks;
+   } else {
+      int ifm2_banks = ifm_banks; /* TODO: Fix for scalar eltwise */
+
+      if (ifm2_start + ifm2_banks > acc_start)
+         return false;
+
+      ifm_end = acc_start;
+   }
+
+   if (ifm_end > acc_start)
+      return false;
+
+   layout->ib_start = SHRAM_RESERVED_OUTPUT_BANKS;
+   layout->ib_start2 = ifm2_start;
+   layout->ib_end = ifm_end;
+   layout->ab_start = acc_start;
+   layout->lut_start = lut_start;
+
+   return true;
+}
+
+static bool
+prefer_wide_pointwise_block(const struct ethosu_operation *operation,
+                            struct ethosu_block block,
+                            struct ethosu_block best_block)
+{
+   if (operation->type != ETHOSU_OPERATION_TYPE_CONVOLUTION ||
+       operation->kernel.depthwise || operation->kernel.width != 1 ||
+       operation->kernel.height != 1)
+      return false;
+
+   if (operation->ofm.tensor->layout != ETHOSU_LAYOUT_NHWC ||
+       operation->ofm.shape.depth % ARCH_SPLIT_DEPTH == 0)
+      return false;
+
+   if (best_block.width == 0)
+      return true;
+
+   unsigned block_widths = DIV_ROUND_UP(operation->ofm.shape.width,
+                                        block.width);
+   unsigned best_widths = DIV_ROUND_UP(operation->ofm.shape.width,
+                                       best_block.width);
+
+   if (block_widths != best_widths)
+      return block_widths < best_widths;
+
+   return block.height < best_block.height;
+}
+
+static struct ethosu_block_config
+find_block_config(struct ethosu_subgraph *subgraph, struct ethosu_operation *operation)
+{
+   struct ethosu_ml_device *device = ethosu_ml_device(subgraph->base.device);
+   struct ethosu_block_config config = {};
+   struct ethosu_block search_space = ARCH_OFM_BLOCK_MAX;
+   float ofm_elements = operation->ofm.shape.width * operation->ofm.shape.height * operation->ofm.shape.depth;
+   float ifm_elements = operation->ifm.shape.width * operation->ifm.shape.height * operation->ifm.shape.depth;
+   bool is_pooling = operation->type == ETHOSU_OPERATION_TYPE_POOLING;
+   bool is_reduce_sum = is_pooling &&
+                        operation->pooling.type == ETHOSU_POOLING_TYPE_REDUCE_SUM;
+   bool is_depth_reducing_sum = is_reduce_sum &&
+                                operation->ifm.shape.depth != operation->ofm.shape.depth;
+   bool is_depthwise = operation->conv.depthwise;
+   bool is_equal_depth =
+      (is_pooling && !is_depth_reducing_sum) || is_depthwise ||
+      operation->type == ETHOSU_OPERATION_TYPE_ELTWISE;
+   bool is_convolution = operation->type == ETHOSU_OPERATION_TYPE_CONVOLUTION;
+   unsigned dilated_kernel_height =
+      (operation->kernel.height - 1) * operation->kernel.dilation_y + 1;
+   unsigned dilated_kernel_width =
+      (operation->kernel.width - 1) * operation->kernel.dilation_x + 1;
+   unsigned ifm_repeats =
+      DIV_ROUND_UP(dilated_kernel_width, SUB_KERNEL_MAX.width) *
+      DIV_ROUND_UP(dilated_kernel_height, SUB_KERNEL_MAX.height);
+   float best_cost = FLT_MAX;
+   float best_coverage = FLT_MAX;
+
+   search_space.width = MIN2(search_space.width, operation->ofm.shape.width);
+   search_space.height = MIN2(search_space.height, operation->ofm.shape.height);
+   search_space.depth = MIN2(search_space.depth, operation->ofm.shape.depth);
+   if (is_depth_reducing_sum)
+      search_space.width = MIN2(search_space.width,
+                                device->ofm_ublock.width * 2);
+
+   search_space.width = align(search_space.width, device->ofm_ublock.width);
+   search_space.height = align(search_space.height, device->ofm_ublock.height);
+   search_space.depth = align(search_space.depth, device->ofm_ublock.depth);
+   unsigned depth =
+      MAX2(device->ofm_ublock.depth, MIN2(search_space.depth, ARCH_SPLIT_DEPTH));
+
+   bool is_part_kernel = false;
+   if (is_convolution) {
+      unsigned kernel_size = operation->kernel.width * operation->kernel.height;
+      unsigned ifm_depth = operation->ifm.shape.depth;
+      float depth_utilization = (float)ifm_depth / (float)ethosu_round_up_to_multiple(ifm_depth, 32);
+      float part_kernel_utilization = (float)ifm_depth / (float)ethosu_round_up_to_multiple(ifm_depth, 8);
+      part_kernel_utilization *= (float)kernel_size / (float)ethosu_round_up_to_multiple(kernel_size, 4);
+      if (!operation->kernel.depthwise && (part_kernel_utilization >= depth_utilization || ifm_depth <= 8))
+         is_part_kernel = true;
+   }
+
+   if (depth < operation->ofm.shape.depth) {
+      depth = align(depth, ARCH_SPLIT_DEPTH);
+   }
+
+   while (depth <= search_space.depth) {
+      bool wont_fit[search_space.height + 1][search_space.width + 1];
+      memset(wont_fit, 0, sizeof(wont_fit));
+
+      for (unsigned height = device->ofm_ublock.height; height <= search_space.height; height += device->ofm_ublock.height) {
+         for (unsigned width = device->ofm_ublock.width; width <= search_space.width; width += device->ofm_ublock.width) {
+
+            if (wont_fit[height][width])
+               continue;
+
+            struct ethosu_block ofm_block = {width, height, depth};
+            struct ethosu_block ifm_block = _get_ifm_blocksize(subgraph, operation, ofm_block);
+
+            if (!is_equal_depth)
+               ifm_block.depth = align(MIN2(operation->ifm.shape.depth, is_part_kernel ? 16 : 32), device->ifm_ublock.depth);
+
+            ofm_block = fit_block_for_ofm(subgraph, operation, ofm_block);
+
+            // Try to fit the blocks in SHRAM
+            struct ethosu_shram_layout layout = {0};
+            if (try_block_config(operation, ofm_block, ifm_block, &layout)) {
+
+               struct ethosu_block full_blocks = {DIV_ROUND_UP(operation->ofm.shape.width, ofm_block.width),
+                                                  DIV_ROUND_UP(operation->ofm.shape.height, ofm_block.height),
+                                                  DIV_ROUND_UP(operation->ofm.shape.depth, ofm_block.depth)};
+               float blocks[3] = {operation->ofm.shape.width / (float)ofm_block.width,
+                                  operation->ofm.shape.height / (float)ofm_block.height,
+                                  operation->ofm.shape.depth / (float)ofm_block.depth};
+
+               float weight_area = is_convolution ? operation->kernel.width * operation->kernel.height : 0;
+               float weight_fetch = weight_area * operation->ifm.shape.depth * full_blocks.width * full_blocks.height;
+               if (!is_depthwise)
+                  weight_fetch *= blocks[2] * ofm_block.depth;
+
+               float ifm_fetch = ifm_block.width * ifm_block.height *
+                                 operation->ifm.shape.depth * ifm_repeats *
+                                 blocks[0] * blocks[1];
+               if (!is_equal_depth)
+                  ifm_fetch *= full_blocks.depth;
+
+               float relative_cost = 0;
+               if (operation->type != ETHOSU_OPERATION_TYPE_ELTWISE)
+                  relative_cost = (ifm_fetch + weight_fetch) / ofm_elements;
+               else
+                  relative_cost = ofm_elements / (height * width * depth);
+
+               if (ifm_elements < ifm_block.width * ifm_block.height * ifm_block.depth * 2)
+                  relative_cost /= 2.0f;
+
+               if (relative_cost <= best_cost) {
+                  bool choose_this = false;
+
+                  if (relative_cost == best_cost) {
+                     struct ethosu_block coverage_shape = {
+                        MIN2(ifm_block.height, operation->ifm.shape.height),
+                        MIN2(ifm_block.width, operation->ifm.shape.width),
+                        MIN2(ifm_block.depth, operation->ifm.shape.depth)};
+                     float coverage = (float)(operation->ifm.shape.width * operation->ifm.shape.height) /
+                                      (float)MAX2(1, coverage_shape.width * coverage_shape.height);
+
+                     if (prefer_wide_pointwise_block(operation, ofm_block,
+                                                     config.ofm_block)) {
+                        best_coverage = coverage;
+                        choose_this = true;
+                     } else if (coverage <= best_coverage && height <= 4 &&
+                                width <= 4) {
+                        best_coverage = coverage;
+                        choose_this = true;
+                     }
+                  } else {
+                     best_coverage = FLT_MAX;
+                     choose_this = true;
+                  }
+
+                  if (choose_this) {
+                     config.shram_layout = layout;
+                     config.ifm_block = ifm_block;
+                     config.ofm_block.height = height;
+                     config.ofm_block.width = width;
+                     config.ofm_block.depth = depth;
+                     config.ofm_ublock = device->ofm_ublock;
+                     config.is_partkernel = is_part_kernel;
+
+                     best_cost = relative_cost;
+                  }
+               }
+            } else {
+               wont_fit[height][width] = true;
+            }
+         }
+      }
+
+      depth += device->ofm_ublock.depth;
+      if (depth < operation->ofm.shape.depth) {
+         depth = align(depth, ARCH_SPLIT_DEPTH);
+      }
+   }
+
+   return config;
+}
+
+static bool
+block_config_is_valid(const struct ethosu_block_config *config)
+{
+   return config->ifm_block.width && config->ifm_block.height &&
+          config->ifm_block.depth && config->ofm_block.width &&
+          config->ofm_block.height && config->ofm_block.depth &&
+          config->ofm_ublock.width && config->ofm_ublock.height &&
+          config->ofm_ublock.depth;
+}
+
+void
+ethosu_sched_operation(struct ethosu_subgraph *subgraph, struct ethosu_operation *operation)
+{
+   struct ethosu_ml_device *device = ethosu_ml_device(subgraph->base.device);
+
+   if (device->is_u65)
+      operation->block_config = find_block_config(subgraph, operation);
+   else
+      operation->block_config = find_block_config_u85(subgraph, operation);
+
+   if (!block_config_is_valid(&operation->block_config)) {
+      mesa_loge("ethosu: failed to find block configuration for operation "
+                "%u (IFM %ux%ux%u, OFM %ux%ux%u)", operation->type,
+                operation->ifm.shape.width, operation->ifm.shape.height,
+                operation->ifm.shape.depth, operation->ofm.shape.width,
+                operation->ofm.shape.height, operation->ofm.shape.depth);
+      subgraph->failed = true;
+   }
+}

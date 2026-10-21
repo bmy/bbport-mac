@@ -1,0 +1,47 @@
+# Note: flakes lists for CI are just a list of lines that, when
+# non-zero-length and not starting with '#', will regex match to
+# delete lines from the test list.  Be careful.
+
+# unstable results once we enabled SMP -- some state not being reset reliably?
+dEQP-GLES3.functional.transform_feedback.*
+
+dEQP-GLES3.functional.fragment_ops.interaction.basic_shader.70
+
+# First appeared 2021-06-11 on an unrelated MR.
+dEQP-GLES31.functional.image_load_store.3d.load_store.*_single_layer
+
+KHR-GLES31.core.shader_image_load_store.basic-allTargets-atomicCS
+KHR-GLES31.core.shader_image_load_store.basic-glsl-misc-cs
+KHR-GLES31.core.shader_storage_buffer_object.advanced-switchBuffers-cs
+KHR-GLES31.core.shader_storage_buffer_object.advanced-switchPrograms-cs
+KHR-GLES31.core.shader_storage_buffer_object.basic-syntax-cs
+
+# Flaky since around Feb 26, first appearing on a seemingly-unrelated CI change
+# (ci-fd-fastboot-nfs)
+dEQP-GLES31.functional.synchronization.inter_call.without_memory_barrier.*
+
+glx@glx_arb_sync_control@swapbuffersmsc-divisor-zero
+glx@glx_arb_sync_control@waitformsc
+
+# Intermittent failure, mostly passes but sometimes fails. Was noticed on May 26th.
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_ayuv
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_nv12
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_nv21
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_y410
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_yvu420
+
+# 1/10 run flake
+dEQP-GLES31.functional.atomic_counter.layout.default_offset_set.inc_dec.8_counters_5_calls_1_thread
+dEQP-GLES31.functional.compute.indirect_dispatch.gen_in_compute.multi_dispatch_reuse_command
+
+# ci-collate: Issue found in https://gitlab.freedesktop.org/mesa/mesa/-/jobs/49445812
+KHR-GLES31.core.compute_shader.simple-compute-shared_context
+
+# uprev Piglit in Mesa
+glx@glx_ext_no_config_context@no fbconfig
+KHR-GLES31.core.compute_shader.simple-compute-shared_context-persistent-buffer
+spec@ext_framebuffer_object@getteximage-formats init-by-clear-and-render
+
+# New flakes while the device was offline
+dEQP-GLES31.functional.atomic_counter.dec.8_counters_5_calls_10_threads
+dEQP-GLES31.functional.shaders.builtin_functions.precision.*

@@ -1,0 +1,262 @@
+Mesa 26.2.3 Release Notes / 2026-09-16
+======================================
+
+Mesa 26.2.3 is a bug fix release which fixes bugs found since the 26.2.2 release.
+
+Mesa 26.2.3 implements the OpenGL 4.6 API, but the version reported by
+glGetString(GL_VERSION) or glGetIntegerv(GL_MAJOR_VERSION) /
+glGetIntegerv(GL_MINOR_VERSION) depends on the particular driver being used.
+Some drivers don't support all the features required in OpenGL 4.6. OpenGL
+4.6 is **only** available if requested at context creation.
+Compatibility contexts may report a lower version depending on each driver.
+
+Mesa 26.2.3 implements the OpenCL 3.1 API, but the version reported by
+the CL_DEVICE_VERSION, CL_DEVICE_NUMERIC_VERSION and CL_DEVICE_OPENCL_C_ALL_VERSIONS
+clGetDeviceInfo queries depends on the particular driver being used.
+
+Mesa 26.2.3 implements the Vulkan 1.4 API, but the version reported by
+the apiVersion property of the VkPhysicalDeviceProperties struct
+depends on the particular driver being used.
+
+SHA checksums
+-------------
+
+::
+
+    SHA256: 1628058a8d2c0615975de5a15ab7bbb9638c50000b5bed9456ff423ea034a81f  mesa-26.2.3.tar.xz
+    SHA512: ec621735ae4679762ea27b979a5314c7aecfdd4165afea19c8c55f933d79b40f01fa041a95874fc4347e732ac565786d9b616a9aa8856a422204d9ecc9a12ec4  mesa-26.2.3.tar.xz
+
+
+New features
+------------
+
+- None
+
+
+Bug fixes
+---------
+
+- NVK memory leak in CmdCopyBufferToImage in 26.2.0, 26.2.1 and 26.2.2.
+- RADV: GPU page fault (null pointer) with RT emulation on Polaris (RX 580 2048SP). Issue between 26.1.6 and 26.2.1
+- [ANV][ARL][bisected] Visual graphics glitches in Counter-Strike 2 starting in Mesa 26.2.x
+- [radeonsi] Minecraft Voxy mod: Distant water rendering issue on Vega iGPU and RDNA2
+- \`hevc_vaapi` on AMD (radeonsi/gfx1150) stalls to ~1 fps when input frames carry A/53 (CEA-608/708) closed-caption side data
+- anv: Test fails in simulation due to coarse pixel shading state
+- asahi: 16-bit blending into RGBA32F produces zero due to 32-bit tilebuffer load
+- asahi: Some textures do not render correctly in Portals 2
+- libvulkan_intel.so crash with X-Plane 12.4.3 on Intel Arc B580
+- nircache causes glxgears/eglgears to segfault under Zink
+- vulkan,radv: when using descriptor heaps, input attachments in SPIR-V are incorrectly detected as read only instead of read write
+
+
+Changes
+-------
+
+Alyssa Rosenzweig (1):
+
+- mesa/st: fix incorrect VS input bases
+
+Andrzej Datczuk (1):
+
+- ac/sqtt, radv, radeonsi: Fix SQTT buffer size alignment issues
+
+Benjamin Cheng (1):
+
+- radeonsi: set stencil clear to 0 when enabling TC compat
+
+Caio Oliveira (1):
+
+- spirv: Preserve all fp_math_ctrl bits in vtn_handle_alu default case
+
+Christian Gmeiner (2):
+
+- etnaviv: Do not abort on unsupported stencil-only blits
+- etnaviv: Use RS depth formats only on halti5+
+
+Danylo Piliaiev (5):
+
+- tu: Wait for XFB query writes to land before making it available
+- tu: Synchronizing with CmdCopyQueryPoolResult should wait for mem writes
+- tu: Use p_atomic_read to read from query's slot->available
+- tu: Fix PACKED + alignas(8) application to the same struct on older GCC
+- tu: Handle lazy memory in GetDeviceMemoryOpaqueCaptureAddress
+
+David Rosca (2):
+
+- va: Drop HEVC SEI parsing
+- radv/video: Fix setting session parameters override info
+
+Dmitry Baryshkov (8):
+
+- ir3: keep byte SSBO offsets before a6xx
+- freedreno/a5xx: only 2D-blit between compatible formats
+- freedreno/a5xx: program NUMNONPOSVAR with position's VPC location
+- freedreno/a4xx+a5xx: clamp the texture buffer size
+- freedreno: keep the separate stencil out of the shadow blit
+- freedreno/a5xx: blit the separate stencil plane too
+- ir3: skip the phis of non-GPR registers in the minimum pressure bound
+- freedreno/a5xx: bound blits by the layer count, not the depth
+
+Emma Anholt (3):
+
+- tu: Drop TRANSFER_SRC/DST from bufferFeatures.
+- tu: Fix the sType of the returned VkFragmentShadingRateKHRs.
+- tu: Fix destroy order of autotune vs perfcounters in failure path.
+
+Eric Engestrom (4):
+
+- docs: add sha sum for 26.2.2
+- .pick_status.json: Update to 9f42ea1239025d3f93d9bbf7405340adcec94419
+- .pick_status.json: Mark f45825a0c724d06f231a1210484fe9af71a3ffab as denominated
+- .pick_status.json: Mark 859fcc3b74f831bbb9151f06d055ddfd45cc6e50 as denominated
+
+Frank Binns (3):
+
+- pvr: add missing GPU architecture to device info for some BVNCs
+- pvr: fixup ordering of (has\_)usc_itr_parallel_instances in dev info
+- zink: replace blend and vertex elements state hashes with IDs
+
+Ganesh Belgur Ramachandra (1):
+
+- amd: add gfx1171
+
+Georg Lehmann (2):
+
+- nir/opt_uub: fix imax optimization
+- aco: avoid mubuf bounds checking for global
+
+Iván Briano (1):
+
+- anv: fix push constant range gathering for dynamic offsets
+
+Jiyu Yang (1):
+
+- clc: fix fd leak in open_clc_data() on map failure
+
+Juston Li (1):
+
+- anv/android: Don't disable AUX_BIT importing Xe2+ CCS mod images
+
+Karmjit Mahil (1):
+
+- tu: Fix sparse bind column merging
+
+Karol Herbst (2):
+
+- nir/serialize: set info.spec to NULL
+- rusticl/event: properly implement CL_PROFILING_INFO_NOT_AVAILABLE error condition
+
+Kostadin Shishmanov (1):
+
+- aco: add missing <algorithm> include
+
+Leon Perianu (1):
+
+- pvr: Fix primitive restart for non-indexed draws
+
+Lionel Landwerlin (6):
+
+- anv: fix 64bit values promoted to inline register
+- brw: use sampler from incoming instructions for combiner
+- anv: fixup dynamic buffers with ANV_DEBUG=bindless
+- anv: emit CPB setup at device initialization
+- anv: fix synchronization of acceleration structure query writes
+- anv: add missing handling for PIPELINE_STAGE_2_COPY_INDIRECT
+
+Liviu Prodea (1):
+
+- clc: Fix static link with llvm and clang 23
+
+Marek Olšák (1):
+
+- radv: fix sRGB color clears via compute
+
+Mary Guillemard (1):
+
+- asahi: Add the same workaround as Firefox for Zen browser
+
+Matt Turner (2):
+
+- mesa/st: use concrete formats for lowered YUV plane views
+- dri: use concrete formats for the GR88, 8888 and sRGB DRM formats
+
+Mel Henning (2):
+
+- nvk: Fix memory leak in compute save/restore
+- nvk: Fix leak of dev->heap and dev->replay_heap
+
+Michael Cheng (1):
+
+- util/drirc: change min_value to max_value typo
+
+Mike Blumenkrantz (2):
+
+- llvmpipe: force alignment for Windows texture allocations
+- ntv: improve deref type matching when converting vri derefs
+
+Pavel Ondračka (1):
+
+- r300: don't propagate negation through absolute values
+
+Rhys Perry (4):
+
+- radv: don't set muladd_support_prefers_split when ffma is unsupported
+- radv: initialize shader_blake3 for shader objects
+- radv: hash descriptor set layouts in radv_hash_graphics_spirv_to_nir
+- radeonsi: use ac_shader_config::lds_size from ACO
+
+Rohan Garg (1):
+
+- nir: derive color_is_dual_source from declared vars
+
+Ryan Mckeever (1):
+
+- panvk/v6-7: include required layouts in host image copy layouts
+
+Ryan Zhang (3):
+
+- wsi/wayland: skip feedback dispatch when nothing is outstanding
+- panvk: initialize CPU tracing categories
+- panvk/utrace: replace bogus assert with static_assert in perfetto begin event callback
+
+Samuel Pitoiset (3):
+
+- radv: fix L0_CACHE_HIT_RATIO perf counter on GFX11
+- radv: return VK_ERROR_DEVICE_LOST if any shader executed OpAbortKHR
+- radv: consider shader abort faults with VK_KHR_device_fault
+
+Silvio Vilerino (2):
+
+- d3d12: Fix d3d12 video encoder batch leaks
+- d3d12: Fix d3d12 video decoder batch leaks
+
+Takuro Ashie (1):
+
+- panfrost: Reallocate BO when linear layout grows
+
+Tapani Pälli (3):
+
+- anv: change bindless debug env variable to be drirc option
+- anv: toggle anv_always_bindless for XPlane-12
+- anv: fix cmd_buffer_set_indirect_stride on ARL
+
+Vandomas (1):
+
+- zink: put the buffer view cache key first
+
+Vinson Lee (2):
+
+- glsl: initialize pixel_local_storage and yuv in ir_variable constructor
+- glsl: initialize is_global in ir_variable_refcount_entry constructor
+
+Víctor Manuel Jáquez Leal (1):
+
+- radv/video: report hasOverrides on AV1 encoding
+
+Yiwei Zhang (1):
+
+- panvk: place coherent memory type before cached type
+
+rajaryan1492007 (1):
+
+- spirv: Don't implicitly set ACCESS_NON_WRITEABLE for input attachments

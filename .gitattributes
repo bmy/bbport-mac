@@ -1,0 +1,8 @@
+*.csv eol=crlf
+* text=auto
+*.jpg binary
+*.png binary
+*.gif binary
+*.ico binary
+*.cl gitlab-language=c
+docs/relnotes/new_features.txt merge=union

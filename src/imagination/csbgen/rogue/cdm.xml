@@ -1,0 +1,210 @@
+<?xml version="1.0" ?>
+
+<!--
+Copyright © 2022 Imagination Technologies Ltd.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice (including the next
+paragraph) shall be included in all copies or substantial portions of the
+Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+-->
+
+<csbgen name="ROGUE" prefix="CDMCTRL">
+
+  <define name="GUARD_SIZE_DEFAULT" value="64">
+    <doc>The driver must not put any STREAM_LINK or STREAM_TERMINATE blocks in the final GUARD_SIZE bytes of the last valid page.</doc>
+  </define>
+
+  <enum name="BLOCK_TYPE">
+    <doc>The CDM control stream block header type.</doc>
+    <value name="COMPUTE_KERNEL"   value="0">
+      <doc>Compute Kernel.</doc>
+    </value>
+    <value name="STREAM_LINK"      value="1">
+      <doc>Stream Link.</doc>
+    </value>
+    <value name="STREAM_TERMINATE" value="2">
+      <doc>Stream Terminate.</doc>
+    </value>
+  </enum>
+
+  <enum name="USC_TARGET">
+    <value name="ALL" value="0">
+      <doc>All clusters.</doc>
+    </value>
+    <value name="ANY" value="1">
+      <doc>Any cluster.</doc>
+    </value>
+  </enum>
+
+  <enum name="SD_TYPE">
+    <value name="NONE" value="0">
+      <doc>None.</doc>
+    </value>
+    <value name="PDS"  value="1">
+      <doc>All clusters.</doc>
+    </value>
+    <value name="USC"  value="2">
+      <doc>Target cluster.</doc>
+    </value>
+  </enum>
+
+  <struct name="KERNEL0" length="1">
+    <field name="block_type" start="30" end="31" type="BLOCK_TYPE" default="COMPUTE_KERNEL">
+      <doc>Compute Kernel header.</doc>
+    </field>
+    <field name="indirect_present" start="29" end="29" type="bool">
+      <doc>Indirect address present bit.</doc>
+    </field>
+    <field name="global_offsets_present" start="28" end="28" type="bool">
+      <doc>Global Offsets present bit.</doc>
+    </field>
+    <field name="event_object_present" start="27" end="27" type="bool">
+      <doc>Event Object present bit.</doc>
+    </field>
+    <field name="usc_common_size" start="18" end="26" type="uint">
+      <doc>USC Common Store allocation size (64 byte chunks).</doc>
+      <define name="UNIT_SIZE" value="64"/>
+      <define name="MAX_SIZE" value="256"/>
+    </field>
+    <field name="usc_unified_size" start="12" end="17" type="uint">
+      <doc>USC Unified Store allocation size (16 byte chunks).</doc>
+      <define name="UNIT_SIZE" value="16"/>
+    </field>
+    <field name="pds_temp_size" start="8" end="11" type="uint">
+      <doc>Number of temporaries to allocate (16 byte chunks).</doc>
+      <define name="UNIT_SIZE" value="16"/>
+    </field>
+    <field name="pds_data_size" start="2" end="7" type="uint">
+      <doc>Number of constants to load (16 byte chunks).</doc>
+      <define name="UNIT_SIZE" value="16"/>
+    </field>
+    <field name="usc_target" start="1" end="1" type="USC_TARGET">
+      <doc>Whether to run on any cluster or all clusters.</doc>
+    </field>
+    <field name="fence" start="0" end="0" type="bool">
+      <doc>Wait for fence acknowledgement from USC.</doc>
+    </field>
+  </struct>
+
+  <struct name="KERNEL1" length="1">
+    <field name="data_addr" start="4" end="31" shift="4" type="address">
+      <doc>PDS Data Address for the compute kernel.</doc>
+    </field>
+    <field name="sd_type" start="2" end="3" type="SD_TYPE">
+      <doc>The sequential dependency type to apply to this task.</doc>
+    </field>
+    <field name="usc_common_shared" start="1" end="1" type="bool">
+      <doc>When set, the allocation size specified in USC_COMMON_SIZE is for Shared Registers, instead of Coefficients.</doc>
+    </field>
+  </struct>
+
+  <struct name="KERNEL2" length="1">
+    <field name="code_addr" start="4" end="31" shift="4" type="address">
+      <doc>PDS Code Address for the compute kernel.</doc>
+    </field>
+    <field name="one_wg_per_task" start="0" end="0" type="bool">
+      <doc>When set, CDM will clamp the number of workgroups per task sent to PDS to a value of 1.</doc>
+    </field>
+  </struct>
+
+  <struct name="KERNEL3" length="1">
+    <field name="workgroup_x" start="0" end="31" type="uint">
+      <doc>The number of workgroups in the X dimension of the workspace.</doc>
+    </field>
+  </struct>
+
+  <struct name="KERNEL4" length="1">
+    <field name="workgroup_y" start="0" end="31" type="uint">
+      <doc>The number of workgroups in the Y dimension of the workspace.</doc>
+    </field>
+  </struct>
+
+  <struct name="KERNEL5" length="1">
+    <field name="workgroup_z" start="0" end="31" type="uint">
+      <doc>The number of workgroups in the Z dimension of the workspace.</doc>
+    </field>
+  </struct>
+
+  <struct name="KERNEL6" length="1">
+    <field name="indirect_addrmsb" start="0" end="7" shift="32" type="address">
+      <doc>MSB of indirect work group size definitions.</doc>
+    </field>
+  </struct>
+
+  <struct name="KERNEL7" length="1">
+    <field name="indirect_addrlsb" start="2" end="31" shift="2" type="address">
+      <doc>LSB of indirect work group size definitions.</doc>
+    </field>
+  </struct>
+
+  <struct name="KERNEL8" length="1">
+    <field name="max_instances" start="27" end="31" type="uint">
+      <doc>The maximum number of work items to allow in a task (0=32, 1=1, ..).</doc>
+      <define name="MAX_SIZE" value="31"/>
+    </field>
+    <field name="workgroup_size_x" start="18" end="26" type="uint">
+      <doc>The number of work items in the X dimension of the work group.</doc>
+    </field>
+    <field name="workgroup_size_y" start="9" end="17" type="uint">
+      <doc>The number of work items in the Y dimension of the work group.</doc>
+    </field>
+    <field name="workgroup_size_z" start="0" end="8" type="uint">
+      <doc>The number of work items in the Z dimension of the work group.</doc>
+    </field>
+  </struct>
+
+  <struct name="KERNEL9" length="1">
+    <field name="global_offset_x" start="0" end="31" type="uint">
+      <doc>The offset to apply to the Global ID X dimension.</doc>
+    </field>
+  </struct>
+
+  <struct name="KERNEL10" length="1">
+    <field name="global_offset_y" start="0" end="31" type="uint">
+      <doc>The offset to apply to the Global ID Y dimension.</doc>
+    </field>
+  </struct>
+
+  <struct name="KERNEL11" length="1">
+    <field name="global_offset_z" start="0" end="31" type="uint">
+      <doc>The offset to apply to the Global ID Z dimension.</doc>
+    </field>
+  </struct>
+
+  <struct name="STREAM_LINK0" length="1">
+    <doc>Stream Link.</doc>
+    <field name="block_type" start="30" end="31" type="BLOCK_TYPE" default="STREAM_LINK">
+      <doc>Stream Link header.</doc>
+    </field>
+    <field name="link_addrmsb" start="0" end="7" shift="32" type="address">
+      <doc>MSB of Stream link address.</doc>
+    </field>
+  </struct>
+
+  <struct name="STREAM_LINK1" length="1">
+    <field name="link_addrlsb" start="2" end="31" shift="2" type="address">
+      <doc>LSB of Stream link address.</doc>
+    </field>
+  </struct>
+
+  <struct name="STREAM_TERMINATE" length="1">
+    <doc>CDM Stream Terminate.</doc>
+    <field name="block_type" start="30" end="31" type="BLOCK_TYPE" default="STREAM_TERMINATE"/>
+  </struct>
+
+</csbgen>

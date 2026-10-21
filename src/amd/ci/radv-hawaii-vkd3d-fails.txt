@@ -1,0 +1,3 @@
+test_custom_border_color_srgb,Fail
+test_compute_queue_depth_stencil_msaa,Fail
+test_copy_queue_depth_stencil_msaa,Fail

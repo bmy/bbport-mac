@@ -1,0 +1,5 @@
+[wrap-file]
+directory = npu-model-zoo-20260924-mobilenet-v2
+source_url = https://gitlab.freedesktop.org/tomeu/npu-model-zoo/-/archive/20260924-mobilenet-v2/npu-model-zoo-20260924-mobilenet-v2.tar.gz
+source_filename = npu-model-zoo-20260924-mobilenet-v2.tar.gz
+source_hash = f3eb181e8d8ea9844a6f53f8b03cbbe84f8eaf15ad15309fd391874838eb171e

@@ -1,0 +1,2 @@
+# ANV host failure
+dEQP-VK.sparse_resources.buffer.ssbo.read_write.sparse_residency_non_resident_strict,Fail

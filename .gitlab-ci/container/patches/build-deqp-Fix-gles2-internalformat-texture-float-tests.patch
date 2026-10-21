@@ -1,0 +1,117 @@
+From 1d3453c1013750d9e0e4aa8d034dfa5a8dc248d7 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Pavel=20Ondra=C4=8Dka?= <pavel.ondracka@gmail.com>
+Date: Fri, 24 Jul 2026 17:11:13 +0200
+Subject: [PATCH] Fix gles2 internalformat texture float tests
+
+GL_RGB32F is not a valid parameter to teximage2D in gles2 context.
+
+Public PR: https://github.com/KhronosGroup/VK-GL-CTS/pull/574
+
+Affects:
+KHR-GLES2.core.internalformat.texture2d.rgb_float_rgb*
+KHR-GLES2.core.internalformat.texture2d.rgba_float_rgba*
+
+Components: OpenGL ES
+
+(cherry picked from commit 7a498100786f2de84b4bd9156158eb68c3f28901)
+---
+ .../gles/khronos_mustpass/3.2.5.x/gles2-khr-main.txt |  8 ++++----
+ .../gles/khronos_mustpass/3.2.6.x/gles2-khr-main.txt |  8 ++++----
+ .../gles/khronos_mustpass/main/gles2-khr-main.txt    |  8 ++++----
+ .../modules/common/glcInternalformatTests.cpp        | 12 ++++++++----
+ 4 files changed, 20 insertions(+), 16 deletions(-)
+
+diff --git a/external/openglcts/data/gl_cts/data/mustpass/gles/khronos_mustpass/3.2.5.x/gles2-khr-main.txt b/external/openglcts/data/gl_cts/data/mustpass/gles/khronos_mustpass/3.2.5.x/gles2-khr-main.txt
+index 1400218..e4df024 100644
+--- a/external/openglcts/data/gl_cts/data/mustpass/gles/khronos_mustpass/3.2.5.x/gles2-khr-main.txt
++++ b/external/openglcts/data/gl_cts/data/mustpass/gles/khronos_mustpass/3.2.5.x/gles2-khr-main.txt
+@@ -427,10 +427,10 @@ KHR-GLES2.core.internalformat.texture2d.rgb_half_float_oes_rgb
+ KHR-GLES2.core.internalformat.texture2d.rgba_half_float_oes_rgba
+ KHR-GLES2.core.internalformat.texture2d.rgb_half_float_oes_rgb_linear
+ KHR-GLES2.core.internalformat.texture2d.rgba_half_float_oes_rgba_linear
+-KHR-GLES2.core.internalformat.texture2d.rgb_float_rgb32f
+-KHR-GLES2.core.internalformat.texture2d.rgba_float_rgba32f
+-KHR-GLES2.core.internalformat.texture2d.rgb_float_rgb32f_linear
+-KHR-GLES2.core.internalformat.texture2d.rgba_float_rgba32f_linear
++KHR-GLES2.core.internalformat.texture2d.rgb_float_rgb
++KHR-GLES2.core.internalformat.texture2d.rgba_float_rgba
++KHR-GLES2.core.internalformat.texture2d.rgb_float_rgb_linear
++KHR-GLES2.core.internalformat.texture2d.rgba_float_rgba_linear
+ KHR-GLES2.core.internalformat.texture2d.rgba_unsigned_byte_rgb5_a1
+ KHR-GLES2.core.internalformat.texture2d.rgba_unsigned_byte_rgba4
+ KHR-GLES2.core.internalformat.texture2d.rgb_unsigned_byte_rgb565
+diff --git a/external/openglcts/data/gl_cts/data/mustpass/gles/khronos_mustpass/3.2.6.x/gles2-khr-main.txt b/external/openglcts/data/gl_cts/data/mustpass/gles/khronos_mustpass/3.2.6.x/gles2-khr-main.txt
+index 1400218..e4df024 100644
+--- a/external/openglcts/data/gl_cts/data/mustpass/gles/khronos_mustpass/3.2.6.x/gles2-khr-main.txt
++++ b/external/openglcts/data/gl_cts/data/mustpass/gles/khronos_mustpass/3.2.6.x/gles2-khr-main.txt
+@@ -427,10 +427,10 @@ KHR-GLES2.core.internalformat.texture2d.rgb_half_float_oes_rgb
+ KHR-GLES2.core.internalformat.texture2d.rgba_half_float_oes_rgba
+ KHR-GLES2.core.internalformat.texture2d.rgb_half_float_oes_rgb_linear
+ KHR-GLES2.core.internalformat.texture2d.rgba_half_float_oes_rgba_linear
+-KHR-GLES2.core.internalformat.texture2d.rgb_float_rgb32f
+-KHR-GLES2.core.internalformat.texture2d.rgba_float_rgba32f
+-KHR-GLES2.core.internalformat.texture2d.rgb_float_rgb32f_linear
+-KHR-GLES2.core.internalformat.texture2d.rgba_float_rgba32f_linear
++KHR-GLES2.core.internalformat.texture2d.rgb_float_rgb
++KHR-GLES2.core.internalformat.texture2d.rgba_float_rgba
++KHR-GLES2.core.internalformat.texture2d.rgb_float_rgb_linear
++KHR-GLES2.core.internalformat.texture2d.rgba_float_rgba_linear
+ KHR-GLES2.core.internalformat.texture2d.rgba_unsigned_byte_rgb5_a1
+ KHR-GLES2.core.internalformat.texture2d.rgba_unsigned_byte_rgba4
+ KHR-GLES2.core.internalformat.texture2d.rgb_unsigned_byte_rgb565
+diff --git a/external/openglcts/data/gl_cts/data/mustpass/gles/khronos_mustpass/main/gles2-khr-main.txt b/external/openglcts/data/gl_cts/data/mustpass/gles/khronos_mustpass/main/gles2-khr-main.txt
+index 1400218..e4df024 100644
+--- a/external/openglcts/data/gl_cts/data/mustpass/gles/khronos_mustpass/main/gles2-khr-main.txt
++++ b/external/openglcts/data/gl_cts/data/mustpass/gles/khronos_mustpass/main/gles2-khr-main.txt
+@@ -427,10 +427,10 @@ KHR-GLES2.core.internalformat.texture2d.rgb_half_float_oes_rgb
+ KHR-GLES2.core.internalformat.texture2d.rgba_half_float_oes_rgba
+ KHR-GLES2.core.internalformat.texture2d.rgb_half_float_oes_rgb_linear
+ KHR-GLES2.core.internalformat.texture2d.rgba_half_float_oes_rgba_linear
+-KHR-GLES2.core.internalformat.texture2d.rgb_float_rgb32f
+-KHR-GLES2.core.internalformat.texture2d.rgba_float_rgba32f
+-KHR-GLES2.core.internalformat.texture2d.rgb_float_rgb32f_linear
+-KHR-GLES2.core.internalformat.texture2d.rgba_float_rgba32f_linear
++KHR-GLES2.core.internalformat.texture2d.rgb_float_rgb
++KHR-GLES2.core.internalformat.texture2d.rgba_float_rgba
++KHR-GLES2.core.internalformat.texture2d.rgb_float_rgb_linear
++KHR-GLES2.core.internalformat.texture2d.rgba_float_rgba_linear
+ KHR-GLES2.core.internalformat.texture2d.rgba_unsigned_byte_rgb5_a1
+ KHR-GLES2.core.internalformat.texture2d.rgba_unsigned_byte_rgba4
+ KHR-GLES2.core.internalformat.texture2d.rgb_unsigned_byte_rgb565
+diff --git a/external/openglcts/modules/common/glcInternalformatTests.cpp b/external/openglcts/modules/common/glcInternalformatTests.cpp
+index a4d8bf4..a56170d 100644
+--- a/external/openglcts/modules/common/glcInternalformatTests.cpp
++++ b/external/openglcts/modules/common/glcInternalformatTests.cpp
+@@ -1586,10 +1586,6 @@ void InternalformatTests::getESTestData(TestData &testData, glu::ContextType &co
+         TF(GL_RGBA, GL_HALF_FLOAT_OES, GL_RGBA, OES_texture_half_float),
+         TF(GL_RGB, GL_HALF_FLOAT_OES, GL_RGB, OES_texture_half_float_linear, nullptr, GL_LINEAR, GL_LINEAR),
+         TF(GL_RGBA, GL_HALF_FLOAT_OES, GL_RGBA, OES_texture_half_float_linear, nullptr, GL_LINEAR, GL_LINEAR),
+-        TF(GL_RGB, GL_FLOAT, GL_RGB32F, OES_texture_float),
+-        TF(GL_RGBA, GL_FLOAT, GL_RGBA32F, OES_texture_float),
+-        TF(GL_RGB, GL_FLOAT, GL_RGB32F, OES_texture_float_linear, nullptr, GL_LINEAR, GL_LINEAR),
+-        TF(GL_RGBA, GL_FLOAT, GL_RGBA32F, OES_texture_float_linear, nullptr, GL_LINEAR, GL_LINEAR),
+     };
+
+     CopyTexImageFormat commonCopyTexImageFormats[] = {
+@@ -1636,6 +1632,10 @@ void InternalformatTests::getESTestData(TestData &testData, glu::ContextType &co
+             TF(GL_RGB, GL_FLOAT, GL_RGB16F),
+             TF(GL_RGB, GL_FLOAT, GL_R11F_G11F_B10F),
+             TF(GL_RGB, GL_FLOAT, GL_RGB9_E5),
++            TF(GL_RGB, GL_FLOAT, GL_RGB32F, OES_texture_float),
++            TF(GL_RGBA, GL_FLOAT, GL_RGBA32F, OES_texture_float),
++            TF(GL_RGB, GL_FLOAT, GL_RGB32F, OES_texture_float_linear, nullptr, GL_LINEAR, GL_LINEAR),
++            TF(GL_RGBA, GL_FLOAT, GL_RGBA32F, OES_texture_float_linear, nullptr, GL_LINEAR, GL_LINEAR),
+             TF(GL_RGB_INTEGER, GL_UNSIGNED_BYTE, GL_RGB8UI),
+             TF(GL_RGB_INTEGER, GL_BYTE, GL_RGB8I),
+             TF(GL_RGB_INTEGER, GL_UNSIGNED_SHORT, GL_RGB16UI),
+@@ -1699,6 +1699,10 @@ void InternalformatTests::getESTestData(TestData &testData, glu::ContextType &co
+             TF(GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1, GL_RGB5_A1, OES_required_internalformat),
+             TF(GL_RGB, GL_UNSIGNED_SHORT_5_6_5, GL_RGB, OES_required_internalformat),
+             TF(GL_RGB, GL_UNSIGNED_SHORT_5_6_5, GL_RGB565, OES_required_internalformat),
++            TF(GL_RGB, GL_FLOAT, GL_RGB, OES_texture_float),
++            TF(GL_RGBA, GL_FLOAT, GL_RGBA, OES_texture_float),
++            TF(GL_RGB, GL_FLOAT, GL_RGB, OES_texture_float_linear, OES_texture_float, GL_LINEAR, GL_LINEAR),
++            TF(GL_RGBA, GL_FLOAT, GL_RGBA, OES_texture_float_linear, OES_texture_float, GL_LINEAR, GL_LINEAR),
+             TF(GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE, GL_LUMINANCE8_ALPHA8_OES, OES_required_internalformat),
+             TF(GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE, GL_LUMINANCE4_ALPHA4_OES, OES_required_internalformat),
+             TF(GL_LUMINANCE, GL_UNSIGNED_BYTE, GL_LUMINANCE8_OES, OES_required_internalformat),

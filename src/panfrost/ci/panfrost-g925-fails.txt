@@ -1,0 +1,30 @@
+angle-KHR-GLES31.core.shader_atomic_counters.advanced-usage-multi-stage,Fail
+angle-KHR-GLES31.core.shader_storage_buffer_object.advanced-matrix-vsfs,Fail
+angle-KHR-GLES31.core.shader_storage_buffer_object.advanced-usage-sync-vsfs,Fail
+angle-KHR-GLES31.core.texture_cube_map_array.sampling,Fail
+
+# VKCTS 1.4.4.2 -> 1.4.5.3 uprev
+dEQP-VK.wsi.xcb.present_timing.query.parallel.parallel,Fail
+dEQP-VK.wsi.xlib.present_timing.basic.timing_queue,Fail
+
+# uprev ANGLE in Mesa
+angle-dEQP-GLES2.functional.negative_api.texture.compressedteximage2d_invalid_border_cube_neg_x,Fail
+angle-dEQP-GLES2.functional.negative_api.texture.compressedteximage2d_invalid_border_cube_neg_y,Fail
+angle-dEQP-GLES2.functional.negative_api.texture.compressedteximage2d_invalid_border_cube_neg_z,Fail
+angle-dEQP-GLES2.functional.negative_api.texture.compressedteximage2d_invalid_border_cube_pos_x,Fail
+angle-dEQP-GLES2.functional.negative_api.texture.compressedteximage2d_invalid_border_cube_pos_y,Fail
+angle-dEQP-GLES2.functional.negative_api.texture.compressedteximage2d_invalid_border_cube_pos_z,Fail
+angle-dEQP-GLES2.functional.negative_api.texture.compressedteximage2d_level_max_cube_pos,Fail
+angle-dEQP-GLES2.functional.negative_api.texture.compressedteximage2d_neg_width_height_cube_neg_x,Fail
+angle-dEQP-GLES2.functional.negative_api.texture.compressedteximage2d_neg_width_height_cube_neg_y,Fail
+angle-dEQP-GLES2.functional.negative_api.texture.compressedteximage2d_neg_width_height_cube_neg_z,Fail
+angle-dEQP-GLES2.functional.negative_api.texture.compressedteximage2d_neg_width_height_cube_pos_x,Fail
+angle-dEQP-GLES2.functional.negative_api.texture.compressedteximage2d_neg_width_height_cube_pos_y,Fail
+angle-dEQP-GLES2.functional.negative_api.texture.compressedteximage2d_neg_width_height_cube_pos_z,Fail
+angle-dEQP-GLES2.functional.negative_api.texture.compressedteximage2d_width_height_max_cube_neg_x,Fail
+angle-dEQP-GLES2.functional.negative_api.texture.compressedteximage2d_width_height_max_cube_neg_y,Fail
+angle-dEQP-GLES2.functional.negative_api.texture.compressedteximage2d_width_height_max_cube_neg_z,Fail
+angle-dEQP-GLES2.functional.negative_api.texture.compressedteximage2d_width_height_max_cube_pos_x,Fail
+angle-dEQP-GLES2.functional.negative_api.texture.compressedteximage2d_width_height_max_cube_pos_y,Fail
+angle-dEQP-GLES2.functional.negative_api.texture.compressedteximage2d_width_height_max_cube_pos_z,Fail
+angle-dEQP-GLES2.functional.negative_api.texture.generatemipmap_zero_level_array_compressed,Fail

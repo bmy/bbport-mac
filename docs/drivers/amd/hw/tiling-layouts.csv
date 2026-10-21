@@ -1,0 +1,1337 @@
+pitcairn         | bpe  1| am  1|  64x1  | {X0, X1, X2, X3, X4, X5}
+pitcairn         | bpe  1| am  2|   8x8  | {X0, Y0, X1, Y1, X2, Y2}
+pitcairn         | bpe  1| am D2|  32x8  | {X0, X1, X2, Y1, Y0, Y2, X3, X4}
+pitcairn         | bpe  1| am  4|  64x512| {X0, Y0, X1, Y1, X2, Y2, Y3, Y4, X4^X5^Y3, X3^Y4, X5^Y5, Y8, Y7^Y8, Y6, Y5}
+pitcairn         | bpe  1| am D4| 128x256| {X0, X1, X2, Y1, Y0, Y2, Y3, Y4, X4^X5^Y3, X3^Y4, X5^Y5, X6, Y7, Y6, Y5}
+pitcairn         | bpe  2| am  1|  32x1  | {0, X0, X1, X2, X3, X4}
+pitcairn         | bpe  2| am  2|   8x8  | {0, X0, Y0, X1, Y1, X2, Y2}
+pitcairn         | bpe  2| am D2|  32x8  | {0, X0, X1, X2, Y0, Y1, Y2, X3, X4}
+pitcairn         | bpe  2| am  4|  64x256| {0, X0, Y0, X1, Y1, X2, Y2, Y3, X4^X5^Y3, X3^Y4, X5^Y5, Y7, Y6^Y7, Y5, Y4}
+pitcairn         | bpe  2| am D4| 128x128| {0, X0, X1, X2, Y0, Y1, Y2, Y3, X4^X5^Y3, X3^Y4, X5^Y5, X6, Y6, Y5, Y4}
+pitcairn         | bpe  4| am  1|  16x1  | {0, 0, X0, X1, X2, X3}
+pitcairn         | bpe  4| am  2|   8x8  | {0, 0, X0, Y0, X1, Y1, X2, Y2}
+pitcairn         | bpe  4| am D2|  32x8  | {0, 0, X0, X1, Y0, X2, Y1, Y2, X3, X4}
+pitcairn         | bpe  4| am  4|  64x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, X4^X5^Y3, X3^Y4, X5^Y5, Y6, Y5^Y6, Y4, Y3}
+pitcairn         | bpe  4| am D4|  64x128| {0, 0, X0, X1, Y0, X2, Y1, Y2, X4^X5^Y3, X3^Y4, X5^Y5, Y6, Y5^Y6, Y4, Y3}
+pitcairn         | bpe  8| am  1|   8x1  | {0, 0, 0, X0, X1, X2}
+pitcairn         | bpe  8| am  2|   8x8  | {0, 0, 0, X0, Y0, X1, Y1, X2, Y2}
+pitcairn         | bpe  8| am D2|  32x8  | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, X4}
+pitcairn         | bpe  8| am  4|  64x128| {0, 0, 0, X0, Y0, X1, Y1, X2, X4^X5^Y3, X3^Y4, X5^Y5, Y6, Y5^Y6, Y4, Y3, Y2}
+pitcairn         | bpe  8| am D4|  64x128| {0, 0, 0, X0, Y0, X1, X2, Y1, X4^X5^Y3, X3^Y4, X5^Y5, Y6, Y5^Y6, Y4, Y3, Y2}
+pitcairn         | bpe 16| am  1|   8x1  | {0, 0, 0, 0, X0, X1, X2}
+pitcairn         | bpe 16| am  2|   8x8  | {0, 0, 0, 0, X0, Y0, X1, Y1, X2, Y2}
+pitcairn         | bpe 16| am D2|  32x8  | {0, 0, 0, 0, X0, Y0, X1, Y1, X2, Y2, X3, X4}
+pitcairn         | bpe 16| am  4|  64x128| {0, 0, 0, 0, X0, Y0, X1, Y1, X4^X5^Y3, X3^Y4, X5^Y5, Y6, Y5^Y6, Y4, Y3, X2, Y2}
+pitcairn         | bpe 16| am D4|  64x128| {0, 0, 0, 0, X0, Y0, X1, Y1, X4^X5^Y3, X3^Y4, X5^Y5, Y6, Y5^Y6, Y4, Y3, X2, Y2}
+bonaire          | bpe  1| am  1|  64x1  | {X0, X1, X2, X3, X4, X5}
+bonaire          | bpe  1| am  2|   8x8  | {X0, Y0, X1, Y1, X2, Y2}
+bonaire          | bpe  1| am D2|  32x8  | {X0, X1, X2, Y1, Y0, Y2, X3, X4}
+bonaire          | bpe  1| am  4| 128x128| {X0, Y0, X1, Y1, X2, Y2, Y3, Y4, X3^X4^Y3, X4^Y4, X5, X6, Y6, Y5}
+bonaire          | bpe  1| am D4| 128x128| {X0, X1, X2, Y1, Y0, Y2, Y3, Y4, X3^X4^Y3, X4^Y4, X5, X6, Y6, Y5}
+bonaire          | bpe  1| am 19| 256x256| {X0, Y0, X1, Y1, X2, Y2, X5, Y3, X3^X4^Y3, X4^Y4, X6, X7, Y7, Y6, Y4, Y5}
+bonaire          | bpe  1| amD19| 256x256| {X0, X1, X2, Y1, Y0, Y2, X5, Y3, X3^X4^Y3, X4^Y4, X6, X7, Y7, Y6, Y4, Y5}
+bonaire          | bpe  2| am  1|  32x1  | {0, X0, X1, X2, X3, X4}
+bonaire          | bpe  2| am  2|   8x8  | {0, X0, Y0, X1, Y1, X2, Y2}
+bonaire          | bpe  2| am D2|  32x8  | {0, X0, X1, X2, Y0, Y1, Y2, X3, X4}
+bonaire          | bpe  2| am  4| 128x64 | {0, X0, Y0, X1, Y1, X2, Y2, Y3, X3^X4^Y3, X4^Y4, X5, X6, Y5, Y4}
+bonaire          | bpe  2| am D4| 128x64 | {0, X0, X1, X2, Y0, Y1, Y2, Y3, X3^X4^Y3, X4^Y4, X5, X6, Y5, Y4}
+bonaire          | bpe  2| am 19| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X5, X3^X4^Y3, X4^Y4, X6, X7, Y6, Y5, Y3, Y4}
+bonaire          | bpe  2| amD19| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X5, X3^X4^Y3, X4^Y4, X6, X7, Y6, Y5, Y3, Y4}
+bonaire          | bpe  4| am  1|  16x1  | {0, 0, X0, X1, X2, X3}
+bonaire          | bpe  4| am  2|   8x8  | {0, 0, X0, Y0, X1, Y1, X2, Y2}
+bonaire          | bpe  4| am D2|  32x8  | {0, 0, X0, X1, Y0, X2, Y1, Y2, X3, X4}
+bonaire          | bpe  4| am  4|  64x64 | {0, 0, X0, Y0, X1, Y1, X2, Y2, X3^X4^Y3, X4^Y4, X5, Y5, Y4, Y3}
+bonaire          | bpe  4| am D4|  64x64 | {0, 0, X0, X1, Y0, X2, Y1, Y2, X3^X4^Y3, X4^Y4, X5, Y5, Y4, Y3}
+bonaire          | bpe  4| am 19| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, X3^X4^Y3, X4^Y4, X5, X6, Y6, Y5, Y3, Y4}
+bonaire          | bpe  4| amD19| 128x128| {0, 0, X0, X1, Y0, X2, Y1, Y2, X3^X4^Y3, X4^Y4, X5, X6, Y6, Y5, Y3, Y4}
+bonaire          | bpe  8| am  1|   8x1  | {0, 0, 0, X0, X1, X2}
+bonaire          | bpe  8| am  2|   8x8  | {0, 0, 0, X0, Y0, X1, Y1, X2, Y2}
+bonaire          | bpe  8| am D2|  32x8  | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, X4}
+bonaire          | bpe  8| am  4|  64x64 | {0, 0, 0, X0, Y0, X1, Y1, X2, X3^X4^Y3, X4^Y4, X5, Y5, Y4, Y3, Y2}
+bonaire          | bpe  8| am D4|  64x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X3^X4^Y3, X4^Y4, X5, Y5, Y4, Y3, Y2}
+bonaire          | bpe  8| am 19| 128x64 | {0, 0, 0, X0, Y0, X1, Y1, X2, X3^X4^Y3, X4^Y4, X5, X6, Y5, Y4, Y2, Y3}
+bonaire          | bpe  8| amD19| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X3^X4^Y3, X4^Y4, X5, X6, Y5, Y4, Y2, Y3}
+bonaire          | bpe 16| am  1|   8x1  | {0, 0, 0, 0, X0, X1, X2}
+bonaire          | bpe 16| am  2|   8x8  | {0, 0, 0, 0, X0, Y0, X1, Y1, X2, Y2}
+bonaire          | bpe 16| am D2|  32x8  | {0, 0, 0, 0, X0, Y0, X1, Y1, X2, Y2, X3, X4}
+bonaire          | bpe 16| am  4|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^X4^Y3, X4^Y4, X5, Y5, Y4, Y3, X2, Y2}
+bonaire          | bpe 16| am D4|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^X4^Y3, X4^Y4, X5, Y5, Y4, Y3, X2, Y2}
+bonaire          | bpe 16| am 19|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^X4^Y3, X4^Y4, X5, Y5, Y4, Y3, X2, Y2}
+bonaire          | bpe 16| amD19|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^X4^Y3, X4^Y4, X5, Y5, Y4, Y3, X2, Y2}
+polaris10        | bpe  1| am  1|  64x1  | {X0, X1, X2, X3, X4, X5}
+polaris10        | bpe  1| am  2|   8x8  | {X0, Y0, X1, Y1, X2, Y2}
+polaris10        | bpe  1| am D2|  32x8  | {X0, X1, X2, Y1, Y0, Y2, X3, X4}
+polaris10        | bpe  1| am  4| 256x128| {X0, Y0, X1, Y1, X2, Y2, Y3, Y4, X3^X4^Y3, X4^Y4, X5^Y5, X6, X7, Y6, Y5}
+polaris10        | bpe  1| am D4| 256x128| {X0, X1, X2, Y1, Y0, Y2, Y3, Y4, X3^X4^Y3, X4^Y4, X5^Y5, X6, X7, Y6, Y5}
+polaris10        | bpe  1| am 19| 256x256| {X0, Y0, X1, Y1, X2, Y2, Y3, Y4, X3^X4^Y3, X4^Y4, X5^Y5, X6, X7, Y7, Y6, Y5}
+polaris10        | bpe  1| amD19| 256x256| {X0, X1, X2, Y1, Y0, Y2, Y3, Y4, X3^X4^Y3, X4^Y4, X5^Y5, X6, X7, Y7, Y6, Y5}
+polaris10        | bpe  2| am  1|  32x1  | {0, X0, X1, X2, X3, X4}
+polaris10        | bpe  2| am  2|   8x8  | {0, X0, Y0, X1, Y1, X2, Y2}
+polaris10        | bpe  2| am D2|  32x8  | {0, X0, X1, X2, Y0, Y1, Y2, X3, X4}
+polaris10        | bpe  2| am  4| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, Y3, X3^X4^Y3, X4^Y4, X5^Y5, X6, X7, Y6, Y5, Y4}
+polaris10        | bpe  2| am D4| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, Y3, X3^X4^Y3, X4^Y4, X5^Y5, X6, X7, Y6, Y5, Y4}
+polaris10        | bpe  2| am 19| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, Y3, X3^X4^Y3, X4^Y4, X5^Y5, X6, X7, Y6, Y5, Y4}
+polaris10        | bpe  2| amD19| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, Y3, X3^X4^Y3, X4^Y4, X5^Y5, X6, X7, Y6, Y5, Y4}
+polaris10        | bpe  4| am  1|  16x1  | {0, 0, X0, X1, X2, X3}
+polaris10        | bpe  4| am  2|   8x8  | {0, 0, X0, Y0, X1, Y1, X2, Y2}
+polaris10        | bpe  4| am D2|  32x8  | {0, 0, X0, X1, Y0, X2, Y1, Y2, X3, X4}
+polaris10        | bpe  4| am  4| 256x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, X3^X4^Y3, X4^Y4, X5^Y5, X6, X7, Y6, Y5, Y3, Y4}
+polaris10        | bpe  4| am D4| 256x128| {0, 0, X0, X1, Y0, X2, Y1, Y2, X3^X4^Y3, X4^Y4, X5^Y5, X6, X7, Y6, Y5, Y3, Y4}
+polaris10        | bpe  4| am 19| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, X3^X4^Y3, X4^Y4, X5^Y5, X6, Y6, Y5, Y4, Y3}
+polaris10        | bpe  4| amD19| 128x128| {0, 0, X0, X1, Y0, X2, Y1, Y2, X3^X4^Y3, X4^Y4, X5^Y5, X6, Y6, Y5, Y4, Y3}
+polaris10        | bpe  8| am  1|   8x1  | {0, 0, 0, X0, X1, X2}
+polaris10        | bpe  8| am  2|   8x8  | {0, 0, 0, X0, Y0, X1, Y1, X2, Y2}
+polaris10        | bpe  8| am D2|  32x8  | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, X4}
+polaris10        | bpe  8| am  4| 256x128| {0, 0, 0, X0, Y0, X1, Y1, X2, X3^X4^Y3, X4^Y4, X5^Y5, X6, X7, Y6, Y5, Y2, Y3, Y4}
+polaris10        | bpe  8| am D4| 256x128| {0, 0, 0, X0, Y0, X1, X2, Y1, X3^X4^Y3, X4^Y4, X5^Y5, X6, X7, Y6, Y5, Y2, Y3, Y4}
+polaris10        | bpe  8| am 19| 128x64 | {0, 0, 0, X0, Y0, X1, Y1, X2, X3^X4^Y3, X4^Y4, X5^Y5, X6, Y5, Y4, Y3, Y2}
+polaris10        | bpe  8| amD19| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X3^X4^Y3, X4^Y4, X5^Y5, X6, Y5, Y4, Y3, Y2}
+polaris10        | bpe 16| am  1|   8x1  | {0, 0, 0, 0, X0, X1, X2}
+polaris10        | bpe 16| am  2|   8x8  | {0, 0, 0, 0, X0, Y0, X1, Y1, X2, Y2}
+polaris10        | bpe 16| am D2|  32x8  | {0, 0, 0, 0, X0, Y0, X1, Y1, X2, Y2, X3, X4}
+polaris10        | bpe 16| am  4| 128x128| {0, 0, 0, 0, X0, Y0, X1, Y1, X3^X4^Y3, X4^Y4, X5^Y5, X6, Y6, Y5, Y4, X2, Y2, Y3}
+polaris10        | bpe 16| am D4| 128x128| {0, 0, 0, 0, X0, Y0, X1, Y1, X3^X4^Y3, X4^Y4, X5^Y5, X6, Y6, Y5, Y4, X2, Y2, Y3}
+polaris10        | bpe 16| am 19|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^X4^Y3, X4^Y4, X5^Y5, Y5, Y4^Y5, Y3, X2, Y2}
+polaris10        | bpe 16| amD19|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^X4^Y3, X4^Y4, X5^Y5, Y5, Y4^Y5, Y3, X2, Y2}
+polaris12        | bpe  1| am  1|  64x1  | {X0, X1, X2, X3, X4, X5}
+polaris12        | bpe  1| am  2|   8x8  | {X0, Y0, X1, Y1, X2, Y2}
+polaris12        | bpe  1| am D2|  32x8  | {X0, X1, X2, Y1, Y0, Y2, X3, X4}
+polaris12        | bpe  1| am  4| 128x128| {X0, Y0, X1, Y1, X2, Y2, Y3, Y4, X3^X4^Y3, X4^Y4, X5, X6, Y6, Y5}
+polaris12        | bpe  1| am D4| 128x128| {X0, X1, X2, Y1, Y0, Y2, Y3, Y4, X3^X4^Y3, X4^Y4, X5, X6, Y6, Y5}
+polaris12        | bpe  1| am 19| 256x256| {X0, Y0, X1, Y1, X2, Y2, X5, Y3, X3^X4^Y3, X4^Y4, X6, X7, Y7, Y6, Y4, Y5}
+polaris12        | bpe  1| amD19| 256x256| {X0, X1, X2, Y1, Y0, Y2, X5, Y3, X3^X4^Y3, X4^Y4, X6, X7, Y7, Y6, Y4, Y5}
+polaris12        | bpe  2| am  1|  32x1  | {0, X0, X1, X2, X3, X4}
+polaris12        | bpe  2| am  2|   8x8  | {0, X0, Y0, X1, Y1, X2, Y2}
+polaris12        | bpe  2| am D2|  32x8  | {0, X0, X1, X2, Y0, Y1, Y2, X3, X4}
+polaris12        | bpe  2| am  4| 128x128| {0, X0, Y0, X1, Y1, X2, Y2, Y3, X3^X4^Y3, X4^Y4, X5, X6, Y6, Y5, Y4}
+polaris12        | bpe  2| am D4| 128x128| {0, X0, X1, X2, Y0, Y1, Y2, Y3, X3^X4^Y3, X4^Y4, X5, X6, Y6, Y5, Y4}
+polaris12        | bpe  2| am 19| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X5, X3^X4^Y3, X4^Y4, X6, X7, Y6, Y5, Y3, Y4}
+polaris12        | bpe  2| amD19| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X5, X3^X4^Y3, X4^Y4, X6, X7, Y6, Y5, Y3, Y4}
+polaris12        | bpe  4| am  1|  16x1  | {0, 0, X0, X1, X2, X3}
+polaris12        | bpe  4| am  2|   8x8  | {0, 0, X0, Y0, X1, Y1, X2, Y2}
+polaris12        | bpe  4| am D2|  32x8  | {0, 0, X0, X1, Y0, X2, Y1, Y2, X3, X4}
+polaris12        | bpe  4| am  4| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, X3^X4^Y3, X4^Y4, X5, X6, Y6, Y5, Y3, Y4}
+polaris12        | bpe  4| am D4| 128x128| {0, 0, X0, X1, Y0, X2, Y1, Y2, X3^X4^Y3, X4^Y4, X5, X6, Y6, Y5, Y3, Y4}
+polaris12        | bpe  4| am 19| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, X3^X4^Y3, X4^Y4, X5, X6, Y6, Y5, Y3, Y4}
+polaris12        | bpe  4| amD19| 128x128| {0, 0, X0, X1, Y0, X2, Y1, Y2, X3^X4^Y3, X4^Y4, X5, X6, Y6, Y5, Y3, Y4}
+polaris12        | bpe  8| am  1|   8x1  | {0, 0, 0, X0, X1, X2}
+polaris12        | bpe  8| am  2|   8x8  | {0, 0, 0, X0, Y0, X1, Y1, X2, Y2}
+polaris12        | bpe  8| am D2|  32x8  | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, X4}
+polaris12        | bpe  8| am  4| 128x64 | {0, 0, 0, X0, Y0, X1, Y1, X2, X3^X4^Y3, X4^Y4, X5, X6, Y5, Y4, Y2, Y3}
+polaris12        | bpe  8| am D4| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X3^X4^Y3, X4^Y4, X5, X6, Y5, Y4, Y2, Y3}
+polaris12        | bpe  8| am 19| 128x64 | {0, 0, 0, X0, Y0, X1, Y1, X2, X3^X4^Y3, X4^Y4, X5, X6, Y5, Y4, Y2, Y3}
+polaris12        | bpe  8| amD19| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X3^X4^Y3, X4^Y4, X5, X6, Y5, Y4, Y2, Y3}
+polaris12        | bpe 16| am  1|   8x1  | {0, 0, 0, 0, X0, X1, X2}
+polaris12        | bpe 16| am  2|   8x8  | {0, 0, 0, 0, X0, Y0, X1, Y1, X2, Y2}
+polaris12        | bpe 16| am D2|  32x8  | {0, 0, 0, 0, X0, Y0, X1, Y1, X2, Y2, X3, X4}
+polaris12        | bpe 16| am  4|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^X4^Y3, X4^Y4, X5, Y5, Y4, Y3, X2, Y2}
+polaris12        | bpe 16| am D4|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^X4^Y3, X4^Y4, X5, Y5, Y4, Y3, X2, Y2}
+polaris12        | bpe 16| am 19|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^X4^Y3, X4^Y4, X5, Y5, Y4, Y3, X2, Y2}
+polaris12        | bpe 16| amD19|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^X4^Y3, X4^Y4, X5, Y5, Y4, Y3, X2, Y2}
+stoney           | bpe  1| am  1|  64x1  | {X0, X1, X2, X3, X4, X5}
+stoney           | bpe  1| am  2|   8x8  | {X0, Y0, X1, Y1, X2, Y2}
+stoney           | bpe  1| am D2|  32x8  | {X0, X1, X2, Y1, Y0, Y2, X3, X4}
+stoney           | bpe  1| am  4|  64x64 | {X0, Y0, X1, Y1, X2, Y2, Y3, Y4, X3^Y3, X4, X5, Y5}
+stoney           | bpe  1| am D4|  64x64 | {X0, X1, X2, Y1, Y0, Y2, Y3, Y4, X3^Y3, X4, X5, Y5}
+stoney           | bpe  1| am 19| 256x256| {X0, Y0, X1, Y1, X2, Y2, X4, X5, X3^Y3, X6, X7, Y7, Y6, Y3, Y4, Y5}
+stoney           | bpe  1| amD19| 256x256| {X0, X1, X2, Y1, Y0, Y2, X4, X5, X3^Y3, X6, X7, Y7, Y6, Y3, Y4, Y5}
+stoney           | bpe  2| am  1|  32x1  | {0, X0, X1, X2, X3, X4}
+stoney           | bpe  2| am  2|   8x8  | {0, X0, Y0, X1, Y1, X2, Y2}
+stoney           | bpe  2| am D2|  32x8  | {0, X0, X1, X2, Y0, Y1, Y2, X3, X4}
+stoney           | bpe  2| am  4|  64x32 | {0, X0, Y0, X1, Y1, X2, Y2, Y3, X3^Y3, X4, X5, Y4}
+stoney           | bpe  2| am D4|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, Y3, X3^Y3, X4, X5, Y4}
+stoney           | bpe  2| am 19| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X4, X3^Y3, X6, X7, Y6, Y5, X5, Y3, Y4}
+stoney           | bpe  2| amD19| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X4, X3^Y3, X6, X7, Y6, Y5, X5, Y3, Y4}
+stoney           | bpe  4| am  1|  16x1  | {0, 0, X0, X1, X2, X3}
+stoney           | bpe  4| am  2|   8x8  | {0, 0, X0, Y0, X1, Y1, X2, Y2}
+stoney           | bpe  4| am D2|  32x8  | {0, 0, X0, X1, Y0, X2, Y1, Y2, X3, X4}
+stoney           | bpe  4| am  4|  32x32 | {0, 0, X0, Y0, X1, Y1, X2, Y2, X3^Y3, X4, Y4, Y3}
+stoney           | bpe  4| am D4|  32x32 | {0, 0, X0, X1, Y0, X2, Y1, Y2, X3^Y3, X4, Y4, Y3}
+stoney           | bpe  4| am 19| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, X3^Y3, X5, X6, Y6, Y5, X4, Y3, Y4}
+stoney           | bpe  4| amD19| 128x128| {0, 0, X0, X1, Y0, X2, Y1, Y2, X3^Y3, X5, X6, Y6, Y5, X4, Y3, Y4}
+stoney           | bpe  8| am  1|   8x1  | {0, 0, 0, X0, X1, X2}
+stoney           | bpe  8| am  2|   8x8  | {0, 0, 0, X0, Y0, X1, Y1, X2, Y2}
+stoney           | bpe  8| am D2|  32x8  | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, X4}
+stoney           | bpe  8| am  4|  32x32 | {0, 0, 0, X0, Y0, X1, Y1, X2, X3^Y3, X4, Y4, Y3, Y2}
+stoney           | bpe  8| am D4|  32x32 | {0, 0, 0, X0, Y0, X1, X2, Y1, X3^Y3, X4, Y4, Y3, Y2}
+stoney           | bpe  8| am 19| 128x64 | {0, 0, 0, X0, Y0, X1, Y1, X2, X3^Y3, X5, X6, Y5, Y4, Y2, X4, Y3}
+stoney           | bpe  8| amD19| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X3^Y3, X5, X6, Y5, Y4, Y2, X4, Y3}
+stoney           | bpe 16| am  1|   8x1  | {0, 0, 0, 0, X0, X1, X2}
+stoney           | bpe 16| am  2|   8x8  | {0, 0, 0, 0, X0, Y0, X1, Y1, X2, Y2}
+stoney           | bpe 16| am D2|  32x8  | {0, 0, 0, 0, X0, Y0, X1, Y1, X2, Y2, X3, X4}
+stoney           | bpe 16| am  4|  32x32 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^Y3, X4, Y4, Y3, X2, Y2}
+stoney           | bpe 16| am D4|  32x32 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^Y3, X4, Y4, Y3, X2, Y2}
+stoney           | bpe 16| am 19|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^Y3, X4, X5, Y5, Y4, X2, Y2, Y3}
+stoney           | bpe 16| amD19|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^Y3, X4, X5, Y5, Y4, X2, Y2, Y3}
+vega10           | bpe  1| sw  0| 256x1  | {X0, X1, X2, X3, X4, X5, X6, X7}
+vega10           | bpe  1| sw  1|  16x16 | {X0, X1, X2, X3, Y0, Y1, Y2, Y3}
+vega10           | bpe  1| sw  2|  16x16 | {X0, X1, X2, Y1, Y0, Y2, X3, Y3}
+vega10           | bpe  1| sw  3|  16x16 | {Y0, Y1, Y2, X1, X0, X2, X3, Y3}
+vega10           | bpe  1| sw  4|  64x64 | {X0, Y0, X1, Y1, X2, Y2, Y3, X3, Y4, X4, Y5, X5}
+vega10           | bpe  1| sw  5|  64x64 | {X0, X1, X2, X3, Y0, Y1, Y2, Y3, Y4, X4, Y5, X5}
+vega10           | bpe  1| sw  6|  64x64 | {X0, X1, X2, Y1, Y0, Y2, X3, Y3, Y4, X4, Y5, X5}
+vega10           | bpe  1| sw  7|  64x64 | {Y0, Y1, Y2, X1, X0, X2, X3, Y3, Y4, X4, Y5, X5}
+vega10           | bpe  1| sw  8| 256x256| {X0, Y0, X1, Y1, X2, Y2, Y3, X3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+vega10           | bpe  1| sw  9| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+vega10           | bpe  1| sw 10| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+vega10           | bpe  1| sw 11| 256x256| {Y0, Y1, Y2, X1, X0, X2, X3, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+vega10           | bpe  1| sw 16| 256x256| {X0, Y0, X1, Y1, X2, Y2, Y3, X3, X7^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+vega10           | bpe  1| sw 17| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, X7^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+vega10           | bpe  1| sw 18| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y3, X7^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+vega10           | bpe  1| sw 19| 256x256| {Y0, Y1, Y2, X1, X0, X2, X3, Y3, X7^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+vega10           | bpe  1| sw 20|  64x64 | {X0, Y0, X1, Y1, X2, Y2, Y3, X3, Y4, X4, Y5, X5}
+vega10           | bpe  1| sw 21|  64x64 | {X0, X1, X2, X3, Y0, Y1, Y2, Y3, Y4, X4, Y5, X5}
+vega10           | bpe  1| sw 22|  64x64 | {X0, X1, X2, Y1, Y0, Y2, X3, Y3, Y4, X4, Y5, X5}
+vega10           | bpe  1| sw 23|  64x64 | {Y0, Y1, Y2, X1, X0, X2, X3, Y3, Y4, X4, Y5, X5}
+vega10           | bpe  1| sw 24| 256x256| {X0, Y0, X1, Y1, X2, Y2, Y3, X3, X7^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+vega10           | bpe  1| sw 25| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, X7^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+vega10           | bpe  1| sw 26| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y3, X7^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+vega10           | bpe  1| sw 27| 256x256| {Y0, Y1, Y2, X1, X0, X2, X3, Y3, X7^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+vega10           | bpe  2| sw  0| 128x1  | {0, X0, X1, X2, X3, X4, X5, X6}
+vega10           | bpe  2| sw  1|  16x8  | {0, X0, X1, X2, Y0, Y1, Y2, X3}
+vega10           | bpe  2| sw  2|  16x8  | {0, X0, X1, X2, Y0, Y1, Y2, X3}
+vega10           | bpe  2| sw  3|  16x8  | {0, Y0, Y1, Y2, X0, X1, X2, X3}
+vega10           | bpe  2| sw  4|  64x32 | {0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, Y4, X5}
+vega10           | bpe  2| sw  5|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5}
+vega10           | bpe  2| sw  6|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5}
+vega10           | bpe  2| sw  7|  64x32 | {0, Y0, Y1, Y2, X0, X1, X2, X3, Y3, X4, Y4, X5}
+vega10           | bpe  2| sw  8| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+vega10           | bpe  2| sw  9| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+vega10           | bpe  2| sw 10| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+vega10           | bpe  2| sw 11| 256x128| {0, Y0, Y1, Y2, X0, X1, X2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+vega10           | bpe  2| sw 16| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, X7^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+vega10           | bpe  2| sw 17| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X7^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+vega10           | bpe  2| sw 18| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X7^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+vega10           | bpe  2| sw 19| 256x128| {0, Y0, Y1, Y2, X0, X1, X2, X3, X7^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+vega10           | bpe  2| sw 20|  64x32 | {0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, Y4, X5}
+vega10           | bpe  2| sw 21|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5}
+vega10           | bpe  2| sw 22|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5}
+vega10           | bpe  2| sw 23|  64x32 | {0, Y0, Y1, Y2, X0, X1, X2, X3, Y3, X4, Y4, X5}
+vega10           | bpe  2| sw 24| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, X7^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+vega10           | bpe  2| sw 25| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X7^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+vega10           | bpe  2| sw 26| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X7^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+vega10           | bpe  2| sw 27| 256x128| {0, Y0, Y1, Y2, X0, X1, X2, X3, X7^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+vega10           | bpe  4| sw  0|  64x1  | {0, 0, X0, X1, X2, X3, X4, X5}
+vega10           | bpe  4| sw  1|   8x8  | {0, 0, X0, X1, Y0, Y1, Y2, X2}
+vega10           | bpe  4| sw  2|   8x8  | {0, 0, X0, X1, Y0, X2, Y1, Y2}
+vega10           | bpe  4| sw  3|   8x8  | {0, 0, Y0, Y1, X0, Y2, X1, X2}
+vega10           | bpe  4| sw  4|  32x32 | {0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3, Y4, X4}
+vega10           | bpe  4| sw  5|  32x32 | {0, 0, X0, X1, Y0, Y1, Y2, X2, Y3, X3, Y4, X4}
+vega10           | bpe  4| sw  6|  32x32 | {0, 0, X0, X1, Y0, X2, Y1, Y2, Y3, X3, Y4, X4}
+vega10           | bpe  4| sw  7|  32x32 | {0, 0, Y0, Y1, X0, Y2, X1, X2, Y3, X3, Y4, X4}
+vega10           | bpe  4| sw  8| 128x128| {0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+vega10           | bpe  4| sw  9| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+vega10           | bpe  4| sw 10| 128x128| {0, 0, X0, X1, Y0, X2, Y1, Y2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+vega10           | bpe  4| sw 11| 128x128| {0, 0, Y0, Y1, X0, Y2, X1, X2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+vega10           | bpe  4| sw 16| 128x128| {0, 0, X0, Y0, X1, Y1, Y2, X2, X6^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+vega10           | bpe  4| sw 17| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, X6^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+vega10           | bpe  4| sw 18| 128x128| {0, 0, X0, X1, Y0, X2, Y1, Y2, X6^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+vega10           | bpe  4| sw 19| 128x128| {0, 0, Y0, Y1, X0, Y2, X1, X2, X6^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+vega10           | bpe  4| sw 20|  32x32 | {0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3, Y4, X4}
+vega10           | bpe  4| sw 21|  32x32 | {0, 0, X0, X1, Y0, Y1, Y2, X2, Y3, X3, Y4, X4}
+vega10           | bpe  4| sw 22|  32x32 | {0, 0, X0, X1, Y0, X2, Y1, Y2, Y3, X3, Y4, X4}
+vega10           | bpe  4| sw 23|  32x32 | {0, 0, Y0, Y1, X0, Y2, X1, X2, Y3, X3, Y4, X4}
+vega10           | bpe  4| sw 24| 128x128| {0, 0, X0, Y0, X1, Y1, Y2, X2, X6^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+vega10           | bpe  4| sw 25| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, X6^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+vega10           | bpe  4| sw 26| 128x128| {0, 0, X0, X1, Y0, X2, Y1, Y2, X6^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+vega10           | bpe  4| sw 27| 128x128| {0, 0, Y0, Y1, X0, Y2, X1, X2, X6^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+vega10           | bpe  8| sw  0|  32x1  | {0, 0, 0, X0, X1, X2, X3, X4}
+vega10           | bpe  8| sw  1|   8x4  | {0, 0, 0, X0, Y0, Y1, X1, X2}
+vega10           | bpe  8| sw  2|   8x4  | {0, 0, 0, X0, Y0, X1, X2, Y1}
+vega10           | bpe  8| sw  3|   8x4  | {0, 0, 0, Y0, X0, Y1, X1, X2}
+vega10           | bpe  8| sw  4|  32x16 | {0, 0, 0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4}
+vega10           | bpe  8| sw  5|  32x16 | {0, 0, 0, X0, Y0, Y1, X1, X2, Y2, X3, Y3, X4}
+vega10           | bpe  8| sw  6|  32x16 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4}
+vega10           | bpe  8| sw  7|  32x16 | {0, 0, 0, Y0, X0, Y1, X1, X2, Y2, X3, Y3, X4}
+vega10           | bpe  8| sw  8| 128x64 | {0, 0, 0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+vega10           | bpe  8| sw  9| 128x64 | {0, 0, 0, X0, Y0, Y1, X1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+vega10           | bpe  8| sw 10| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+vega10           | bpe  8| sw 11| 128x64 | {0, 0, 0, Y0, X0, Y1, X1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+vega10           | bpe  8| sw 16| 128x64 | {0, 0, 0, X0, Y0, X1, Y1, X2, X6^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+vega10           | bpe  8| sw 17| 128x64 | {0, 0, 0, X0, Y0, Y1, X1, X2, X6^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+vega10           | bpe  8| sw 18| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X6^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+vega10           | bpe  8| sw 19| 128x64 | {0, 0, 0, Y0, X0, Y1, X1, X2, X6^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+vega10           | bpe  8| sw 20|  32x16 | {0, 0, 0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4}
+vega10           | bpe  8| sw 21|  32x16 | {0, 0, 0, X0, Y0, Y1, X1, X2, Y2, X3, Y3, X4}
+vega10           | bpe  8| sw 22|  32x16 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4}
+vega10           | bpe  8| sw 23|  32x16 | {0, 0, 0, Y0, X0, Y1, X1, X2, Y2, X3, Y3, X4}
+vega10           | bpe  8| sw 24| 128x64 | {0, 0, 0, X0, Y0, X1, Y1, X2, X6^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+vega10           | bpe  8| sw 25| 128x64 | {0, 0, 0, X0, Y0, Y1, X1, X2, X6^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+vega10           | bpe  8| sw 26| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X6^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+vega10           | bpe  8| sw 27| 128x64 | {0, 0, 0, Y0, X0, Y1, X1, X2, X6^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+vega10           | bpe 16| sw  0|  16x1  | {0, 0, 0, 0, X0, X1, X2, X3}
+vega10           | bpe 16| sw  1|   4x4  | {0, 0, 0, 0, Y0, Y1, X0, X1}
+vega10           | bpe 16| sw  2|   4x4  | {0, 0, 0, 0, X0, Y0, X1, Y1}
+vega10           | bpe 16| sw  5|  16x16 | {0, 0, 0, 0, Y0, Y1, X0, X1, Y2, X2, Y3, X3}
+vega10           | bpe 16| sw  6|  16x16 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3}
+vega10           | bpe 16| sw  9|  64x64 | {0, 0, 0, 0, Y0, Y1, X0, X1, Y2, X2, Y3, X3, Y4, X4, Y5, X5}
+vega10           | bpe 16| sw 10|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5}
+vega10           | bpe 16| sw 17|  64x64 | {0, 0, 0, 0, Y0, Y1, X0, X1, X5^Y2, X2^Y5, X4^Y3, X3^Y4, Y4, X4, Y5, X5}
+vega10           | bpe 16| sw 18|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X5^Y2, X2^Y5, X4^Y3, X3^Y4, Y4, X4, Y5, X5}
+vega10           | bpe 16| sw 21|  16x16 | {0, 0, 0, 0, Y0, Y1, X0, X1, Y2, X2, Y3, X3}
+vega10           | bpe 16| sw 22|  16x16 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3}
+vega10           | bpe 16| sw 25|  64x64 | {0, 0, 0, 0, Y0, Y1, X0, X1, X5^Y2, X2^Y5, X4^Y3, X3^Y4, Y4, X4, Y5, X5}
+vega10           | bpe 16| sw 26|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X5^Y2, X2^Y5, X4^Y3, X3^Y4, Y4, X4, Y5, X5}
+raven            | bpe  1| sw  0| 256x1  | {X0, X1, X2, X3, X4, X5, X6, X7}
+raven            | bpe  1| sw  1|  16x16 | {X0, X1, X2, X3, Y0, Y1, Y2, Y3}
+raven            | bpe  1| sw  2|  16x16 | {X0, X1, X2, Y1, Y0, Y2, X3, Y3}
+raven            | bpe  1| sw  3|  16x16 | {Y0, Y1, Y2, X1, X0, X2, X3, Y3}
+raven            | bpe  1| sw  4|  64x64 | {X0, Y0, X1, Y1, X2, Y2, Y3, X3, Y4, X4, Y5, X5}
+raven            | bpe  1| sw  5|  64x64 | {X0, X1, X2, X3, Y0, Y1, Y2, Y3, Y4, X4, Y5, X5}
+raven            | bpe  1| sw  6|  64x64 | {X0, X1, X2, Y1, Y0, Y2, X3, Y3, Y4, X4, Y5, X5}
+raven            | bpe  1| sw  7|  64x64 | {Y0, Y1, Y2, X1, X0, X2, X3, Y3, Y4, X4, Y5, X5}
+raven            | bpe  1| sw  8| 256x256| {X0, Y0, X1, Y1, X2, Y2, Y3, X3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+raven            | bpe  1| sw  9| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+raven            | bpe  1| sw 10| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+raven            | bpe  1| sw 11| 256x256| {Y0, Y1, Y2, X1, X0, X2, X3, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+raven            | bpe  1| sw 16| 256x256| {X0, Y0, X1, Y1, X2, Y2, Y3, X3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+raven            | bpe  1| sw 17| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+raven            | bpe  1| sw 18| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+raven            | bpe  1| sw 19| 256x256| {Y0, Y1, Y2, X1, X0, X2, X3, Y3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+raven            | bpe  1| sw 20|  64x64 | {X0, Y0, X1, Y1, X2, Y2, Y3, X3, X5^Y4, X4^Y5, Y5, X5}
+raven            | bpe  1| sw 21|  64x64 | {X0, X1, X2, X3, Y0, Y1, Y2, Y3, X5^Y4, X4^Y5, Y5, X5}
+raven            | bpe  1| sw 22|  64x64 | {X0, X1, X2, Y1, Y0, Y2, X3, Y3, X5^Y4, X4^Y5, Y5, X5}
+raven            | bpe  1| sw 23|  64x64 | {Y0, Y1, Y2, X1, X0, X2, X3, Y3, X5^Y4, X4^Y5, Y5, X5}
+raven            | bpe  1| sw 24| 256x256| {X0, Y0, X1, Y1, X2, Y2, Y3, X3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+raven            | bpe  1| sw 25| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+raven            | bpe  1| sw 26| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+raven            | bpe  1| sw 27| 256x256| {Y0, Y1, Y2, X1, X0, X2, X3, Y3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+raven            | bpe  2| sw  0| 128x1  | {0, X0, X1, X2, X3, X4, X5, X6}
+raven            | bpe  2| sw  1|  16x8  | {0, X0, X1, X2, Y0, Y1, Y2, X3}
+raven            | bpe  2| sw  2|  16x8  | {0, X0, X1, X2, Y0, Y1, Y2, X3}
+raven            | bpe  2| sw  3|  16x8  | {0, Y0, Y1, Y2, X0, X1, X2, X3}
+raven            | bpe  2| sw  4|  64x32 | {0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, Y4, X5}
+raven            | bpe  2| sw  5|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5}
+raven            | bpe  2| sw  6|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5}
+raven            | bpe  2| sw  7|  64x32 | {0, Y0, Y1, Y2, X0, X1, X2, X3, Y3, X4, Y4, X5}
+raven            | bpe  2| sw  8| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+raven            | bpe  2| sw  9| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+raven            | bpe  2| sw 10| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+raven            | bpe  2| sw 11| 256x128| {0, Y0, Y1, Y2, X0, X1, X2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+raven            | bpe  2| sw 16| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+raven            | bpe  2| sw 17| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+raven            | bpe  2| sw 18| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+raven            | bpe  2| sw 19| 256x128| {0, Y0, Y1, Y2, X0, X1, X2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+raven            | bpe  2| sw 20|  64x32 | {0, X0, Y0, X1, Y1, X2, Y2, X3, X5^Y3, X4^Y4, Y4, X5}
+raven            | bpe  2| sw 21|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y3, X4^Y4, Y4, X5}
+raven            | bpe  2| sw 22|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y3, X4^Y4, Y4, X5}
+raven            | bpe  2| sw 23|  64x32 | {0, Y0, Y1, Y2, X0, X1, X2, X3, X5^Y3, X4^Y4, Y4, X5}
+raven            | bpe  2| sw 24| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+raven            | bpe  2| sw 25| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+raven            | bpe  2| sw 26| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+raven            | bpe  2| sw 27| 256x128| {0, Y0, Y1, Y2, X0, X1, X2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+raven            | bpe  4| sw  0|  64x1  | {0, 0, X0, X1, X2, X3, X4, X5}
+raven            | bpe  4| sw  1|   8x8  | {0, 0, X0, X1, Y0, Y1, Y2, X2}
+raven            | bpe  4| sw  2|   8x8  | {0, 0, X0, X1, Y0, X2, Y1, Y2}
+raven            | bpe  4| sw  3|   8x8  | {0, 0, Y0, Y1, X0, Y2, X1, X2}
+raven            | bpe  4| sw  4|  32x32 | {0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3, Y4, X4}
+raven            | bpe  4| sw  5|  32x32 | {0, 0, X0, X1, Y0, Y1, Y2, X2, Y3, X3, Y4, X4}
+raven            | bpe  4| sw  6|  32x32 | {0, 0, X0, X1, Y0, X2, Y1, Y2, Y3, X3, Y4, X4}
+raven            | bpe  4| sw  7|  32x32 | {0, 0, Y0, Y1, X0, Y2, X1, X2, Y3, X3, Y4, X4}
+raven            | bpe  4| sw  8| 128x128| {0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+raven            | bpe  4| sw  9| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+raven            | bpe  4| sw 10| 128x128| {0, 0, X0, X1, Y0, X2, Y1, Y2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+raven            | bpe  4| sw 11| 128x128| {0, 0, Y0, Y1, X0, Y2, X1, X2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+raven            | bpe  4| sw 16| 128x128| {0, 0, X0, Y0, X1, Y1, Y2, X2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+raven            | bpe  4| sw 17| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+raven            | bpe  4| sw 18| 128x128| {0, 0, X0, X1, Y0, X2, Y1, Y2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+raven            | bpe  4| sw 19| 128x128| {0, 0, Y0, Y1, X0, Y2, X1, X2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+raven            | bpe  4| sw 20|  32x32 | {0, 0, X0, Y0, X1, Y1, Y2, X2, X4^Y3, X3^Y4, Y4, X4}
+raven            | bpe  4| sw 21|  32x32 | {0, 0, X0, X1, Y0, Y1, Y2, X2, X4^Y3, X3^Y4, Y4, X4}
+raven            | bpe  4| sw 22|  32x32 | {0, 0, X0, X1, Y0, X2, Y1, Y2, X4^Y3, X3^Y4, Y4, X4}
+raven            | bpe  4| sw 23|  32x32 | {0, 0, Y0, Y1, X0, Y2, X1, X2, X4^Y3, X3^Y4, Y4, X4}
+raven            | bpe  4| sw 24| 128x128| {0, 0, X0, Y0, X1, Y1, Y2, X2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+raven            | bpe  4| sw 25| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+raven            | bpe  4| sw 26| 128x128| {0, 0, X0, X1, Y0, X2, Y1, Y2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+raven            | bpe  4| sw 27| 128x128| {0, 0, Y0, Y1, X0, Y2, X1, X2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+raven            | bpe  8| sw  0|  32x1  | {0, 0, 0, X0, X1, X2, X3, X4}
+raven            | bpe  8| sw  1|   8x4  | {0, 0, 0, X0, Y0, Y1, X1, X2}
+raven            | bpe  8| sw  2|   8x4  | {0, 0, 0, X0, Y0, X1, X2, Y1}
+raven            | bpe  8| sw  3|   8x4  | {0, 0, 0, Y0, X0, Y1, X1, X2}
+raven            | bpe  8| sw  4|  32x16 | {0, 0, 0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4}
+raven            | bpe  8| sw  5|  32x16 | {0, 0, 0, X0, Y0, Y1, X1, X2, Y2, X3, Y3, X4}
+raven            | bpe  8| sw  6|  32x16 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4}
+raven            | bpe  8| sw  7|  32x16 | {0, 0, 0, Y0, X0, Y1, X1, X2, Y2, X3, Y3, X4}
+raven            | bpe  8| sw  8| 128x64 | {0, 0, 0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+raven            | bpe  8| sw  9| 128x64 | {0, 0, 0, X0, Y0, Y1, X1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+raven            | bpe  8| sw 10| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+raven            | bpe  8| sw 11| 128x64 | {0, 0, 0, Y0, X0, Y1, X1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+raven            | bpe  8| sw 16| 128x64 | {0, 0, 0, X0, Y0, X1, Y1, X2, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+raven            | bpe  8| sw 17| 128x64 | {0, 0, 0, X0, Y0, Y1, X1, X2, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+raven            | bpe  8| sw 18| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+raven            | bpe  8| sw 19| 128x64 | {0, 0, 0, Y0, X0, Y1, X1, X2, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+raven            | bpe  8| sw 20|  32x16 | {0, 0, 0, X0, Y0, X1, Y1, X2, X4^Y2, X3^Y3, Y3, X4}
+raven            | bpe  8| sw 21|  32x16 | {0, 0, 0, X0, Y0, Y1, X1, X2, X4^Y2, X3^Y3, Y3, X4}
+raven            | bpe  8| sw 22|  32x16 | {0, 0, 0, X0, Y0, X1, X2, Y1, X4^Y2, X3^Y3, Y3, X4}
+raven            | bpe  8| sw 23|  32x16 | {0, 0, 0, Y0, X0, Y1, X1, X2, X4^Y2, X3^Y3, Y3, X4}
+raven            | bpe  8| sw 24| 128x64 | {0, 0, 0, X0, Y0, X1, Y1, X2, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+raven            | bpe  8| sw 25| 128x64 | {0, 0, 0, X0, Y0, Y1, X1, X2, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+raven            | bpe  8| sw 26| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+raven            | bpe  8| sw 27| 128x64 | {0, 0, 0, Y0, X0, Y1, X1, X2, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+raven            | bpe 16| sw  0|  16x1  | {0, 0, 0, 0, X0, X1, X2, X3}
+raven            | bpe 16| sw  1|   4x4  | {0, 0, 0, 0, Y0, Y1, X0, X1}
+raven            | bpe 16| sw  2|   4x4  | {0, 0, 0, 0, X0, Y0, X1, Y1}
+raven            | bpe 16| sw  5|  16x16 | {0, 0, 0, 0, Y0, Y1, X0, X1, Y2, X2, Y3, X3}
+raven            | bpe 16| sw  6|  16x16 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3}
+raven            | bpe 16| sw  9|  64x64 | {0, 0, 0, 0, Y0, Y1, X0, X1, Y2, X2, Y3, X3, Y4, X4, Y5, X5}
+raven            | bpe 16| sw 10|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5}
+raven            | bpe 16| sw 17|  64x64 | {0, 0, 0, 0, Y0, Y1, X0, X1, X3^Y2, X2^Y3, Y3, X3, Y4, X4, Y5, X5}
+raven            | bpe 16| sw 18|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^Y2, X2^Y3, Y3, X3, Y4, X4, Y5, X5}
+raven            | bpe 16| sw 21|  16x16 | {0, 0, 0, 0, Y0, Y1, X0, X1, X3^Y2, X2^Y3, Y3, X3}
+raven            | bpe 16| sw 22|  16x16 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^Y2, X2^Y3, Y3, X3}
+raven            | bpe 16| sw 25|  64x64 | {0, 0, 0, 0, Y0, Y1, X0, X1, X3^Y2, X2^Y3, Y3, X3, Y4, X4, Y5, X5}
+raven            | bpe 16| sw 26|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^Y2, X2^Y3, Y3, X3, Y4, X4, Y5, X5}
+raven2           | bpe  1| sw  0| 256x1  | {X0, X1, X2, X3, X4, X5, X6, X7}
+raven2           | bpe  1| sw  1|  16x16 | {X0, X1, X2, X3, Y0, Y1, Y2, Y3}
+raven2           | bpe  1| sw  2|  16x16 | {X0, X1, X2, Y1, Y0, Y2, X3, Y3}
+raven2           | bpe  1| sw  3|  16x16 | {Y0, Y1, Y2, X1, X0, X2, X3, Y3}
+raven2           | bpe  1| sw  4|  64x64 | {X0, Y0, X1, Y1, X2, Y2, Y3, X3, Y4, X4, Y5, X5}
+raven2           | bpe  1| sw  5|  64x64 | {X0, X1, X2, X3, Y0, Y1, Y2, Y3, Y4, X4, Y5, X5}
+raven2           | bpe  1| sw  6|  64x64 | {X0, X1, X2, Y1, Y0, Y2, X3, Y3, Y4, X4, Y5, X5}
+raven2           | bpe  1| sw  7|  64x64 | {Y0, Y1, Y2, X1, X0, X2, X3, Y3, Y4, X4, Y5, X5}
+raven2           | bpe  1| sw  8| 256x256| {X0, Y0, X1, Y1, X2, Y2, Y3, X3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+raven2           | bpe  1| sw  9| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+raven2           | bpe  1| sw 10| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+raven2           | bpe  1| sw 11| 256x256| {Y0, Y1, Y2, X1, X0, X2, X3, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+raven2           | bpe  1| sw 16| 256x256| {X0, Y0, X1, Y1, X2, Y2, Y3, X3, X4^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+raven2           | bpe  1| sw 17| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, X4^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+raven2           | bpe  1| sw 18| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y3, X4^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+raven2           | bpe  1| sw 19| 256x256| {Y0, Y1, Y2, X1, X0, X2, X3, Y3, X4^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+raven2           | bpe  1| sw 20|  64x64 | {X0, Y0, X1, Y1, X2, Y2, Y3, X3, X4^Y4, X4, Y5, X5}
+raven2           | bpe  1| sw 21|  64x64 | {X0, X1, X2, X3, Y0, Y1, Y2, Y3, X4^Y4, X4, Y5, X5}
+raven2           | bpe  1| sw 22|  64x64 | {X0, X1, X2, Y1, Y0, Y2, X3, Y3, X4^Y4, X4, Y5, X5}
+raven2           | bpe  1| sw 23|  64x64 | {Y0, Y1, Y2, X1, X0, X2, X3, Y3, X4^Y4, X4, Y5, X5}
+raven2           | bpe  1| sw 24| 256x256| {X0, Y0, X1, Y1, X2, Y2, Y3, X3, X4^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+raven2           | bpe  1| sw 25| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, X4^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+raven2           | bpe  1| sw 26| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y3, X4^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+raven2           | bpe  1| sw 27| 256x256| {Y0, Y1, Y2, X1, X0, X2, X3, Y3, X4^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+raven2           | bpe  2| sw  0| 128x1  | {0, X0, X1, X2, X3, X4, X5, X6}
+raven2           | bpe  2| sw  1|  16x8  | {0, X0, X1, X2, Y0, Y1, Y2, X3}
+raven2           | bpe  2| sw  2|  16x8  | {0, X0, X1, X2, Y0, Y1, Y2, X3}
+raven2           | bpe  2| sw  3|  16x8  | {0, Y0, Y1, Y2, X0, X1, X2, X3}
+raven2           | bpe  2| sw  4|  64x32 | {0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, Y4, X5}
+raven2           | bpe  2| sw  5|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5}
+raven2           | bpe  2| sw  6|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5}
+raven2           | bpe  2| sw  7|  64x32 | {0, Y0, Y1, Y2, X0, X1, X2, X3, Y3, X4, Y4, X5}
+raven2           | bpe  2| sw  8| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+raven2           | bpe  2| sw  9| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+raven2           | bpe  2| sw 10| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+raven2           | bpe  2| sw 11| 256x128| {0, Y0, Y1, Y2, X0, X1, X2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+raven2           | bpe  2| sw 16| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, X4^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+raven2           | bpe  2| sw 17| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X4^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+raven2           | bpe  2| sw 18| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X4^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+raven2           | bpe  2| sw 19| 256x128| {0, Y0, Y1, Y2, X0, X1, X2, X3, X4^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+raven2           | bpe  2| sw 20|  64x32 | {0, X0, Y0, X1, Y1, X2, Y2, X3, X4^Y3, X4, Y4, X5}
+raven2           | bpe  2| sw 21|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, X4^Y3, X4, Y4, X5}
+raven2           | bpe  2| sw 22|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, X4^Y3, X4, Y4, X5}
+raven2           | bpe  2| sw 23|  64x32 | {0, Y0, Y1, Y2, X0, X1, X2, X3, X4^Y3, X4, Y4, X5}
+raven2           | bpe  2| sw 24| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, X4^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+raven2           | bpe  2| sw 25| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X4^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+raven2           | bpe  2| sw 26| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X4^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+raven2           | bpe  2| sw 27| 256x128| {0, Y0, Y1, Y2, X0, X1, X2, X3, X4^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+raven2           | bpe  4| sw  0|  64x1  | {0, 0, X0, X1, X2, X3, X4, X5}
+raven2           | bpe  4| sw  1|   8x8  | {0, 0, X0, X1, Y0, Y1, Y2, X2}
+raven2           | bpe  4| sw  2|   8x8  | {0, 0, X0, X1, Y0, X2, Y1, Y2}
+raven2           | bpe  4| sw  3|   8x8  | {0, 0, Y0, Y1, X0, Y2, X1, X2}
+raven2           | bpe  4| sw  4|  32x32 | {0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3, Y4, X4}
+raven2           | bpe  4| sw  5|  32x32 | {0, 0, X0, X1, Y0, Y1, Y2, X2, Y3, X3, Y4, X4}
+raven2           | bpe  4| sw  6|  32x32 | {0, 0, X0, X1, Y0, X2, Y1, Y2, Y3, X3, Y4, X4}
+raven2           | bpe  4| sw  7|  32x32 | {0, 0, Y0, Y1, X0, Y2, X1, X2, Y3, X3, Y4, X4}
+raven2           | bpe  4| sw  8| 128x128| {0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+raven2           | bpe  4| sw  9| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+raven2           | bpe  4| sw 10| 128x128| {0, 0, X0, X1, Y0, X2, Y1, Y2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+raven2           | bpe  4| sw 11| 128x128| {0, 0, Y0, Y1, X0, Y2, X1, X2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+raven2           | bpe  4| sw 16| 128x128| {0, 0, X0, Y0, X1, Y1, Y2, X2, X3^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+raven2           | bpe  4| sw 17| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, X3^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+raven2           | bpe  4| sw 18| 128x128| {0, 0, X0, X1, Y0, X2, Y1, Y2, X3^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+raven2           | bpe  4| sw 19| 128x128| {0, 0, Y0, Y1, X0, Y2, X1, X2, X3^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+raven2           | bpe  4| sw 20|  32x32 | {0, 0, X0, Y0, X1, Y1, Y2, X2, X3^Y3, X3, Y4, X4}
+raven2           | bpe  4| sw 21|  32x32 | {0, 0, X0, X1, Y0, Y1, Y2, X2, X3^Y3, X3, Y4, X4}
+raven2           | bpe  4| sw 22|  32x32 | {0, 0, X0, X1, Y0, X2, Y1, Y2, X3^Y3, X3, Y4, X4}
+raven2           | bpe  4| sw 23|  32x32 | {0, 0, Y0, Y1, X0, Y2, X1, X2, X3^Y3, X3, Y4, X4}
+raven2           | bpe  4| sw 24| 128x128| {0, 0, X0, Y0, X1, Y1, Y2, X2, X3^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+raven2           | bpe  4| sw 25| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, X3^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+raven2           | bpe  4| sw 26| 128x128| {0, 0, X0, X1, Y0, X2, Y1, Y2, X3^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+raven2           | bpe  4| sw 27| 128x128| {0, 0, Y0, Y1, X0, Y2, X1, X2, X3^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+raven2           | bpe  8| sw  0|  32x1  | {0, 0, 0, X0, X1, X2, X3, X4}
+raven2           | bpe  8| sw  1|   8x4  | {0, 0, 0, X0, Y0, Y1, X1, X2}
+raven2           | bpe  8| sw  2|   8x4  | {0, 0, 0, X0, Y0, X1, X2, Y1}
+raven2           | bpe  8| sw  3|   8x4  | {0, 0, 0, Y0, X0, Y1, X1, X2}
+raven2           | bpe  8| sw  4|  32x16 | {0, 0, 0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4}
+raven2           | bpe  8| sw  5|  32x16 | {0, 0, 0, X0, Y0, Y1, X1, X2, Y2, X3, Y3, X4}
+raven2           | bpe  8| sw  6|  32x16 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4}
+raven2           | bpe  8| sw  7|  32x16 | {0, 0, 0, Y0, X0, Y1, X1, X2, Y2, X3, Y3, X4}
+raven2           | bpe  8| sw  8| 128x64 | {0, 0, 0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+raven2           | bpe  8| sw  9| 128x64 | {0, 0, 0, X0, Y0, Y1, X1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+raven2           | bpe  8| sw 10| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+raven2           | bpe  8| sw 11| 128x64 | {0, 0, 0, Y0, X0, Y1, X1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+raven2           | bpe  8| sw 16| 128x64 | {0, 0, 0, X0, Y0, X1, Y1, X2, X3^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+raven2           | bpe  8| sw 17| 128x64 | {0, 0, 0, X0, Y0, Y1, X1, X2, X3^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+raven2           | bpe  8| sw 18| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X3^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+raven2           | bpe  8| sw 19| 128x64 | {0, 0, 0, Y0, X0, Y1, X1, X2, X3^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+raven2           | bpe  8| sw 20|  32x16 | {0, 0, 0, X0, Y0, X1, Y1, X2, X3^Y2, X3, Y3, X4}
+raven2           | bpe  8| sw 21|  32x16 | {0, 0, 0, X0, Y0, Y1, X1, X2, X3^Y2, X3, Y3, X4}
+raven2           | bpe  8| sw 22|  32x16 | {0, 0, 0, X0, Y0, X1, X2, Y1, X3^Y2, X3, Y3, X4}
+raven2           | bpe  8| sw 23|  32x16 | {0, 0, 0, Y0, X0, Y1, X1, X2, X3^Y2, X3, Y3, X4}
+raven2           | bpe  8| sw 24| 128x64 | {0, 0, 0, X0, Y0, X1, Y1, X2, X3^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+raven2           | bpe  8| sw 25| 128x64 | {0, 0, 0, X0, Y0, Y1, X1, X2, X3^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+raven2           | bpe  8| sw 26| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X3^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+raven2           | bpe  8| sw 27| 128x64 | {0, 0, 0, Y0, X0, Y1, X1, X2, X3^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+raven2           | bpe 16| sw  0|  16x1  | {0, 0, 0, 0, X0, X1, X2, X3}
+raven2           | bpe 16| sw  1|   4x4  | {0, 0, 0, 0, Y0, Y1, X0, X1}
+raven2           | bpe 16| sw  2|   4x4  | {0, 0, 0, 0, X0, Y0, X1, Y1}
+raven2           | bpe 16| sw  5|  16x16 | {0, 0, 0, 0, Y0, Y1, X0, X1, Y2, X2, Y3, X3}
+raven2           | bpe 16| sw  6|  16x16 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3}
+raven2           | bpe 16| sw  9|  64x64 | {0, 0, 0, 0, Y0, Y1, X0, X1, Y2, X2, Y3, X3, Y4, X4, Y5, X5}
+raven2           | bpe 16| sw 10|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5}
+raven2           | bpe 16| sw 17|  64x64 | {0, 0, 0, 0, Y0, Y1, X0, X1, X2^Y2, X2^Y5, X4^Y3, X3^Y4, Y4, X4, Y5, X5}
+raven2           | bpe 16| sw 18|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X2^Y2, X2^Y5, X4^Y3, X3^Y4, Y4, X4, Y5, X5}
+raven2           | bpe 16| sw 21|  16x16 | {0, 0, 0, 0, Y0, Y1, X0, X1, X2^Y2, X2, Y3, X3}
+raven2           | bpe 16| sw 22|  16x16 | {0, 0, 0, 0, X0, Y0, X1, Y1, X2^Y2, X2, Y3, X3}
+raven2           | bpe 16| sw 25|  64x64 | {0, 0, 0, 0, Y0, Y1, X0, X1, X2^Y2, X2^Y5, X4^Y3, X3^Y4, Y4, X4, Y5, X5}
+raven2           | bpe 16| sw 26|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X2^Y2, X2^Y5, X4^Y3, X3^Y4, Y4, X4, Y5, X5}
+renoir           | bpe  1| sw  0| 256x1  | {X0, X1, X2, X3, X4, X5, X6, X7}
+renoir           | bpe  1| sw  1|  16x16 | {X0, X1, X2, X3, Y0, Y1, Y2, Y3}
+renoir           | bpe  1| sw  2|  16x16 | {X0, X1, X2, Y1, Y0, Y2, X3, Y3}
+renoir           | bpe  1| sw  3|  16x16 | {Y0, Y1, Y2, X1, X0, X2, X3, Y3}
+renoir           | bpe  1| sw  4|  64x64 | {X0, Y0, X1, Y1, X2, Y2, Y3, X3, Y4, X4, Y5, X5}
+renoir           | bpe  1| sw  5|  64x64 | {X0, X1, X2, X3, Y0, Y1, Y2, Y3, Y4, X4, Y5, X5}
+renoir           | bpe  1| sw  6|  64x64 | {X0, X1, X2, Y1, Y0, Y2, X3, Y3, Y4, X4, Y5, X5}
+renoir           | bpe  1| sw  7|  64x64 | {Y0, Y1, Y2, X1, X0, X2, X3, Y3, Y4, X4, Y5, X5}
+renoir           | bpe  1| sw  8| 256x256| {X0, Y0, X1, Y1, X2, Y2, Y3, X3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+renoir           | bpe  1| sw  9| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+renoir           | bpe  1| sw 10| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+renoir           | bpe  1| sw 11| 256x256| {Y0, Y1, Y2, X1, X0, X2, X3, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+renoir           | bpe  1| sw 16| 256x256| {X0, Y0, X1, Y1, X2, Y2, Y3, X3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+renoir           | bpe  1| sw 17| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+renoir           | bpe  1| sw 18| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+renoir           | bpe  1| sw 19| 256x256| {Y0, Y1, Y2, X1, X0, X2, X3, Y3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+renoir           | bpe  1| sw 20|  64x64 | {X0, Y0, X1, Y1, X2, Y2, Y3, X3, X5^Y4, X4^Y5, Y5, X5}
+renoir           | bpe  1| sw 21|  64x64 | {X0, X1, X2, X3, Y0, Y1, Y2, Y3, X5^Y4, X4^Y5, Y5, X5}
+renoir           | bpe  1| sw 22|  64x64 | {X0, X1, X2, Y1, Y0, Y2, X3, Y3, X5^Y4, X4^Y5, Y5, X5}
+renoir           | bpe  1| sw 23|  64x64 | {Y0, Y1, Y2, X1, X0, X2, X3, Y3, X5^Y4, X4^Y5, Y5, X5}
+renoir           | bpe  1| sw 24| 256x256| {X0, Y0, X1, Y1, X2, Y2, Y3, X3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+renoir           | bpe  1| sw 25| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+renoir           | bpe  1| sw 26| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+renoir           | bpe  1| sw 27| 256x256| {Y0, Y1, Y2, X1, X0, X2, X3, Y3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+renoir           | bpe  2| sw  0| 128x1  | {0, X0, X1, X2, X3, X4, X5, X6}
+renoir           | bpe  2| sw  1|  16x8  | {0, X0, X1, X2, Y0, Y1, Y2, X3}
+renoir           | bpe  2| sw  2|  16x8  | {0, X0, X1, X2, Y0, Y1, Y2, X3}
+renoir           | bpe  2| sw  3|  16x8  | {0, Y0, Y1, Y2, X0, X1, X2, X3}
+renoir           | bpe  2| sw  4|  64x32 | {0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, Y4, X5}
+renoir           | bpe  2| sw  5|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5}
+renoir           | bpe  2| sw  6|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5}
+renoir           | bpe  2| sw  7|  64x32 | {0, Y0, Y1, Y2, X0, X1, X2, X3, Y3, X4, Y4, X5}
+renoir           | bpe  2| sw  8| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+renoir           | bpe  2| sw  9| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+renoir           | bpe  2| sw 10| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+renoir           | bpe  2| sw 11| 256x128| {0, Y0, Y1, Y2, X0, X1, X2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+renoir           | bpe  2| sw 16| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+renoir           | bpe  2| sw 17| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+renoir           | bpe  2| sw 18| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+renoir           | bpe  2| sw 19| 256x128| {0, Y0, Y1, Y2, X0, X1, X2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+renoir           | bpe  2| sw 20|  64x32 | {0, X0, Y0, X1, Y1, X2, Y2, X3, X5^Y3, X4^Y4, Y4, X5}
+renoir           | bpe  2| sw 21|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y3, X4^Y4, Y4, X5}
+renoir           | bpe  2| sw 22|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y3, X4^Y4, Y4, X5}
+renoir           | bpe  2| sw 23|  64x32 | {0, Y0, Y1, Y2, X0, X1, X2, X3, X5^Y3, X4^Y4, Y4, X5}
+renoir           | bpe  2| sw 24| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+renoir           | bpe  2| sw 25| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+renoir           | bpe  2| sw 26| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+renoir           | bpe  2| sw 27| 256x128| {0, Y0, Y1, Y2, X0, X1, X2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+renoir           | bpe  4| sw  0|  64x1  | {0, 0, X0, X1, X2, X3, X4, X5}
+renoir           | bpe  4| sw  1|   8x8  | {0, 0, X0, X1, Y0, Y1, Y2, X2}
+renoir           | bpe  4| sw  2|   8x8  | {0, 0, X0, X1, Y0, X2, Y1, Y2}
+renoir           | bpe  4| sw  3|   8x8  | {0, 0, Y0, Y1, X0, Y2, X1, X2}
+renoir           | bpe  4| sw  4|  32x32 | {0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3, Y4, X4}
+renoir           | bpe  4| sw  5|  32x32 | {0, 0, X0, X1, Y0, Y1, Y2, X2, Y3, X3, Y4, X4}
+renoir           | bpe  4| sw  6|  32x32 | {0, 0, X0, X1, Y0, X2, Y1, Y2, Y3, X3, Y4, X4}
+renoir           | bpe  4| sw  7|  32x32 | {0, 0, Y0, Y1, X0, Y2, X1, X2, Y3, X3, Y4, X4}
+renoir           | bpe  4| sw  8| 128x128| {0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+renoir           | bpe  4| sw  9| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+renoir           | bpe  4| sw 10| 128x128| {0, 0, X0, X1, Y0, X2, Y1, Y2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+renoir           | bpe  4| sw 11| 128x128| {0, 0, Y0, Y1, X0, Y2, X1, X2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+renoir           | bpe  4| sw 16| 128x128| {0, 0, X0, Y0, X1, Y1, Y2, X2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+renoir           | bpe  4| sw 17| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+renoir           | bpe  4| sw 18| 128x128| {0, 0, X0, X1, Y0, X2, Y1, Y2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+renoir           | bpe  4| sw 19| 128x128| {0, 0, Y0, Y1, X0, Y2, X1, X2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+renoir           | bpe  4| sw 20|  32x32 | {0, 0, X0, Y0, X1, Y1, Y2, X2, X4^Y3, X3^Y4, Y4, X4}
+renoir           | bpe  4| sw 21|  32x32 | {0, 0, X0, X1, Y0, Y1, Y2, X2, X4^Y3, X3^Y4, Y4, X4}
+renoir           | bpe  4| sw 22|  32x32 | {0, 0, X0, X1, Y0, X2, Y1, Y2, X4^Y3, X3^Y4, Y4, X4}
+renoir           | bpe  4| sw 23|  32x32 | {0, 0, Y0, Y1, X0, Y2, X1, X2, X4^Y3, X3^Y4, Y4, X4}
+renoir           | bpe  4| sw 24| 128x128| {0, 0, X0, Y0, X1, Y1, Y2, X2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+renoir           | bpe  4| sw 25| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+renoir           | bpe  4| sw 26| 128x128| {0, 0, X0, X1, Y0, X2, Y1, Y2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+renoir           | bpe  4| sw 27| 128x128| {0, 0, Y0, Y1, X0, Y2, X1, X2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+renoir           | bpe  8| sw  0|  32x1  | {0, 0, 0, X0, X1, X2, X3, X4}
+renoir           | bpe  8| sw  1|   8x4  | {0, 0, 0, X0, Y0, Y1, X1, X2}
+renoir           | bpe  8| sw  2|   8x4  | {0, 0, 0, X0, Y0, X1, X2, Y1}
+renoir           | bpe  8| sw  3|   8x4  | {0, 0, 0, Y0, X0, Y1, X1, X2}
+renoir           | bpe  8| sw  4|  32x16 | {0, 0, 0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4}
+renoir           | bpe  8| sw  5|  32x16 | {0, 0, 0, X0, Y0, Y1, X1, X2, Y2, X3, Y3, X4}
+renoir           | bpe  8| sw  6|  32x16 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4}
+renoir           | bpe  8| sw  7|  32x16 | {0, 0, 0, Y0, X0, Y1, X1, X2, Y2, X3, Y3, X4}
+renoir           | bpe  8| sw  8| 128x64 | {0, 0, 0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+renoir           | bpe  8| sw  9| 128x64 | {0, 0, 0, X0, Y0, Y1, X1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+renoir           | bpe  8| sw 10| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+renoir           | bpe  8| sw 11| 128x64 | {0, 0, 0, Y0, X0, Y1, X1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+renoir           | bpe  8| sw 16| 128x64 | {0, 0, 0, X0, Y0, X1, Y1, X2, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+renoir           | bpe  8| sw 17| 128x64 | {0, 0, 0, X0, Y0, Y1, X1, X2, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+renoir           | bpe  8| sw 18| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+renoir           | bpe  8| sw 19| 128x64 | {0, 0, 0, Y0, X0, Y1, X1, X2, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+renoir           | bpe  8| sw 20|  32x16 | {0, 0, 0, X0, Y0, X1, Y1, X2, X4^Y2, X3^Y3, Y3, X4}
+renoir           | bpe  8| sw 21|  32x16 | {0, 0, 0, X0, Y0, Y1, X1, X2, X4^Y2, X3^Y3, Y3, X4}
+renoir           | bpe  8| sw 22|  32x16 | {0, 0, 0, X0, Y0, X1, X2, Y1, X4^Y2, X3^Y3, Y3, X4}
+renoir           | bpe  8| sw 23|  32x16 | {0, 0, 0, Y0, X0, Y1, X1, X2, X4^Y2, X3^Y3, Y3, X4}
+renoir           | bpe  8| sw 24| 128x64 | {0, 0, 0, X0, Y0, X1, Y1, X2, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+renoir           | bpe  8| sw 25| 128x64 | {0, 0, 0, X0, Y0, Y1, X1, X2, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+renoir           | bpe  8| sw 26| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+renoir           | bpe  8| sw 27| 128x64 | {0, 0, 0, Y0, X0, Y1, X1, X2, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+renoir           | bpe 16| sw  0|  16x1  | {0, 0, 0, 0, X0, X1, X2, X3}
+renoir           | bpe 16| sw  1|   4x4  | {0, 0, 0, 0, Y0, Y1, X0, X1}
+renoir           | bpe 16| sw  2|   4x4  | {0, 0, 0, 0, X0, Y0, X1, Y1}
+renoir           | bpe 16| sw  5|  16x16 | {0, 0, 0, 0, Y0, Y1, X0, X1, Y2, X2, Y3, X3}
+renoir           | bpe 16| sw  6|  16x16 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3}
+renoir           | bpe 16| sw  9|  64x64 | {0, 0, 0, 0, Y0, Y1, X0, X1, Y2, X2, Y3, X3, Y4, X4, Y5, X5}
+renoir           | bpe 16| sw 10|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5}
+renoir           | bpe 16| sw 17|  64x64 | {0, 0, 0, 0, Y0, Y1, X0, X1, X3^Y2, X2^Y3, Y3, X3, Y4, X4, Y5, X5}
+renoir           | bpe 16| sw 18|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^Y2, X2^Y3, Y3, X3, Y4, X4, Y5, X5}
+renoir           | bpe 16| sw 21|  16x16 | {0, 0, 0, 0, Y0, Y1, X0, X1, X3^Y2, X2^Y3, Y3, X3}
+renoir           | bpe 16| sw 22|  16x16 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^Y2, X2^Y3, Y3, X3}
+renoir           | bpe 16| sw 25|  64x64 | {0, 0, 0, 0, Y0, Y1, X0, X1, X3^Y2, X2^Y3, Y3, X3, Y4, X4, Y5, X5}
+renoir           | bpe 16| sw 26|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^Y2, X2^Y3, Y3, X3, Y4, X4, Y5, X5}
+vega20           | bpe  1| sw  0| 256x1  | {X0, X1, X2, X3, X4, X5, X6, X7}
+vega20           | bpe  1| sw  1|  16x16 | {X0, X1, X2, X3, Y0, Y1, Y2, Y3}
+vega20           | bpe  1| sw  2|  16x16 | {X0, X1, X2, Y1, Y0, Y2, X3, Y3}
+vega20           | bpe  1| sw  3|  16x16 | {Y0, Y1, Y2, X1, X0, X2, X3, Y3}
+vega20           | bpe  1| sw  4|  64x64 | {X0, Y0, X1, Y1, X2, Y2, Y3, X3, Y4, X4, Y5, X5}
+vega20           | bpe  1| sw  5|  64x64 | {X0, X1, X2, X3, Y0, Y1, Y2, Y3, Y4, X4, Y5, X5}
+vega20           | bpe  1| sw  6|  64x64 | {X0, X1, X2, Y1, Y0, Y2, X3, Y3, Y4, X4, Y5, X5}
+vega20           | bpe  1| sw  7|  64x64 | {Y0, Y1, Y2, X1, X0, X2, X3, Y3, Y4, X4, Y5, X5}
+vega20           | bpe  1| sw  8| 256x256| {X0, Y0, X1, Y1, X2, Y2, Y3, X3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+vega20           | bpe  1| sw  9| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+vega20           | bpe  1| sw 10| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+vega20           | bpe  1| sw 11| 256x256| {Y0, Y1, Y2, X1, X0, X2, X3, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+vega20           | bpe  1| sw 16| 256x256| {X0, Y0, X1, Y1, X2, Y2, Y3, X3, X7^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+vega20           | bpe  1| sw 17| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, X7^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+vega20           | bpe  1| sw 18| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y3, X7^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+vega20           | bpe  1| sw 19| 256x256| {Y0, Y1, Y2, X1, X0, X2, X3, Y3, X7^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+vega20           | bpe  1| sw 20|  64x64 | {X0, Y0, X1, Y1, X2, Y2, Y3, X3, Y4, X4, Y5, X5}
+vega20           | bpe  1| sw 21|  64x64 | {X0, X1, X2, X3, Y0, Y1, Y2, Y3, Y4, X4, Y5, X5}
+vega20           | bpe  1| sw 22|  64x64 | {X0, X1, X2, Y1, Y0, Y2, X3, Y3, Y4, X4, Y5, X5}
+vega20           | bpe  1| sw 23|  64x64 | {Y0, Y1, Y2, X1, X0, X2, X3, Y3, Y4, X4, Y5, X5}
+vega20           | bpe  1| sw 24| 256x256| {X0, Y0, X1, Y1, X2, Y2, Y3, X3, X7^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+vega20           | bpe  1| sw 25| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, X7^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+vega20           | bpe  1| sw 26| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y3, X7^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+vega20           | bpe  1| sw 27| 256x256| {Y0, Y1, Y2, X1, X0, X2, X3, Y3, X7^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+vega20           | bpe  2| sw  0| 128x1  | {0, X0, X1, X2, X3, X4, X5, X6}
+vega20           | bpe  2| sw  1|  16x8  | {0, X0, X1, X2, Y0, Y1, Y2, X3}
+vega20           | bpe  2| sw  2|  16x8  | {0, X0, X1, X2, Y0, Y1, Y2, X3}
+vega20           | bpe  2| sw  3|  16x8  | {0, Y0, Y1, Y2, X0, X1, X2, X3}
+vega20           | bpe  2| sw  4|  64x32 | {0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, Y4, X5}
+vega20           | bpe  2| sw  5|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5}
+vega20           | bpe  2| sw  6|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5}
+vega20           | bpe  2| sw  7|  64x32 | {0, Y0, Y1, Y2, X0, X1, X2, X3, Y3, X4, Y4, X5}
+vega20           | bpe  2| sw  8| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+vega20           | bpe  2| sw  9| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+vega20           | bpe  2| sw 10| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+vega20           | bpe  2| sw 11| 256x128| {0, Y0, Y1, Y2, X0, X1, X2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+vega20           | bpe  2| sw 16| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, X7^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+vega20           | bpe  2| sw 17| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X7^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+vega20           | bpe  2| sw 18| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X7^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+vega20           | bpe  2| sw 19| 256x128| {0, Y0, Y1, Y2, X0, X1, X2, X3, X7^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+vega20           | bpe  2| sw 20|  64x32 | {0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, Y4, X5}
+vega20           | bpe  2| sw 21|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5}
+vega20           | bpe  2| sw 22|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5}
+vega20           | bpe  2| sw 23|  64x32 | {0, Y0, Y1, Y2, X0, X1, X2, X3, Y3, X4, Y4, X5}
+vega20           | bpe  2| sw 24| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, X7^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+vega20           | bpe  2| sw 25| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X7^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+vega20           | bpe  2| sw 26| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X7^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+vega20           | bpe  2| sw 27| 256x128| {0, Y0, Y1, Y2, X0, X1, X2, X3, X7^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+vega20           | bpe  4| sw  0|  64x1  | {0, 0, X0, X1, X2, X3, X4, X5}
+vega20           | bpe  4| sw  1|   8x8  | {0, 0, X0, X1, Y0, Y1, Y2, X2}
+vega20           | bpe  4| sw  2|   8x8  | {0, 0, X0, X1, Y0, X2, Y1, Y2}
+vega20           | bpe  4| sw  3|   8x8  | {0, 0, Y0, Y1, X0, Y2, X1, X2}
+vega20           | bpe  4| sw  4|  32x32 | {0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3, Y4, X4}
+vega20           | bpe  4| sw  5|  32x32 | {0, 0, X0, X1, Y0, Y1, Y2, X2, Y3, X3, Y4, X4}
+vega20           | bpe  4| sw  6|  32x32 | {0, 0, X0, X1, Y0, X2, Y1, Y2, Y3, X3, Y4, X4}
+vega20           | bpe  4| sw  7|  32x32 | {0, 0, Y0, Y1, X0, Y2, X1, X2, Y3, X3, Y4, X4}
+vega20           | bpe  4| sw  8| 128x128| {0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+vega20           | bpe  4| sw  9| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+vega20           | bpe  4| sw 10| 128x128| {0, 0, X0, X1, Y0, X2, Y1, Y2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+vega20           | bpe  4| sw 11| 128x128| {0, 0, Y0, Y1, X0, Y2, X1, X2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+vega20           | bpe  4| sw 16| 128x128| {0, 0, X0, Y0, X1, Y1, Y2, X2, X6^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+vega20           | bpe  4| sw 17| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, X6^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+vega20           | bpe  4| sw 18| 128x128| {0, 0, X0, X1, Y0, X2, Y1, Y2, X6^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+vega20           | bpe  4| sw 19| 128x128| {0, 0, Y0, Y1, X0, Y2, X1, X2, X6^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+vega20           | bpe  4| sw 20|  32x32 | {0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3, Y4, X4}
+vega20           | bpe  4| sw 21|  32x32 | {0, 0, X0, X1, Y0, Y1, Y2, X2, Y3, X3, Y4, X4}
+vega20           | bpe  4| sw 22|  32x32 | {0, 0, X0, X1, Y0, X2, Y1, Y2, Y3, X3, Y4, X4}
+vega20           | bpe  4| sw 23|  32x32 | {0, 0, Y0, Y1, X0, Y2, X1, X2, Y3, X3, Y4, X4}
+vega20           | bpe  4| sw 24| 128x128| {0, 0, X0, Y0, X1, Y1, Y2, X2, X6^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+vega20           | bpe  4| sw 25| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, X6^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+vega20           | bpe  4| sw 26| 128x128| {0, 0, X0, X1, Y0, X2, Y1, Y2, X6^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+vega20           | bpe  4| sw 27| 128x128| {0, 0, Y0, Y1, X0, Y2, X1, X2, X6^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+vega20           | bpe  8| sw  0|  32x1  | {0, 0, 0, X0, X1, X2, X3, X4}
+vega20           | bpe  8| sw  1|   8x4  | {0, 0, 0, X0, Y0, Y1, X1, X2}
+vega20           | bpe  8| sw  2|   8x4  | {0, 0, 0, X0, Y0, X1, X2, Y1}
+vega20           | bpe  8| sw  3|   8x4  | {0, 0, 0, Y0, X0, Y1, X1, X2}
+vega20           | bpe  8| sw  4|  32x16 | {0, 0, 0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4}
+vega20           | bpe  8| sw  5|  32x16 | {0, 0, 0, X0, Y0, Y1, X1, X2, Y2, X3, Y3, X4}
+vega20           | bpe  8| sw  6|  32x16 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4}
+vega20           | bpe  8| sw  7|  32x16 | {0, 0, 0, Y0, X0, Y1, X1, X2, Y2, X3, Y3, X4}
+vega20           | bpe  8| sw  8| 128x64 | {0, 0, 0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+vega20           | bpe  8| sw  9| 128x64 | {0, 0, 0, X0, Y0, Y1, X1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+vega20           | bpe  8| sw 10| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+vega20           | bpe  8| sw 11| 128x64 | {0, 0, 0, Y0, X0, Y1, X1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+vega20           | bpe  8| sw 16| 128x64 | {0, 0, 0, X0, Y0, X1, Y1, X2, X6^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+vega20           | bpe  8| sw 17| 128x64 | {0, 0, 0, X0, Y0, Y1, X1, X2, X6^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+vega20           | bpe  8| sw 18| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X6^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+vega20           | bpe  8| sw 19| 128x64 | {0, 0, 0, Y0, X0, Y1, X1, X2, X6^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+vega20           | bpe  8| sw 20|  32x16 | {0, 0, 0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4}
+vega20           | bpe  8| sw 21|  32x16 | {0, 0, 0, X0, Y0, Y1, X1, X2, Y2, X3, Y3, X4}
+vega20           | bpe  8| sw 22|  32x16 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4}
+vega20           | bpe  8| sw 23|  32x16 | {0, 0, 0, Y0, X0, Y1, X1, X2, Y2, X3, Y3, X4}
+vega20           | bpe  8| sw 24| 128x64 | {0, 0, 0, X0, Y0, X1, Y1, X2, X6^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+vega20           | bpe  8| sw 25| 128x64 | {0, 0, 0, X0, Y0, Y1, X1, X2, X6^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+vega20           | bpe  8| sw 26| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X6^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+vega20           | bpe  8| sw 27| 128x64 | {0, 0, 0, Y0, X0, Y1, X1, X2, X6^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+vega20           | bpe 16| sw  0|  16x1  | {0, 0, 0, 0, X0, X1, X2, X3}
+vega20           | bpe 16| sw  1|   4x4  | {0, 0, 0, 0, Y0, Y1, X0, X1}
+vega20           | bpe 16| sw  2|   4x4  | {0, 0, 0, 0, X0, Y0, X1, Y1}
+vega20           | bpe 16| sw  5|  16x16 | {0, 0, 0, 0, Y0, Y1, X0, X1, Y2, X2, Y3, X3}
+vega20           | bpe 16| sw  6|  16x16 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3}
+vega20           | bpe 16| sw  9|  64x64 | {0, 0, 0, 0, Y0, Y1, X0, X1, Y2, X2, Y3, X3, Y4, X4, Y5, X5}
+vega20           | bpe 16| sw 10|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5}
+vega20           | bpe 16| sw 17|  64x64 | {0, 0, 0, 0, Y0, Y1, X0, X1, X5^Y2, X2^Y5, X4^Y3, X3^Y4, Y4, X4, Y5, X5}
+vega20           | bpe 16| sw 18|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X5^Y2, X2^Y5, X4^Y3, X3^Y4, Y4, X4, Y5, X5}
+vega20           | bpe 16| sw 21|  16x16 | {0, 0, 0, 0, Y0, Y1, X0, X1, Y2, X2, Y3, X3}
+vega20           | bpe 16| sw 22|  16x16 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3}
+vega20           | bpe 16| sw 25|  64x64 | {0, 0, 0, 0, Y0, Y1, X0, X1, X5^Y2, X2^Y5, X4^Y3, X3^Y4, Y4, X4, Y5, X5}
+vega20           | bpe 16| sw 26|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X5^Y2, X2^Y5, X4^Y3, X3^Y4, Y4, X4, Y5, X5}
+navi10           | bpe  1| sw  0| 256x1  | {X0, X1, X2, X3, X4, X5, X6, X7}
+navi10           | bpe  1| sw  1|  16x16 | {X0, X1, X2, X3, Y0, Y1, Y2, Y3}
+navi10           | bpe  1| sw  2|  16x16 | {X0, X1, X2, Y1, Y0, Y2, X3, Y3}
+navi10           | bpe  1| sw  5|  64x64 | {X0, X1, X2, X3, Y0, Y1, Y2, Y3, Y4, X4, Y5, X5}
+navi10           | bpe  1| sw  6|  64x64 | {X0, X1, X2, Y1, Y0, Y2, X3, Y3, Y4, X4, Y5, X5}
+navi10           | bpe  1| sw  9| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+navi10           | bpe  1| sw 10| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+navi10           | bpe  1| sw 17| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, X7^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+navi10           | bpe  1| sw 18| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y3, X7^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+navi10           | bpe  1| sw 21|  64x64 | {X0, X1, X2, X3, Y0, Y1, Y2, Y3, Y4, X4, Y5, X5}
+navi10           | bpe  1| sw 22|  64x64 | {X0, X1, X2, Y1, Y0, Y2, X3, Y3, Y4, X4, Y5, X5}
+navi10           | bpe  1| sw 24| 256x256| {X0, Y0, X1, Y1, X2, Y2, X3, Y4, X3^Y3, X4^Y4, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+navi10           | bpe  1| sw 25| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, X7^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+navi10           | bpe  1| sw 26| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y3, X7^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+navi10           | bpe  1| sw 27| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y4, X3^Y3, X4^Y4, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+navi10           | bpe  2| sw  0| 128x1  | {0, X0, X1, X2, X3, X4, X5, X6}
+navi10           | bpe  2| sw  1|  16x8  | {0, X0, X1, X2, Y0, Y1, Y2, X3}
+navi10           | bpe  2| sw  2|  16x8  | {0, X0, X1, X2, Y0, Y1, Y2, X3}
+navi10           | bpe  2| sw  5|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5}
+navi10           | bpe  2| sw  6|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5}
+navi10           | bpe  2| sw  9| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+navi10           | bpe  2| sw 10| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+navi10           | bpe  2| sw 17| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X7^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+navi10           | bpe  2| sw 18| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X7^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+navi10           | bpe  2| sw 21|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5}
+navi10           | bpe  2| sw 22|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5}
+navi10           | bpe  2| sw 24| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, X3^Y3, X4^Y4, X6^Y5, X5^Y6, Y4, X6, Y6, X7}
+navi10           | bpe  2| sw 25| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X7^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+navi10           | bpe  2| sw 26| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X7^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+navi10           | bpe  2| sw 27| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X3^Y3, X4^Y4, X6^Y5, X5^Y6, Y4, X6, Y6, X7}
+navi10           | bpe  4| sw  0|  64x1  | {0, 0, X0, X1, X2, X3, X4, X5}
+navi10           | bpe  4| sw  1|   8x8  | {0, 0, X0, X1, Y0, Y1, Y2, X2}
+navi10           | bpe  4| sw  2|   8x8  | {0, 0, X0, X1, Y0, Y1, Y2, X2}
+navi10           | bpe  4| sw  5|  32x32 | {0, 0, X0, X1, Y0, Y1, Y2, X2, Y3, X3, Y4, X4}
+navi10           | bpe  4| sw  6|  32x32 | {0, 0, X0, X1, Y0, Y1, Y2, X2, Y3, X3, Y4, X4}
+navi10           | bpe  4| sw  9| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+navi10           | bpe  4| sw 10| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+navi10           | bpe  4| sw 17| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, X6^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+navi10           | bpe  4| sw 18| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, X6^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+navi10           | bpe  4| sw 21|  32x32 | {0, 0, X0, X1, Y0, Y1, Y2, X2, Y3, X3, Y4, X4}
+navi10           | bpe  4| sw 22|  32x32 | {0, 0, X0, X1, Y0, Y1, Y2, X2, Y3, X3, Y4, X4}
+navi10           | bpe  4| sw 24| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, X3^Y3, X4^Y4, X6^Y5, X5^Y6, Y3, X4, Y6, X6}
+navi10           | bpe  4| sw 25| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, X6^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+navi10           | bpe  4| sw 26| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, X6^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+navi10           | bpe  4| sw 27| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, X3^Y3, X4^Y4, X6^Y5, X5^Y6, Y3, X4, Y6, X6}
+navi10           | bpe  8| sw  0|  32x1  | {0, 0, 0, X0, X1, X2, X3, X4}
+navi10           | bpe  8| sw  1|   8x4  | {0, 0, 0, X0, Y0, Y1, X1, X2}
+navi10           | bpe  8| sw  2|   8x4  | {0, 0, 0, X0, Y0, X1, X2, Y1}
+navi10           | bpe  8| sw  5|  32x16 | {0, 0, 0, X0, Y0, Y1, X1, X2, Y2, X3, Y3, X4}
+navi10           | bpe  8| sw  6|  32x16 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4}
+navi10           | bpe  8| sw  9| 128x64 | {0, 0, 0, X0, Y0, Y1, X1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+navi10           | bpe  8| sw 10| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+navi10           | bpe  8| sw 17| 128x64 | {0, 0, 0, X0, Y0, Y1, X1, X2, X6^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+navi10           | bpe  8| sw 18| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X6^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+navi10           | bpe  8| sw 21|  32x16 | {0, 0, 0, X0, Y0, Y1, X1, X2, Y2, X3, Y3, X4}
+navi10           | bpe  8| sw 22|  32x16 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4}
+navi10           | bpe  8| sw 24| 128x64 | {0, 0, 0, X0, Y0, X1, Y1, X2, X3^Y3, X4^Y4, X6^Y5, X5, Y2, X3, Y4, X6}
+navi10           | bpe  8| sw 25| 128x64 | {0, 0, 0, X0, Y0, Y1, X1, X2, X6^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+navi10           | bpe  8| sw 26| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X6^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+navi10           | bpe  8| sw 27| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X3^Y3, X4^Y4, X6^Y5, X5, Y2, X3, Y4, X6}
+navi10           | bpe 16| sw  0|  16x1  | {0, 0, 0, 0, X0, X1, X2, X3}
+navi10           | bpe 16| sw  1|   4x4  | {0, 0, 0, 0, Y0, Y1, X0, X1}
+navi10           | bpe 16| sw  2|   4x4  | {0, 0, 0, 0, X0, Y0, X1, Y1}
+navi10           | bpe 16| sw  5|  16x16 | {0, 0, 0, 0, Y0, Y1, X0, X1, Y2, X2, Y3, X3}
+navi10           | bpe 16| sw  6|  16x16 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3}
+navi10           | bpe 16| sw  9|  64x64 | {0, 0, 0, 0, Y0, Y1, X0, X1, Y2, X2, Y3, X3, Y4, X4, Y5, X5}
+navi10           | bpe 16| sw 10|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5}
+navi10           | bpe 16| sw 17|  64x64 | {0, 0, 0, 0, Y0, Y1, X0, X1, X5^Y2, X2^Y5, X4^Y3, X3^Y4, Y4, X4, Y5, X5}
+navi10           | bpe 16| sw 18|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X5^Y2, X2^Y5, X4^Y3, X3^Y4, Y4, X4, Y5, X5}
+navi10           | bpe 16| sw 21|  16x16 | {0, 0, 0, 0, Y0, Y1, X0, X1, Y2, X2, Y3, X3}
+navi10           | bpe 16| sw 22|  16x16 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3}
+navi10           | bpe 16| sw 25|  64x64 | {0, 0, 0, 0, Y0, Y1, X0, X1, X5^Y2, X2^Y5, X4^Y3, X3^Y4, Y4, X4, Y5, X5}
+navi10           | bpe 16| sw 26|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X5^Y2, X2^Y5, X4^Y3, X3^Y4, Y4, X4, Y5, X5}
+navi10           | bpe 16| sw 27|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^Y3, X4^Y4, Y5, X5, Y2, X2, Y3, X4}
+navi21           | bpe  1| sw  0| 256x1  | {X0, X1, X2, X3, X4, X5, X6, X7}
+navi21           | bpe  1| sw  1|  16x16 | {X0, X1, X2, X3, Y0, Y1, Y2, Y3}
+navi21           | bpe  1| sw  2|  16x16 | {X0, X1, X2, Y1, Y0, Y2, X3, Y3}
+navi21           | bpe  1| sw  5|  64x64 | {X0, X1, X2, X3, Y0, Y1, Y2, Y3, Y4, X4, Y5, X5}
+navi21           | bpe  1| sw  6|  64x64 | {X0, X1, X2, Y1, Y0, Y2, X3, Y3, Y4, X4, Y5, X5}
+navi21           | bpe  1| sw  9| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+navi21           | bpe  1| sw 10| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+navi21           | bpe  1| sw 17| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, X7^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+navi21           | bpe  1| sw 18| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y3, X7^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+navi21           | bpe  1| sw 21|  64x64 | {X0, X1, X2, X3, Y0, Y1, Y2, Y3, Y4, X4, Y5, X5}
+navi21           | bpe  1| sw 22|  64x64 | {X0, X1, X2, Y1, Y0, Y2, X3, Y3, Y4, X4, Y5, X5}
+navi21           | bpe  1| sw 24| 256x256| {X0, Y0, X1, Y1, X2, Y2, X3, Y3, Y4, X4^Y4, X7^Y5, X5^Y7, X6, X7, Y7, X6^Y6}
+navi21           | bpe  1| sw 25| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, X7^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+navi21           | bpe  1| sw 26| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y3, X7^Y4, X4^Y7, X6^Y5, X5^Y6, Y6, X6, Y7, X7}
+navi21           | bpe  1| sw 27| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, Y4, X4^Y4, X7^Y5, X5^Y7, X6, X7, Y7, X6^Y6}
+navi21           | bpe  2| sw  0| 128x1  | {0, X0, X1, X2, X3, X4, X5, X6}
+navi21           | bpe  2| sw  1|  16x8  | {0, X0, X1, X2, Y0, Y1, Y2, X3}
+navi21           | bpe  2| sw  2|  16x8  | {0, X0, X1, X2, Y0, Y1, Y2, X3}
+navi21           | bpe  2| sw  5|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5}
+navi21           | bpe  2| sw  6|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5}
+navi21           | bpe  2| sw  9| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+navi21           | bpe  2| sw 10| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+navi21           | bpe  2| sw 17| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X7^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+navi21           | bpe  2| sw 18| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X7^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+navi21           | bpe  2| sw 21|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5}
+navi21           | bpe  2| sw 22|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5}
+navi21           | bpe  2| sw 24| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, Y4, X4^Y4, X7^Y5, X5, Y3, X6, X7, X6^Y6}
+navi21           | bpe  2| sw 25| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X7^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+navi21           | bpe  2| sw 26| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X7^Y3, X4^Y6, X6^Y4, X5^Y5, Y5, X6, Y6, X7}
+navi21           | bpe  2| sw 27| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, Y4, X4^Y4, X7^Y5, X5, Y3, X6, X7, X6^Y6}
+navi21           | bpe  4| sw  0|  64x1  | {0, 0, X0, X1, X2, X3, X4, X5}
+navi21           | bpe  4| sw  1|   8x8  | {0, 0, X0, X1, Y0, Y1, Y2, X2}
+navi21           | bpe  4| sw  2|   8x8  | {0, 0, X0, X1, Y0, Y1, X2, Y2}
+navi21           | bpe  4| sw  5|  32x32 | {0, 0, X0, X1, Y0, Y1, Y2, X2, Y3, X3, Y4, X4}
+navi21           | bpe  4| sw  6|  32x32 | {0, 0, X0, X1, Y0, Y1, X2, Y2, Y3, X3, Y4, X4}
+navi21           | bpe  4| sw  9| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+navi21           | bpe  4| sw 10| 128x128| {0, 0, X0, X1, Y0, Y1, X2, Y2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+navi21           | bpe  4| sw 17| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, X6^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+navi21           | bpe  4| sw 18| 128x128| {0, 0, X0, X1, Y0, Y1, X2, Y2, X6^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+navi21           | bpe  4| sw 21|  32x32 | {0, 0, X0, X1, Y0, Y1, Y2, X2, Y3, X3, Y4, X4}
+navi21           | bpe  4| sw 22|  32x32 | {0, 0, X0, X1, Y0, Y1, X2, Y2, Y3, X3, Y4, X4}
+navi21           | bpe  4| sw 24| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, Y4, X4^Y4, Y5, X5, X3, Y3, X6, X6^Y6}
+navi21           | bpe  4| sw 25| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, X6^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+navi21           | bpe  4| sw 26| 128x128| {0, 0, X0, X1, Y0, Y1, X2, Y2, X6^Y3, X3^Y6, X5^Y4, X4^Y5, Y5, X5, Y6, X6}
+navi21           | bpe  4| sw 27| 128x128| {0, 0, X0, X1, Y0, Y1, X2, Y2, Y4, X4^Y4, Y5, X5, X3, Y3, X6, X6^Y6}
+navi21           | bpe  8| sw  0|  32x1  | {0, 0, 0, X0, X1, X2, X3, X4}
+navi21           | bpe  8| sw  1|   8x4  | {0, 0, 0, X0, Y0, Y1, X1, X2}
+navi21           | bpe  8| sw  2|   8x4  | {0, 0, 0, X0, Y0, X1, X2, Y1}
+navi21           | bpe  8| sw  5|  32x16 | {0, 0, 0, X0, Y0, Y1, X1, X2, Y2, X3, Y3, X4}
+navi21           | bpe  8| sw  6|  32x16 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4}
+navi21           | bpe  8| sw  9| 128x64 | {0, 0, 0, X0, Y0, Y1, X1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+navi21           | bpe  8| sw 10| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+navi21           | bpe  8| sw 17| 128x64 | {0, 0, 0, X0, Y0, Y1, X1, X2, X6^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+navi21           | bpe  8| sw 18| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X6^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+navi21           | bpe  8| sw 21|  32x16 | {0, 0, 0, X0, Y0, Y1, X1, X2, Y2, X3, Y3, X4}
+navi21           | bpe  8| sw 22|  32x16 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4}
+navi21           | bpe  8| sw 24| 128x64 | {0, 0, 0, X0, Y0, X1, Y1, X2, Y4, X4^Y4, Y5, X5, Y2, X3, Y3, X6}
+navi21           | bpe  8| sw 25| 128x64 | {0, 0, 0, X0, Y0, Y1, X1, X2, X6^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+navi21           | bpe  8| sw 26| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X6^Y2, X3^Y5, X5^Y3, X4^Y4, Y4, X5, Y5, X6}
+navi21           | bpe  8| sw 27| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y4, X4^Y4, Y5, X5, Y2, X3, Y3, X6}
+navi21           | bpe 16| sw  0|  16x1  | {0, 0, 0, 0, X0, X1, X2, X3}
+navi21           | bpe 16| sw  1|   4x4  | {0, 0, 0, 0, Y0, Y1, X0, X1}
+navi21           | bpe 16| sw  2|   4x4  | {0, 0, 0, 0, X0, Y0, X1, Y1}
+navi21           | bpe 16| sw  5|  16x16 | {0, 0, 0, 0, Y0, Y1, X0, X1, Y2, X2, Y3, X3}
+navi21           | bpe 16| sw  6|  16x16 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3}
+navi21           | bpe 16| sw  9|  64x64 | {0, 0, 0, 0, Y0, Y1, X0, X1, Y2, X2, Y3, X3, Y4, X4, Y5, X5}
+navi21           | bpe 16| sw 10|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5}
+navi21           | bpe 16| sw 17|  64x64 | {0, 0, 0, 0, Y0, Y1, X0, X1, X5^Y2, X2^Y5, X4^Y3, X3^Y4, Y4, X4, Y5, X5}
+navi21           | bpe 16| sw 18|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X5^Y2, X2^Y5, X4^Y3, X3^Y4, Y4, X4, Y5, X5}
+navi21           | bpe 16| sw 21|  16x16 | {0, 0, 0, 0, Y0, Y1, X0, X1, Y2, X2, Y3, X3}
+navi21           | bpe 16| sw 22|  16x16 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3}
+navi21           | bpe 16| sw 25|  64x64 | {0, 0, 0, 0, Y0, Y1, X0, X1, X5^Y2, X2^Y5, X4^Y3, X3^Y4, Y4, X4, Y5, X5}
+navi21           | bpe 16| sw 26|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X5^Y2, X2^Y5, X4^Y3, X3^Y4, Y4, X4, Y5, X5}
+navi21           | bpe 16| sw 27|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y4, X4^Y4, Y5, X5, X2, X3, Y3, Y2}
+vangogh          | bpe  1| sw  0| 256x1  | {X0, X1, X2, X3, X4, X5, X6, X7}
+vangogh          | bpe  1| sw  1|  16x16 | {X0, X1, X2, X3, Y0, Y1, Y2, Y3}
+vangogh          | bpe  1| sw  2|  16x16 | {X0, X1, X2, Y1, Y0, Y2, X3, Y3}
+vangogh          | bpe  1| sw  5|  64x64 | {X0, X1, X2, X3, Y0, Y1, Y2, Y3, Y4, X4, Y5, X5}
+vangogh          | bpe  1| sw  6|  64x64 | {X0, X1, X2, Y1, Y0, Y2, X3, Y3, Y4, X4, Y5, X5}
+vangogh          | bpe  1| sw  9| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+vangogh          | bpe  1| sw 10| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+vangogh          | bpe  1| sw 17| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+vangogh          | bpe  1| sw 18| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+vangogh          | bpe  1| sw 21|  64x64 | {X0, X1, X2, X3, Y0, Y1, Y2, Y3, X5^Y4, X4^Y5, Y5, X5}
+vangogh          | bpe  1| sw 22|  64x64 | {X0, X1, X2, Y1, Y0, Y2, X3, Y3, X5^Y4, X4^Y5, Y5, X5}
+vangogh          | bpe  1| sw 24| 256x256| {X0, Y0, X1, Y1, X2, Y2, X3, Y3, X5^Y4^Y5, X4^Y4, X5, Y5, X6, Y6, X7, Y7}
+vangogh          | bpe  1| sw 25| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+vangogh          | bpe  1| sw 26| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+vangogh          | bpe  1| sw 27| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, X5^Y4^Y5, X4^Y4, X5, Y5, X6, Y6, X7, Y7}
+vangogh          | bpe  2| sw  0| 128x1  | {0, X0, X1, X2, X3, X4, X5, X6}
+vangogh          | bpe  2| sw  1|  16x8  | {0, X0, X1, X2, Y0, Y1, Y2, X3}
+vangogh          | bpe  2| sw  2|  16x8  | {0, X0, X1, X2, Y0, Y1, Y2, X3}
+vangogh          | bpe  2| sw  5|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5}
+vangogh          | bpe  2| sw  6|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5}
+vangogh          | bpe  2| sw  9| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+vangogh          | bpe  2| sw 10| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+vangogh          | bpe  2| sw 17| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+vangogh          | bpe  2| sw 18| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+vangogh          | bpe  2| sw 21|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y3, X4^Y4, Y4, X5}
+vangogh          | bpe  2| sw 22|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y3, X4^Y4, Y4, X5}
+vangogh          | bpe  2| sw 24| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, X5^Y4^Y5, X4^Y4, Y3, X5, X6, Y5, X7, Y6}
+vangogh          | bpe  2| sw 25| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+vangogh          | bpe  2| sw 26| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+vangogh          | bpe  2| sw 27| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y4^Y5, X4^Y4, Y3, X5, X6, Y5, X7, Y6}
+vangogh          | bpe  4| sw  0|  64x1  | {0, 0, X0, X1, X2, X3, X4, X5}
+vangogh          | bpe  4| sw  1|   8x8  | {0, 0, X0, X1, Y0, Y1, Y2, X2}
+vangogh          | bpe  4| sw  2|   8x8  | {0, 0, X0, X1, Y0, Y1, X2, Y2}
+vangogh          | bpe  4| sw  5|  32x32 | {0, 0, X0, X1, Y0, Y1, Y2, X2, Y3, X3, Y4, X4}
+vangogh          | bpe  4| sw  6|  32x32 | {0, 0, X0, X1, Y0, Y1, X2, Y2, Y3, X3, Y4, X4}
+vangogh          | bpe  4| sw  9| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+vangogh          | bpe  4| sw 10| 128x128| {0, 0, X0, X1, Y0, Y1, X2, Y2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+vangogh          | bpe  4| sw 17| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+vangogh          | bpe  4| sw 18| 128x128| {0, 0, X0, X1, Y0, Y1, X2, Y2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+vangogh          | bpe  4| sw 21|  32x32 | {0, 0, X0, X1, Y0, Y1, Y2, X2, X4^Y3, X3^Y4, Y4, X4}
+vangogh          | bpe  4| sw 22|  32x32 | {0, 0, X0, X1, Y0, Y1, X2, Y2, X4^Y3, X3^Y4, Y4, X4}
+vangogh          | bpe  4| sw 24| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, X5^Y4^Y5, X4^Y4, X3, Y3, X5, Y5, X6, Y6}
+vangogh          | bpe  4| sw 25| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+vangogh          | bpe  4| sw 26| 128x128| {0, 0, X0, X1, Y0, Y1, X2, Y2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+vangogh          | bpe  4| sw 27| 128x128| {0, 0, X0, X1, Y0, Y1, X2, Y2, X5^Y4^Y5, X4^Y4, X3, Y3, X5, Y5, X6, Y6}
+vangogh          | bpe  8| sw  0|  32x1  | {0, 0, 0, X0, X1, X2, X3, X4}
+vangogh          | bpe  8| sw  1|   8x4  | {0, 0, 0, X0, Y0, Y1, X1, X2}
+vangogh          | bpe  8| sw  2|   8x4  | {0, 0, 0, X0, Y0, X1, X2, Y1}
+vangogh          | bpe  8| sw  5|  32x16 | {0, 0, 0, X0, Y0, Y1, X1, X2, Y2, X3, Y3, X4}
+vangogh          | bpe  8| sw  6|  32x16 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4}
+vangogh          | bpe  8| sw  9| 128x64 | {0, 0, 0, X0, Y0, Y1, X1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+vangogh          | bpe  8| sw 10| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+vangogh          | bpe  8| sw 17| 128x64 | {0, 0, 0, X0, Y0, Y1, X1, X2, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+vangogh          | bpe  8| sw 18| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+vangogh          | bpe  8| sw 21|  32x16 | {0, 0, 0, X0, Y0, Y1, X1, X2, X4^Y2, X3^Y3, Y3, X4}
+vangogh          | bpe  8| sw 22|  32x16 | {0, 0, 0, X0, Y0, X1, X2, Y1, X4^Y2, X3^Y3, Y3, X4}
+vangogh          | bpe  8| sw 24| 128x64 | {0, 0, 0, X0, Y0, X1, Y1, X2, X5^Y4^Y5, X4^Y4, Y2, X3, Y3, X5, X6, Y5}
+vangogh          | bpe  8| sw 25| 128x64 | {0, 0, 0, X0, Y0, Y1, X1, X2, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+vangogh          | bpe  8| sw 26| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+vangogh          | bpe  8| sw 27| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X5^Y4^Y5, X4^Y4, Y2, X3, Y3, X5, X6, Y5}
+vangogh          | bpe 16| sw  0|  16x1  | {0, 0, 0, 0, X0, X1, X2, X3}
+vangogh          | bpe 16| sw  1|   4x4  | {0, 0, 0, 0, Y0, Y1, X0, X1}
+vangogh          | bpe 16| sw  2|   4x4  | {0, 0, 0, 0, X0, Y0, X1, Y1}
+vangogh          | bpe 16| sw  5|  16x16 | {0, 0, 0, 0, Y0, Y1, X0, X1, Y2, X2, Y3, X3}
+vangogh          | bpe 16| sw  6|  16x16 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3}
+vangogh          | bpe 16| sw  9|  64x64 | {0, 0, 0, 0, Y0, Y1, X0, X1, Y2, X2, Y3, X3, Y4, X4, Y5, X5}
+vangogh          | bpe 16| sw 10|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5}
+vangogh          | bpe 16| sw 17|  64x64 | {0, 0, 0, 0, Y0, Y1, X0, X1, X3^Y2, X2^Y3, Y3, X3, Y4, X4, Y5, X5}
+vangogh          | bpe 16| sw 18|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^Y2, X2^Y3, Y3, X3, Y4, X4, Y5, X5}
+vangogh          | bpe 16| sw 21|  16x16 | {0, 0, 0, 0, Y0, Y1, X0, X1, X3^Y2, X2^Y3, Y3, X3}
+vangogh          | bpe 16| sw 22|  16x16 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^Y2, X2^Y3, Y3, X3}
+vangogh          | bpe 16| sw 25|  64x64 | {0, 0, 0, 0, Y0, Y1, X0, X1, X3^Y2, X2^Y3, Y3, X3, Y4, X4, Y5, X5}
+vangogh          | bpe 16| sw 26|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^Y2, X2^Y3, Y3, X3, Y4, X4, Y5, X5}
+vangogh          | bpe 16| sw 27|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X5^Y4^Y5, X4^Y4, X2, Y2, Y3, X3, X5, Y5}
+rembrandt        | bpe  1| sw  0| 256x1  | {X0, X1, X2, X3, X4, X5, X6, X7}
+rembrandt        | bpe  1| sw  1|  16x16 | {X0, X1, X2, X3, Y0, Y1, Y2, Y3}
+rembrandt        | bpe  1| sw  2|  16x16 | {X0, X1, X2, Y1, Y0, Y2, X3, Y3}
+rembrandt        | bpe  1| sw  5|  64x64 | {X0, X1, X2, X3, Y0, Y1, Y2, Y3, Y4, X4, Y5, X5}
+rembrandt        | bpe  1| sw  6|  64x64 | {X0, X1, X2, Y1, Y0, Y2, X3, Y3, Y4, X4, Y5, X5}
+rembrandt        | bpe  1| sw  9| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+rembrandt        | bpe  1| sw 10| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+rembrandt        | bpe  1| sw 17| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+rembrandt        | bpe  1| sw 18| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+rembrandt        | bpe  1| sw 21|  64x64 | {X0, X1, X2, X3, Y0, Y1, Y2, Y3, X5^Y4, X4^Y5, Y5, X5}
+rembrandt        | bpe  1| sw 22|  64x64 | {X0, X1, X2, Y1, Y0, Y2, X3, Y3, X5^Y4, X4^Y5, Y5, X5}
+rembrandt        | bpe  1| sw 24| 256x256| {X0, Y0, X1, Y1, X2, Y2, X3, Y3, X6^Y4^Y6, X4^Y4, X5, X6, Y6, X7, Y7, X5^Y5}
+rembrandt        | bpe  1| sw 25| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+rembrandt        | bpe  1| sw 26| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+rembrandt        | bpe  1| sw 27| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, X6^Y4^Y6, X4^Y4, X5, X6, Y6, X7, Y7, X5^Y5}
+rembrandt        | bpe  2| sw  0| 128x1  | {0, X0, X1, X2, X3, X4, X5, X6}
+rembrandt        | bpe  2| sw  1|  16x8  | {0, X0, X1, X2, Y0, Y1, Y2, X3}
+rembrandt        | bpe  2| sw  2|  16x8  | {0, X0, X1, X2, Y0, Y1, Y2, X3}
+rembrandt        | bpe  2| sw  5|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5}
+rembrandt        | bpe  2| sw  6|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5}
+rembrandt        | bpe  2| sw  9| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+rembrandt        | bpe  2| sw 10| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+rembrandt        | bpe  2| sw 17| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+rembrandt        | bpe  2| sw 18| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+rembrandt        | bpe  2| sw 21|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y3, X4^Y4, Y4, X5}
+rembrandt        | bpe  2| sw 22|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y3, X4^Y4, Y4, X5}
+rembrandt        | bpe  2| sw 24| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, X6^Y4^Y6, X4^Y4, Y3, X5, X6, Y6, X7, X5^Y5}
+rembrandt        | bpe  2| sw 25| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+rembrandt        | bpe  2| sw 26| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+rembrandt        | bpe  2| sw 27| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X6^Y4^Y6, X4^Y4, Y3, X5, X6, Y6, X7, X5^Y5}
+rembrandt        | bpe  4| sw  0|  64x1  | {0, 0, X0, X1, X2, X3, X4, X5}
+rembrandt        | bpe  4| sw  1|   8x8  | {0, 0, X0, X1, Y0, Y1, Y2, X2}
+rembrandt        | bpe  4| sw  2|   8x8  | {0, 0, X0, X1, Y0, Y1, X2, Y2}
+rembrandt        | bpe  4| sw  5|  32x32 | {0, 0, X0, X1, Y0, Y1, Y2, X2, Y3, X3, Y4, X4}
+rembrandt        | bpe  4| sw  6|  32x32 | {0, 0, X0, X1, Y0, Y1, X2, Y2, Y3, X3, Y4, X4}
+rembrandt        | bpe  4| sw  9| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+rembrandt        | bpe  4| sw 10| 128x128| {0, 0, X0, X1, Y0, Y1, X2, Y2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+rembrandt        | bpe  4| sw 17| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+rembrandt        | bpe  4| sw 18| 128x128| {0, 0, X0, X1, Y0, Y1, X2, Y2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+rembrandt        | bpe  4| sw 21|  32x32 | {0, 0, X0, X1, Y0, Y1, Y2, X2, X4^Y3, X3^Y4, Y4, X4}
+rembrandt        | bpe  4| sw 22|  32x32 | {0, 0, X0, X1, Y0, Y1, X2, Y2, X4^Y3, X3^Y4, Y4, X4}
+rembrandt        | bpe  4| sw 24| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, X6^Y4^Y6, X4^Y4, X3, Y3, X5, X6, Y6, X5^Y5}
+rembrandt        | bpe  4| sw 25| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+rembrandt        | bpe  4| sw 26| 128x128| {0, 0, X0, X1, Y0, Y1, X2, Y2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+rembrandt        | bpe  4| sw 27| 128x128| {0, 0, X0, X1, Y0, Y1, X2, Y2, X6^Y4^Y6, X4^Y4, X3, Y3, X5, X6, Y6, X5^Y5}
+rembrandt        | bpe  8| sw  0|  32x1  | {0, 0, 0, X0, X1, X2, X3, X4}
+rembrandt        | bpe  8| sw  1|   8x4  | {0, 0, 0, X0, Y0, Y1, X1, X2}
+rembrandt        | bpe  8| sw  2|   8x4  | {0, 0, 0, X0, Y0, X1, X2, Y1}
+rembrandt        | bpe  8| sw  5|  32x16 | {0, 0, 0, X0, Y0, Y1, X1, X2, Y2, X3, Y3, X4}
+rembrandt        | bpe  8| sw  6|  32x16 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4}
+rembrandt        | bpe  8| sw  9| 128x64 | {0, 0, 0, X0, Y0, Y1, X1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+rembrandt        | bpe  8| sw 10| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+rembrandt        | bpe  8| sw 17| 128x64 | {0, 0, 0, X0, Y0, Y1, X1, X2, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+rembrandt        | bpe  8| sw 18| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+rembrandt        | bpe  8| sw 21|  32x16 | {0, 0, 0, X0, Y0, Y1, X1, X2, X4^Y2, X3^Y3, Y3, X4}
+rembrandt        | bpe  8| sw 22|  32x16 | {0, 0, 0, X0, Y0, X1, X2, Y1, X4^Y2, X3^Y3, Y3, X4}
+rembrandt        | bpe  8| sw 24| 128x64 | {0, 0, 0, X0, Y0, X1, Y1, X2, X6^Y4, X4^Y4, Y2, X3, Y3, X5, X6, X5^Y5}
+rembrandt        | bpe  8| sw 25| 128x64 | {0, 0, 0, X0, Y0, Y1, X1, X2, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+rembrandt        | bpe  8| sw 26| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+rembrandt        | bpe  8| sw 27| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X6^Y4, X4^Y4, Y2, X3, Y3, X5, X6, X5^Y5}
+rembrandt        | bpe 16| sw  0|  16x1  | {0, 0, 0, 0, X0, X1, X2, X3}
+rembrandt        | bpe 16| sw  1|   4x4  | {0, 0, 0, 0, Y0, Y1, X0, X1}
+rembrandt        | bpe 16| sw  2|   4x4  | {0, 0, 0, 0, X0, Y0, X1, Y1}
+rembrandt        | bpe 16| sw  5|  16x16 | {0, 0, 0, 0, Y0, Y1, X0, X1, Y2, X2, Y3, X3}
+rembrandt        | bpe 16| sw  6|  16x16 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3}
+rembrandt        | bpe 16| sw  9|  64x64 | {0, 0, 0, 0, Y0, Y1, X0, X1, Y2, X2, Y3, X3, Y4, X4, Y5, X5}
+rembrandt        | bpe 16| sw 10|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5}
+rembrandt        | bpe 16| sw 17|  64x64 | {0, 0, 0, 0, Y0, Y1, X0, X1, X3^Y2, X2^Y3, Y3, X3, Y4, X4, Y5, X5}
+rembrandt        | bpe 16| sw 18|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^Y2, X2^Y3, Y3, X3, Y4, X4, Y5, X5}
+rembrandt        | bpe 16| sw 21|  16x16 | {0, 0, 0, 0, Y0, Y1, X0, X1, X3^Y2, X2^Y3, Y3, X3}
+rembrandt        | bpe 16| sw 22|  16x16 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^Y2, X2^Y3, Y3, X3}
+rembrandt        | bpe 16| sw 25|  64x64 | {0, 0, 0, 0, Y0, Y1, X0, X1, X3^Y2, X2^Y3, Y3, X3, Y4, X4, Y5, X5}
+rembrandt        | bpe 16| sw 26|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^Y2, X2^Y3, Y3, X3, Y4, X4, Y5, X5}
+rembrandt        | bpe 16| sw 27|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y4, X4^Y4, X2, Y2, X3, Y3, X5, X5^Y5}
+raphael mendocino| bpe  1| sw  0| 256x1  | {X0, X1, X2, X3, X4, X5, X6, X7}
+raphael mendocino| bpe  1| sw  1|  16x16 | {X0, X1, X2, X3, Y0, Y1, Y2, Y3}
+raphael mendocino| bpe  1| sw  2|  16x16 | {X0, X1, X2, Y1, Y0, Y2, X3, Y3}
+raphael mendocino| bpe  1| sw  5|  64x64 | {X0, X1, X2, X3, Y0, Y1, Y2, Y3, Y4, X4, Y5, X5}
+raphael mendocino| bpe  1| sw  6|  64x64 | {X0, X1, X2, Y1, Y0, Y2, X3, Y3, Y4, X4, Y5, X5}
+raphael mendocino| bpe  1| sw  9| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+raphael mendocino| bpe  1| sw 10| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+raphael mendocino| bpe  1| sw 17| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+raphael mendocino| bpe  1| sw 18| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+raphael mendocino| bpe  1| sw 21|  64x64 | {X0, X1, X2, X3, Y0, Y1, Y2, Y3, X5^Y4, X4^Y5, Y5, X5}
+raphael mendocino| bpe  1| sw 22|  64x64 | {X0, X1, X2, Y1, Y0, Y2, X3, Y3, X5^Y4, X4^Y5, Y5, X5}
+raphael mendocino| bpe  1| sw 24| 256x256| {X0, Y0, X1, Y1, X2, Y2, X3, Y3, X5^Y4^Y5, X4^Y4, X5, Y5, X6, Y6, X7, Y7}
+raphael mendocino| bpe  1| sw 25| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+raphael mendocino| bpe  1| sw 26| 256x256| {X0, X1, X2, Y1, Y0, Y2, X3, Y3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+raphael mendocino| bpe  1| sw 27| 256x256| {X0, X1, X2, X3, Y0, Y1, Y2, Y3, X5^Y4^Y5, X4^Y4, X5, Y5, X6, Y6, X7, Y7}
+raphael mendocino| bpe  2| sw  0| 128x1  | {0, X0, X1, X2, X3, X4, X5, X6}
+raphael mendocino| bpe  2| sw  1|  16x8  | {0, X0, X1, X2, Y0, Y1, Y2, X3}
+raphael mendocino| bpe  2| sw  2|  16x8  | {0, X0, X1, X2, Y0, Y1, Y2, X3}
+raphael mendocino| bpe  2| sw  5|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5}
+raphael mendocino| bpe  2| sw  6|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5}
+raphael mendocino| bpe  2| sw  9| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+raphael mendocino| bpe  2| sw 10| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+raphael mendocino| bpe  2| sw 17| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+raphael mendocino| bpe  2| sw 18| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+raphael mendocino| bpe  2| sw 21|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y3, X4^Y4, Y4, X5}
+raphael mendocino| bpe  2| sw 22|  64x32 | {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y3, X4^Y4, Y4, X5}
+raphael mendocino| bpe  2| sw 24| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, X5^Y4^Y5, X4^Y4, Y3, X5, X6, Y5, X7, Y6}
+raphael mendocino| bpe  2| sw 25| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+raphael mendocino| bpe  2| sw 26| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+raphael mendocino| bpe  2| sw 27| 256x128| {0, X0, X1, X2, Y0, Y1, Y2, X3, X5^Y4^Y5, X4^Y4, Y3, X5, X6, Y5, X7, Y6}
+raphael mendocino| bpe  4| sw  0|  64x1  | {0, 0, X0, X1, X2, X3, X4, X5}
+raphael mendocino| bpe  4| sw  1|   8x8  | {0, 0, X0, X1, Y0, Y1, Y2, X2}
+raphael mendocino| bpe  4| sw  2|   8x8  | {0, 0, X0, X1, Y0, Y1, X2, Y2}
+raphael mendocino| bpe  4| sw  5|  32x32 | {0, 0, X0, X1, Y0, Y1, Y2, X2, Y3, X3, Y4, X4}
+raphael mendocino| bpe  4| sw  6|  32x32 | {0, 0, X0, X1, Y0, Y1, X2, Y2, Y3, X3, Y4, X4}
+raphael mendocino| bpe  4| sw  9| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+raphael mendocino| bpe  4| sw 10| 128x128| {0, 0, X0, X1, Y0, Y1, X2, Y2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+raphael mendocino| bpe  4| sw 17| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+raphael mendocino| bpe  4| sw 18| 128x128| {0, 0, X0, X1, Y0, Y1, X2, Y2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+raphael mendocino| bpe  4| sw 21|  32x32 | {0, 0, X0, X1, Y0, Y1, Y2, X2, X4^Y3, X3^Y4, Y4, X4}
+raphael mendocino| bpe  4| sw 22|  32x32 | {0, 0, X0, X1, Y0, Y1, X2, Y2, X4^Y3, X3^Y4, Y4, X4}
+raphael mendocino| bpe  4| sw 24| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, X5^Y4^Y5, X4^Y4, X3, Y3, X5, Y5, X6, Y6}
+raphael mendocino| bpe  4| sw 25| 128x128| {0, 0, X0, X1, Y0, Y1, Y2, X2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+raphael mendocino| bpe  4| sw 26| 128x128| {0, 0, X0, X1, Y0, Y1, X2, Y2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+raphael mendocino| bpe  4| sw 27| 128x128| {0, 0, X0, X1, Y0, Y1, X2, Y2, X5^Y4^Y5, X4^Y4, X3, Y3, X5, Y5, X6, Y6}
+raphael mendocino| bpe  8| sw  0|  32x1  | {0, 0, 0, X0, X1, X2, X3, X4}
+raphael mendocino| bpe  8| sw  1|   8x4  | {0, 0, 0, X0, Y0, Y1, X1, X2}
+raphael mendocino| bpe  8| sw  2|   8x4  | {0, 0, 0, X0, Y0, X1, X2, Y1}
+raphael mendocino| bpe  8| sw  5|  32x16 | {0, 0, 0, X0, Y0, Y1, X1, X2, Y2, X3, Y3, X4}
+raphael mendocino| bpe  8| sw  6|  32x16 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4}
+raphael mendocino| bpe  8| sw  9| 128x64 | {0, 0, 0, X0, Y0, Y1, X1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+raphael mendocino| bpe  8| sw 10| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+raphael mendocino| bpe  8| sw 17| 128x64 | {0, 0, 0, X0, Y0, Y1, X1, X2, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+raphael mendocino| bpe  8| sw 18| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+raphael mendocino| bpe  8| sw 21|  32x16 | {0, 0, 0, X0, Y0, Y1, X1, X2, X4^Y2, X3^Y3, Y3, X4}
+raphael mendocino| bpe  8| sw 22|  32x16 | {0, 0, 0, X0, Y0, X1, X2, Y1, X4^Y2, X3^Y3, Y3, X4}
+raphael mendocino| bpe  8| sw 24| 128x64 | {0, 0, 0, X0, Y0, X1, Y1, X2, X5^Y4^Y5, X4^Y4, Y2, X3, Y3, X5, X6, Y5}
+raphael mendocino| bpe  8| sw 25| 128x64 | {0, 0, 0, X0, Y0, Y1, X1, X2, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+raphael mendocino| bpe  8| sw 26| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+raphael mendocino| bpe  8| sw 27| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X5^Y4^Y5, X4^Y4, Y2, X3, Y3, X5, X6, Y5}
+raphael mendocino| bpe 16| sw  0|  16x1  | {0, 0, 0, 0, X0, X1, X2, X3}
+raphael mendocino| bpe 16| sw  1|   4x4  | {0, 0, 0, 0, Y0, Y1, X0, X1}
+raphael mendocino| bpe 16| sw  2|   4x4  | {0, 0, 0, 0, X0, Y0, X1, Y1}
+raphael mendocino| bpe 16| sw  5|  16x16 | {0, 0, 0, 0, Y0, Y1, X0, X1, Y2, X2, Y3, X3}
+raphael mendocino| bpe 16| sw  6|  16x16 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3}
+raphael mendocino| bpe 16| sw  9|  64x64 | {0, 0, 0, 0, Y0, Y1, X0, X1, Y2, X2, Y3, X3, Y4, X4, Y5, X5}
+raphael mendocino| bpe 16| sw 10|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5}
+raphael mendocino| bpe 16| sw 17|  64x64 | {0, 0, 0, 0, Y0, Y1, X0, X1, X3^Y2, X2^Y3, Y3, X3, Y4, X4, Y5, X5}
+raphael mendocino| bpe 16| sw 18|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^Y2, X2^Y3, Y3, X3, Y4, X4, Y5, X5}
+raphael mendocino| bpe 16| sw 21|  16x16 | {0, 0, 0, 0, Y0, Y1, X0, X1, X3^Y2, X2^Y3, Y3, X3}
+raphael mendocino| bpe 16| sw 22|  16x16 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^Y2, X2^Y3, Y3, X3}
+raphael mendocino| bpe 16| sw 25|  64x64 | {0, 0, 0, 0, Y0, Y1, X0, X1, X3^Y2, X2^Y3, Y3, X3, Y4, X4, Y5, X5}
+raphael mendocino| bpe 16| sw 26|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^Y2, X2^Y3, Y3, X3, Y4, X4, Y5, X5}
+raphael mendocino| bpe 16| sw 27|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X5^Y4^Y5, X4^Y4, X2, Y2, Y3, X3, X5, Y5}
+navi31           | bpe  1| sw  0| 256x1  | {X0, X1, X2, X3, X4, X5, X6, X7}
+navi31           | bpe  1| sw  2|  16x16 | {X0, X1, Y0, X2, Y1, Y2, X3, Y3}
+navi31           | bpe  1| sw  6|  64x64 | {X0, X1, Y0, X2, Y1, Y2, X3, Y3, Y4, X4, Y5, X5}
+navi31           | bpe  1| sw 10| 256x256| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+navi31           | bpe  1| sw 18| 256x256| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, Y4, X4, X7^Y5, X5^Y7, X6^Y6, X6, Y7, X7}
+navi31           | bpe  1| sw 22|  64x64 | {X0, X1, Y0, X2, Y1, Y2, X3, Y3, Y4, X4, Y5, X5}
+navi31           | bpe  1| sw 24| 256x256| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, Y4, X4^Y4, Y5, X5, X7^Y6, X7, Y7, X6^Y7}
+navi31           | bpe  1| sw 26| 256x256| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, Y4, X4, X7^Y5, X5^Y7, X6^Y6, X6, Y7, X7}
+navi31           | bpe  1| sw 27| 256x256| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, Y4, X4^Y4, Y5, X5, X7^Y6, X7, Y7, X6^Y7}
+navi31           | bpe  1| sw 28| 512x512| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, Y4, X4^Y4, X8^Y5, X5^Y8, X7^Y6, X7, Y7, X8, Y8, X6^Y7}
+navi31           | bpe  1| sw 30| 512x512| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, X8^Y4, X4^Y8, X7^Y5, X5^Y7, X6^Y6, X6, Y7, X7, Y8, X8}
+navi31           | bpe  1| sw 31| 512x512| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, Y4, X4^Y4, X8^Y5, X5^Y8, X7^Y6, X7, Y7, X8, Y8, X6^Y7}
+navi31           | bpe  2| sw  0| 128x1  | {0, X0, X1, X2, X3, X4, X5, X6}
+navi31           | bpe  2| sw  2|  16x8  | {0, X0, Y0, X1, Y1, X2, Y2, X3}
+navi31           | bpe  2| sw  6|  64x32 | {0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, Y4, X5}
+navi31           | bpe  2| sw 10| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+navi31           | bpe  2| sw 18| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, X7^Y4, X5^Y6, X6^Y5, X6, Y6, X7}
+navi31           | bpe  2| sw 22|  64x32 | {0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, Y4, X5}
+navi31           | bpe  2| sw 24| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, Y4, X4^Y4, Y5, X5, X7^Y6, Y3, X7, X6}
+navi31           | bpe  2| sw 26| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, X7^Y4, X5^Y6, X6^Y5, X6, Y6, X7}
+navi31           | bpe  2| sw 27| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, Y4, X4^Y4, Y5, X5, X7^Y6, Y3, X7, X6}
+navi31           | bpe  2| sw 28| 512x256| {0, X0, Y0, X1, Y1, X2, Y2, X3, Y4, X4^Y4, X8^Y5, X5, X7^Y6, Y3, X7, X8, Y7, X6^Y7}
+navi31           | bpe  2| sw 30| 512x256| {0, X0, Y0, X1, Y1, X2, Y2, X3, X8^Y3, X4^Y7, X7^Y4, X5^Y6, X6^Y5, X6, Y6, X7, Y7, X8}
+navi31           | bpe  2| sw 31| 512x256| {0, X0, Y0, X1, Y1, X2, Y2, X3, Y4, X4^Y4, X8^Y5, X5, X7^Y6, Y3, X7, X8, Y7, X6^Y7}
+navi31           | bpe  4| sw  0|  64x1  | {0, 0, X0, X1, X2, X3, X4, X5}
+navi31           | bpe  4| sw  2|   8x8  | {0, 0, X0, Y0, X1, Y1, X2, Y2}
+navi31           | bpe  4| sw  6|  32x32 | {0, 0, X0, Y0, X1, Y1, X2, Y2, Y3, X3, Y4, X4}
+navi31           | bpe  4| sw 10| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+navi31           | bpe  4| sw 18| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, Y3, X3, X6^Y4, X4^Y6, X5^Y5, X5, Y6, X6}
+navi31           | bpe  4| sw 22|  32x32 | {0, 0, X0, Y0, X1, Y1, X2, Y2, Y3, X3, Y4, X4}
+navi31           | bpe  4| sw 24| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, Y4, X4^Y4, Y5, X5, Y6, X3, Y3, X6}
+navi31           | bpe  4| sw 26| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, Y3, X3, X6^Y4, X4^Y6, X5^Y5, X5, Y6, X6}
+navi31           | bpe  4| sw 27| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, Y4, X4^Y4, Y5, X5, Y6, X3, Y3, X6}
+navi31           | bpe  4| sw 28| 256x256| {0, 0, X0, Y0, X1, Y1, X2, Y2, Y4, X4^Y4, Y5, X5, X7^Y6, X3, Y3, X7, Y7, X6^Y7}
+navi31           | bpe  4| sw 30| 256x256| {0, 0, X0, Y0, X1, Y1, X2, Y2, X7^Y3, X3^Y7, X6^Y4, X4^Y6, X5^Y5, X5, Y6, X6, Y7, X7}
+navi31           | bpe  4| sw 31| 256x256| {0, 0, X0, Y0, X1, Y1, X2, Y2, Y4, X4^Y4, Y5, X5, X7^Y6, X3, Y3, X7, Y7, X6^Y7}
+navi31           | bpe  8| sw  0|  32x1  | {0, 0, 0, X0, X1, X2, X3, X4}
+navi31           | bpe  8| sw  2|   8x4  | {0, 0, 0, X0, Y0, X1, X2, Y1}
+navi31           | bpe  8| sw  6|  32x16 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4}
+navi31           | bpe  8| sw 10| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+navi31           | bpe  8| sw 18| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, X6^Y3, X4^Y5, X5^Y4, X5, Y5, X6}
+navi31           | bpe  8| sw 22|  32x16 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4}
+navi31           | bpe  8| sw 24| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y4, X4^Y4, Y5, X5, Y2, X3, Y3, X6}
+navi31           | bpe  8| sw 26| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, X6^Y3, X4^Y5, X5^Y4, X5, Y5, X6}
+navi31           | bpe  8| sw 27| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y4, X4^Y4, Y5, X5, Y2, X3, Y3, X6}
+navi31           | bpe  8| sw 28| 256x128| {0, 0, 0, X0, Y0, X1, X2, Y1, Y4, X4^Y4, Y5, X5, X7^Y6, Y2, X3, Y3, X7, X6}
+navi31           | bpe  8| sw 30| 256x128| {0, 0, 0, X0, Y0, X1, X2, Y1, X7^Y2, X3^Y6, X6^Y3, X4^Y5, X5^Y4, X5, Y5, X6, Y6, X7}
+navi31           | bpe  8| sw 31| 256x128| {0, 0, 0, X0, Y0, X1, X2, Y1, Y4, X4^Y4, Y5, X5, X7^Y6, Y2, X3, Y3, X7, X6}
+navi31           | bpe 16| sw  0|  16x1  | {0, 0, 0, 0, X0, X1, X2, X3}
+navi31           | bpe 16| sw  2|   4x4  | {0, 0, 0, 0, X0, Y0, X1, Y1}
+navi31           | bpe 16| sw  6|  16x16 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3}
+navi31           | bpe 16| sw 10|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5}
+navi31           | bpe 16| sw 18|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, X5^Y3, X3^Y5, X4^Y4, X4, Y5, X5}
+navi31           | bpe 16| sw 22|  16x16 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3}
+navi31           | bpe 16| sw 26|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, X5^Y3, X3^Y5, X4^Y4, X4, Y5, X5}
+navi31           | bpe 16| sw 27|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y4, X4^Y4, Y5, X5, Y2, X3, Y3, X2}
+navi31           | bpe 16| sw 30| 128x128| {0, 0, 0, 0, X0, Y0, X1, Y1, X6^Y2, X2^Y6, X5^Y3, X3^Y5, X4^Y4, X4, Y5, X5, Y6, X6}
+navi31           | bpe 16| sw 31| 128x128| {0, 0, 0, 0, X0, Y0, X1, Y1, Y4, X4^Y4, Y5, X5, Y6, X2, Y2, Y3, X3, X6}
+navi33           | bpe  1| sw  0| 256x1  | {X0, X1, X2, X3, X4, X5, X6, X7}
+navi33           | bpe  1| sw  2|  16x16 | {X0, X1, Y0, X2, Y1, Y2, X3, Y3}
+navi33           | bpe  1| sw  6|  64x64 | {X0, X1, Y0, X2, Y1, Y2, X3, Y3, Y4, X4, Y5, X5}
+navi33           | bpe  1| sw 10| 256x256| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+navi33           | bpe  1| sw 18| 256x256| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, X6^Y4, X4^Y6, X5^Y5, X5, Y6, X6, Y7, X7}
+navi33           | bpe  1| sw 22|  64x64 | {X0, X1, Y0, X2, Y1, Y2, X3, Y3, Y4, X4, X5^Y5, X5}
+navi33           | bpe  1| sw 24| 256x256| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, X7^Y4^Y7, X4^Y4, X6^Y5, X6, Y6, X7, Y7, X5^Y6}
+navi33           | bpe  1| sw 26| 256x256| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, X6^Y4, X4^Y6, X5^Y5, X5, Y6, X6, Y7, X7}
+navi33           | bpe  1| sw 27| 256x256| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, X7^Y4^Y7, X4^Y4, X6^Y5, X6, Y6, X7, Y7, X5^Y6}
+navi33           | bpe  1| sw 28| 512x512| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, X7^Y4^Y7, X4^Y4, X6^Y5, X6, Y6, X7, Y7, X8, Y8, X5^Y6}
+navi33           | bpe  1| sw 30| 512x512| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, X6^Y4, X4^Y6, X5^Y5, X5, Y6, X6, Y7, X7, Y8, X8}
+navi33           | bpe  1| sw 31| 512x512| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, X7^Y4^Y7, X4^Y4, X6^Y5, X6, Y6, X7, Y7, X8, Y8, X5^Y6}
+navi33           | bpe  2| sw  0| 128x1  | {0, X0, X1, X2, X3, X4, X5, X6}
+navi33           | bpe  2| sw  2|  16x8  | {0, X0, Y0, X1, Y1, X2, Y2, X3}
+navi33           | bpe  2| sw  6|  64x32 | {0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, Y4, X5}
+navi33           | bpe  2| sw 10| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+navi33           | bpe  2| sw 18| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, X6^Y3, X4^Y5, X5^Y4, X5, Y5, X6, Y6, X7}
+navi33           | bpe  2| sw 22|  64x32 | {0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, X5^Y4, X5}
+navi33           | bpe  2| sw 24| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, X7^Y4, X4^Y4, X6^Y5, Y3, X6, X7, Y6, X5^Y6}
+navi33           | bpe  2| sw 26| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, X6^Y3, X4^Y5, X5^Y4, X5, Y5, X6, Y6, X7}
+navi33           | bpe  2| sw 27| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, X7^Y4, X4^Y4, X6^Y5, Y3, X6, X7, Y6, X5^Y6}
+navi33           | bpe  2| sw 28| 512x256| {0, X0, Y0, X1, Y1, X2, Y2, X3, X7^Y4^Y7, X4^Y4, X6^Y5, Y3, X6, X7, Y6, X8, Y7, X5^Y6}
+navi33           | bpe  2| sw 30| 512x256| {0, X0, Y0, X1, Y1, X2, Y2, X3, X6^Y3, X4^Y5, X5^Y4, X5, Y5, X6, Y6, X7, Y7, X8}
+navi33           | bpe  2| sw 31| 512x256| {0, X0, Y0, X1, Y1, X2, Y2, X3, X7^Y4^Y7, X4^Y4, X6^Y5, Y3, X6, X7, Y6, X8, Y7, X5^Y6}
+navi33           | bpe  4| sw  0|  64x1  | {0, 0, X0, X1, X2, X3, X4, X5}
+navi33           | bpe  4| sw  2|   8x8  | {0, 0, X0, Y0, X1, Y1, X2, Y2}
+navi33           | bpe  4| sw  6|  32x32 | {0, 0, X0, Y0, X1, Y1, X2, Y2, Y3, X3, Y4, X4}
+navi33           | bpe  4| sw 10| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+navi33           | bpe  4| sw 18| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, X5^Y3, X3^Y5, X4^Y4, X4, Y5, X5, Y6, X6}
+navi33           | bpe  4| sw 22|  32x32 | {0, 0, X0, Y0, X1, Y1, X2, Y2, Y3, X3, X4^Y4, X4}
+navi33           | bpe  4| sw 24| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, Y4, X4^Y4, X6^Y5, X3, Y3, X6, Y6, X5^Y6}
+navi33           | bpe  4| sw 26| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, X5^Y3, X3^Y5, X4^Y4, X4, Y5, X5, Y6, X6}
+navi33           | bpe  4| sw 27| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, Y4, X4^Y4, X6^Y5, X3, Y3, X6, Y6, X5^Y6}
+navi33           | bpe  4| sw 28| 256x256| {0, 0, X0, Y0, X1, Y1, X2, Y2, X7^Y4^Y7, X4^Y4, X6^Y5, X3, Y3, X6, Y6, X7, Y7, X5^Y6}
+navi33           | bpe  4| sw 30| 256x256| {0, 0, X0, Y0, X1, Y1, X2, Y2, X5^Y3, X3^Y5, X4^Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+navi33           | bpe  4| sw 31| 256x256| {0, 0, X0, Y0, X1, Y1, X2, Y2, X7^Y4^Y7, X4^Y4, X6^Y5, X3, Y3, X6, Y6, X7, Y7, X5^Y6}
+navi33           | bpe  8| sw  0|  32x1  | {0, 0, 0, X0, X1, X2, X3, X4}
+navi33           | bpe  8| sw  2|   8x4  | {0, 0, 0, X0, Y0, X1, X2, Y1}
+navi33           | bpe  8| sw  6|  32x16 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4}
+navi33           | bpe  8| sw 10| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+navi33           | bpe  8| sw 18| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X5^Y2, X3^Y4, X4^Y3, X4, Y4, X5, Y5, X6}
+navi33           | bpe  8| sw 22|  32x16 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, X4^Y3, X4}
+navi33           | bpe  8| sw 24| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y4, X4^Y4, X6^Y5, Y2, X3, Y3, X6, X5}
+navi33           | bpe  8| sw 26| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X5^Y2, X3^Y4, X4^Y3, X4, Y4, X5, Y5, X6}
+navi33           | bpe  8| sw 27| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y4, X4^Y4, X6^Y5, Y2, X3, Y3, X6, X5}
+navi33           | bpe  8| sw 28| 256x128| {0, 0, 0, X0, Y0, X1, X2, Y1, X7^Y4, X4^Y4, X6^Y5, Y2, X3, Y3, X6, X7, Y6, X5^Y6}
+navi33           | bpe  8| sw 30| 256x128| {0, 0, 0, X0, Y0, X1, X2, Y1, X5^Y2, X3^Y4, X4^Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+navi33           | bpe  8| sw 31| 256x128| {0, 0, 0, X0, Y0, X1, X2, Y1, X7^Y4, X4^Y4, X6^Y5, Y2, X3, Y3, X6, X7, Y6, X5^Y6}
+navi33           | bpe 16| sw  0|  16x1  | {0, 0, 0, 0, X0, X1, X2, X3}
+navi33           | bpe 16| sw  2|   4x4  | {0, 0, 0, 0, X0, Y0, X1, Y1}
+navi33           | bpe 16| sw  6|  16x16 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3}
+navi33           | bpe 16| sw 10|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5}
+navi33           | bpe 16| sw 18|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X4^Y2, X2^Y4, X3^Y3, X3, Y4, X4, Y5, X5}
+navi33           | bpe 16| sw 22|  16x16 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, X3^Y3, X3}
+navi33           | bpe 16| sw 26|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X4^Y2, X2^Y4, X3^Y3, X3, Y4, X4, Y5, X5}
+navi33           | bpe 16| sw 27|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y4, X4^Y4, Y5, X2, Y2, Y3, X3, X5}
+navi33           | bpe 16| sw 30| 128x128| {0, 0, 0, 0, X0, Y0, X1, Y1, X4^Y2, X2^Y4, X3^Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+navi33           | bpe 16| sw 31| 128x128| {0, 0, 0, 0, X0, Y0, X1, Y1, Y4, X4^Y4, X6^Y5, X2, Y2, Y3, X3, X6, Y6, X5^Y6}
+phoenix          | bpe  1| sw  0| 256x1  | {X0, X1, X2, X3, X4, X5, X6, X7}
+phoenix          | bpe  1| sw  2|  16x16 | {X0, X1, Y0, X2, Y1, Y2, X3, Y3}
+phoenix          | bpe  1| sw  6|  64x64 | {X0, X1, Y0, X2, Y1, Y2, X3, Y3, Y4, X4, Y5, X5}
+phoenix          | bpe  1| sw 10| 256x256| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+phoenix          | bpe  1| sw 18| 256x256| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+phoenix          | bpe  1| sw 22|  64x64 | {X0, X1, Y0, X2, Y1, Y2, X3, Y3, X5^Y4, X4^Y5, Y5, X5}
+phoenix          | bpe  1| sw 24| 256x256| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, X6^Y4^Y6, X4^Y4, X5, X6, Y6, X7, Y7, X5^Y5}
+phoenix          | bpe  1| sw 26| 256x256| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+phoenix          | bpe  1| sw 27| 256x256| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, X6^Y4^Y6, X4^Y4, X5, X6, Y6, X7, Y7, X5^Y5}
+phoenix          | bpe  1| sw 28| 512x512| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, X6^Y4^Y6, X4^Y4, X5, X6, Y6, X7, Y7, X8^Y8, Y8, X5^Y5}
+phoenix          | bpe  1| sw 30| 512x512| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7, Y8, X8}
+phoenix          | bpe  1| sw 31| 512x512| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, X6^Y4^Y6, X4^Y4, X5, X6, Y6, X7, Y7, X8^Y8, Y8, X5^Y5}
+phoenix          | bpe  2| sw  0| 128x1  | {0, X0, X1, X2, X3, X4, X5, X6}
+phoenix          | bpe  2| sw  2|  16x8  | {0, X0, Y0, X1, Y1, X2, Y2, X3}
+phoenix          | bpe  2| sw  6|  64x32 | {0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, Y4, X5}
+phoenix          | bpe  2| sw 10| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+phoenix          | bpe  2| sw 18| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+phoenix          | bpe  2| sw 22|  64x32 | {0, X0, Y0, X1, Y1, X2, Y2, X3, X5^Y3, X4^Y4, Y4, X5}
+phoenix          | bpe  2| sw 24| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, X6^Y4^Y6, X4^Y4, Y3, X5, X6, Y6, X7, X5^Y5}
+phoenix          | bpe  2| sw 26| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+phoenix          | bpe  2| sw 27| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, X6^Y4^Y6, X4^Y4, Y3, X5, X6, Y6, X7, X5^Y5}
+phoenix          | bpe  2| sw 28| 512x256| {0, X0, Y0, X1, Y1, X2, Y2, X3, X6^Y4^Y6, X4^Y4, Y3, X5, X6, Y6, X7, X8^Y7, X8, X5^Y5}
+phoenix          | bpe  2| sw 30| 512x256| {0, X0, Y0, X1, Y1, X2, Y2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7, Y7, X8}
+phoenix          | bpe  2| sw 31| 512x256| {0, X0, Y0, X1, Y1, X2, Y2, X3, X6^Y4^Y6, X4^Y4, Y3, X5, X6, Y6, X7, X8^Y7, X8, X5^Y5}
+phoenix          | bpe  4| sw  0|  64x1  | {0, 0, X0, X1, X2, X3, X4, X5}
+phoenix          | bpe  4| sw  2|   8x8  | {0, 0, X0, Y0, X1, Y1, X2, Y2}
+phoenix          | bpe  4| sw  6|  32x32 | {0, 0, X0, Y0, X1, Y1, X2, Y2, Y3, X3, Y4, X4}
+phoenix          | bpe  4| sw 10| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+phoenix          | bpe  4| sw 18| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+phoenix          | bpe  4| sw 22|  32x32 | {0, 0, X0, Y0, X1, Y1, X2, Y2, X4^Y3, X3^Y4, Y4, X4}
+phoenix          | bpe  4| sw 24| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, X6^Y4^Y6, X4^Y4, X3, Y3, X5, X6, Y6, X5^Y5}
+phoenix          | bpe  4| sw 26| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+phoenix          | bpe  4| sw 27| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, X6^Y4^Y6, X4^Y4, X3, Y3, X5, X6, Y6, X5^Y5}
+phoenix          | bpe  4| sw 28| 256x256| {0, 0, X0, Y0, X1, Y1, X2, Y2, X6^Y4^Y6, X4^Y4, X3, Y3, X5, X6, Y6, X7^Y7, Y7, X5^Y5}
+phoenix          | bpe  4| sw 30| 256x256| {0, 0, X0, Y0, X1, Y1, X2, Y2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+phoenix          | bpe  4| sw 31| 256x256| {0, 0, X0, Y0, X1, Y1, X2, Y2, X6^Y4^Y6, X4^Y4, X3, Y3, X5, X6, Y6, X7^Y7, Y7, X5^Y5}
+phoenix          | bpe  8| sw  0|  32x1  | {0, 0, 0, X0, X1, X2, X3, X4}
+phoenix          | bpe  8| sw  2|   8x4  | {0, 0, 0, X0, Y0, X1, X2, Y1}
+phoenix          | bpe  8| sw  6|  32x16 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4}
+phoenix          | bpe  8| sw 10| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+phoenix          | bpe  8| sw 18| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+phoenix          | bpe  8| sw 22|  32x16 | {0, 0, 0, X0, Y0, X1, X2, Y1, X4^Y2, X3^Y3, Y3, X4}
+phoenix          | bpe  8| sw 24| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X6^Y4, X4^Y4, Y2, X3, Y3, X5, X6, X5^Y5}
+phoenix          | bpe  8| sw 26| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+phoenix          | bpe  8| sw 27| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X6^Y4, X4^Y4, Y2, X3, Y3, X5, X6, X5^Y5}
+phoenix          | bpe  8| sw 28| 256x128| {0, 0, 0, X0, Y0, X1, X2, Y1, X6^Y4^Y6, X4^Y4, Y2, X3, Y3, X5, X6, X7^Y6, X7, X5^Y5}
+phoenix          | bpe  8| sw 30| 256x128| {0, 0, 0, X0, Y0, X1, X2, Y1, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+phoenix          | bpe  8| sw 31| 256x128| {0, 0, 0, X0, Y0, X1, X2, Y1, X6^Y4^Y6, X4^Y4, Y2, X3, Y3, X5, X6, X7^Y6, X7, X5^Y5}
+phoenix          | bpe 16| sw  0|  16x1  | {0, 0, 0, 0, X0, X1, X2, X3}
+phoenix          | bpe 16| sw  2|   4x4  | {0, 0, 0, 0, X0, Y0, X1, Y1}
+phoenix          | bpe 16| sw  6|  16x16 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3}
+phoenix          | bpe 16| sw 10|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5}
+phoenix          | bpe 16| sw 18|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^Y2, X2^Y3, Y3, X3, Y4, X4, Y5, X5}
+phoenix          | bpe 16| sw 22|  16x16 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^Y2, X2^Y3, Y3, X3}
+phoenix          | bpe 16| sw 26|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^Y2, X2^Y3, Y3, X3, Y4, X4, Y5, X5}
+phoenix          | bpe 16| sw 27|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y4, X4^Y4, X2, Y2, X3, Y3, X5, X5^Y5}
+phoenix          | bpe 16| sw 30| 128x128| {0, 0, 0, 0, X0, Y0, X1, Y1, X3^Y2, X2^Y3, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+phoenix          | bpe 16| sw 31| 128x128| {0, 0, 0, 0, X0, Y0, X1, Y1, X6^Y4^Y6, X4^Y4, X2, Y2, X3, Y3, X5, X6^Y6, Y6, X5^Y5}
+strix1           | bpe  1| sw  0| 256x1  | {X0, X1, X2, X3, X4, X5, X6, X7}
+strix1           | bpe  1| sw  2|  16x16 | {X0, X1, Y0, X2, Y1, Y2, X3, Y3}
+strix1           | bpe  1| sw  6|  64x64 | {X0, X1, Y0, X2, Y1, Y2, X3, Y3, Y4, X4, Y5, X5}
+strix1           | bpe  1| sw 10| 256x256| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+strix1           | bpe  1| sw 18| 256x256| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+strix1           | bpe  1| sw 22|  64x64 | {X0, X1, Y0, X2, Y1, Y2, X3, Y3, X5^Y4, X4^Y5, Y5, X5}
+strix1           | bpe  1| sw 24| 256x256| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, X6^Y4^Y6, X4^Y4, X5, X6, Y6, X7, Y7, X5^Y5}
+strix1           | bpe  1| sw 26| 256x256| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7}
+strix1           | bpe  1| sw 27| 256x256| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, X6^Y4^Y6, X4^Y4, X5, X6, Y6, X7, Y7, X5^Y5}
+strix1           | bpe  1| sw 28| 512x512| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, X6^Y4^Y6, X4^Y4, X5, X6, Y6, X7, Y7, X8^Y8, Y8, X5^Y5}
+strix1           | bpe  1| sw 30| 512x512| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, X5^Y4, X4^Y5, Y5, X5, Y6, X6, Y7, X7, Y8, X8}
+strix1           | bpe  1| sw 31| 512x512| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, X6^Y4^Y6, X4^Y4, X5, X6, Y6, X7, Y7, X8^Y8, Y8, X5^Y5}
+strix1           | bpe  2| sw  0| 128x1  | {0, X0, X1, X2, X3, X4, X5, X6}
+strix1           | bpe  2| sw  2|  16x8  | {0, X0, Y0, X1, Y1, X2, Y2, X3}
+strix1           | bpe  2| sw  6|  64x32 | {0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, Y4, X5}
+strix1           | bpe  2| sw 10| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+strix1           | bpe  2| sw 18| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+strix1           | bpe  2| sw 22|  64x32 | {0, X0, Y0, X1, Y1, X2, Y2, X3, X5^Y3, X4^Y4, Y4, X5}
+strix1           | bpe  2| sw 24| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, X6^Y4^Y6, X4^Y4, Y3, X5, X6, Y6, X7, X5^Y5}
+strix1           | bpe  2| sw 26| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7}
+strix1           | bpe  2| sw 27| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, X6^Y4^Y6, X4^Y4, Y3, X5, X6, Y6, X7, X5^Y5}
+strix1           | bpe  2| sw 28| 512x256| {0, X0, Y0, X1, Y1, X2, Y2, X3, X6^Y4^Y6, X4^Y4, Y3, X5, X6, Y6, X7, X8^Y7, X8, X5^Y5}
+strix1           | bpe  2| sw 30| 512x256| {0, X0, Y0, X1, Y1, X2, Y2, X3, X5^Y3, X4^Y4, Y4, X5, Y5, X6, Y6, X7, Y7, X8}
+strix1           | bpe  2| sw 31| 512x256| {0, X0, Y0, X1, Y1, X2, Y2, X3, X6^Y4^Y6, X4^Y4, Y3, X5, X6, Y6, X7, X8^Y7, X8, X5^Y5}
+strix1           | bpe  4| sw  0|  64x1  | {0, 0, X0, X1, X2, X3, X4, X5}
+strix1           | bpe  4| sw  2|   8x8  | {0, 0, X0, Y0, X1, Y1, X2, Y2}
+strix1           | bpe  4| sw  6|  32x32 | {0, 0, X0, Y0, X1, Y1, X2, Y2, Y3, X3, Y4, X4}
+strix1           | bpe  4| sw 10| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+strix1           | bpe  4| sw 18| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+strix1           | bpe  4| sw 22|  32x32 | {0, 0, X0, Y0, X1, Y1, X2, Y2, X4^Y3, X3^Y4, Y4, X4}
+strix1           | bpe  4| sw 24| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, X6^Y4^Y6, X4^Y4, X3, Y3, X5, X6, Y6, X5^Y5}
+strix1           | bpe  4| sw 26| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6}
+strix1           | bpe  4| sw 27| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, X6^Y4^Y6, X4^Y4, X3, Y3, X5, X6, Y6, X5^Y5}
+strix1           | bpe  4| sw 28| 256x256| {0, 0, X0, Y0, X1, Y1, X2, Y2, X6^Y4^Y6, X4^Y4, X3, Y3, X5, X6, Y6, X7^Y7, Y7, X5^Y5}
+strix1           | bpe  4| sw 30| 256x256| {0, 0, X0, Y0, X1, Y1, X2, Y2, X4^Y3, X3^Y4, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+strix1           | bpe  4| sw 31| 256x256| {0, 0, X0, Y0, X1, Y1, X2, Y2, X6^Y4^Y6, X4^Y4, X3, Y3, X5, X6, Y6, X7^Y7, Y7, X5^Y5}
+strix1           | bpe  8| sw  0|  32x1  | {0, 0, 0, X0, X1, X2, X3, X4}
+strix1           | bpe  8| sw  2|   8x4  | {0, 0, 0, X0, Y0, X1, X2, Y1}
+strix1           | bpe  8| sw  6|  32x16 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4}
+strix1           | bpe  8| sw 10| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+strix1           | bpe  8| sw 18| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+strix1           | bpe  8| sw 22|  32x16 | {0, 0, 0, X0, Y0, X1, X2, Y1, X4^Y2, X3^Y3, Y3, X4}
+strix1           | bpe  8| sw 24| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X6^Y4, X4^Y4, Y2, X3, Y3, X5, X6, X5^Y5}
+strix1           | bpe  8| sw 26| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6}
+strix1           | bpe  8| sw 27| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, X6^Y4, X4^Y4, Y2, X3, Y3, X5, X6, X5^Y5}
+strix1           | bpe  8| sw 28| 256x128| {0, 0, 0, X0, Y0, X1, X2, Y1, X6^Y4^Y6, X4^Y4, Y2, X3, Y3, X5, X6, X7^Y6, X7, X5^Y5}
+strix1           | bpe  8| sw 30| 256x128| {0, 0, 0, X0, Y0, X1, X2, Y1, X4^Y2, X3^Y3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+strix1           | bpe  8| sw 31| 256x128| {0, 0, 0, X0, Y0, X1, X2, Y1, X6^Y4^Y6, X4^Y4, Y2, X3, Y3, X5, X6, X7^Y6, X7, X5^Y5}
+strix1           | bpe 16| sw  0|  16x1  | {0, 0, 0, 0, X0, X1, X2, X3}
+strix1           | bpe 16| sw  2|   4x4  | {0, 0, 0, 0, X0, Y0, X1, Y1}
+strix1           | bpe 16| sw  6|  16x16 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3}
+strix1           | bpe 16| sw 10|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5}
+strix1           | bpe 16| sw 18|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^Y2, X2^Y3, Y3, X3, Y4, X4, Y5, X5}
+strix1           | bpe 16| sw 22|  16x16 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^Y2, X2^Y3, Y3, X3}
+strix1           | bpe 16| sw 26|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, X3^Y2, X2^Y3, Y3, X3, Y4, X4, Y5, X5}
+strix1           | bpe 16| sw 27|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y4, X4^Y4, X2, Y2, X3, Y3, X5, X5^Y5}
+strix1           | bpe 16| sw 30| 128x128| {0, 0, 0, 0, X0, Y0, X1, Y1, X3^Y2, X2^Y3, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+strix1           | bpe 16| sw 31| 128x128| {0, 0, 0, 0, X0, Y0, X1, Y1, X6^Y4^Y6, X4^Y4, X2, Y2, X3, Y3, X5, X6^Y6, Y6, X5^Y5}
+gfx1201          | bpe  1| sw  0| 256x1  | {X0, X1, X2, X3, X4, X5, X6, X7}
+gfx1201          | bpe  1| sw  1|  16x16 | {X0, X1, Y0, X2, Y1, Y2, X3, Y3}
+gfx1201          | bpe  1| sw  2|  64x64 | {X0, X1, Y0, X2, Y1, Y2, X3, Y3, Y4, X4, Y5, X5}
+gfx1201          | bpe  1| sw  3| 256x256| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+gfx1201          | bpe  1| sw  4| 512x512| {X0, X1, Y0, X2, Y1, Y2, X3, Y3, Y4, X4, Y5, X5, Y6, X6, Y7, X7, Y8, X8}
+gfx1201          | bpe  2| sw  0| 128x1  | {0, X0, X1, X2, X3, X4, X5, X6}
+gfx1201          | bpe  2| sw  1|  16x8  | {0, X0, Y0, X1, Y1, X2, Y2, X3}
+gfx1201          | bpe  2| sw  2|  64x32 | {0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, Y4, X5}
+gfx1201          | bpe  2| sw  3| 256x128| {0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+gfx1201          | bpe  2| sw  4| 512x256| {0, X0, Y0, X1, Y1, X2, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7, Y7, X8}
+gfx1201          | bpe  4| sw  0|  64x1  | {0, 0, X0, X1, X2, X3, X4, X5}
+gfx1201          | bpe  4| sw  1|   8x8  | {0, 0, X0, Y0, X1, Y1, X2, Y2}
+gfx1201          | bpe  4| sw  2|  32x32 | {0, 0, X0, Y0, X1, Y1, X2, Y2, Y3, X3, Y4, X4}
+gfx1201          | bpe  4| sw  3| 128x128| {0, 0, X0, Y0, X1, Y1, X2, Y2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}
+gfx1201          | bpe  4| sw  4| 256x256| {0, 0, X0, Y0, X1, Y1, X2, Y2, Y3, X3, Y4, X4, Y5, X5, Y6, X6, Y7, X7}
+gfx1201          | bpe  8| sw  0|  32x1  | {0, 0, 0, X0, X1, X2, X3, X4}
+gfx1201          | bpe  8| sw  1|   8x4  | {0, 0, 0, X0, Y0, X1, X2, Y1}
+gfx1201          | bpe  8| sw  2|  32x16 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4}
+gfx1201          | bpe  8| sw  3| 128x64 | {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6}
+gfx1201          | bpe  8| sw  4| 256x128| {0, 0, 0, X0, Y0, X1, X2, Y1, Y2, X3, Y3, X4, Y4, X5, Y5, X6, Y6, X7}
+gfx1201          | bpe 16| sw  0|  16x1  | {0, 0, 0, 0, X0, X1, X2, X3}
+gfx1201          | bpe 16| sw  1|   4x4  | {0, 0, 0, 0, X0, Y0, X1, Y1}
+gfx1201          | bpe 16| sw  2|  16x16 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3}
+gfx1201          | bpe 16| sw  3|  64x64 | {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5}
+gfx1201          | bpe 16| sw  4| 128x128| {0, 0, 0, 0, X0, Y0, X1, Y1, Y2, X2, Y3, X3, Y4, X4, Y5, X5, Y6, X6}

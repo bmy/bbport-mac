@@ -1,0 +1,352 @@
+/*
+ * Copyright © 2012 Rob Clark <robclark@freedesktop.org>
+ * SPDX-License-Identifier: MIT
+ *
+ * Authors:
+ *    Rob Clark <robclark@freedesktop.org>
+ *    Jonathan Marek <jonathan@marek.ca>
+ */
+
+#include "nir/tgsi_to_nir.h"
+#include "pipe/p_state.h"
+#include "tgsi/tgsi_dump.h"
+#include "util/format/u_format.h"
+#include "util/u_inlines.h"
+#include "util/u_memory.h"
+#include "util/u_string.h"
+
+#include "freedreno_program.h"
+
+#include "ir2/instr-a2xx.h"
+#include "fd2_context.h"
+#include "fd2_program.h"
+#include "fd2_texture.h"
+#include "fd2_util.h"
+#include "ir2.h"
+
+static void
+fd2_shader_state_delete(struct pipe_context *pctx, void *hwcso)
+{
+   struct fd2_shader_stateobj *so = hwcso;
+   if (!so)
+      return;
+   ralloc_free(so->nir);
+   for (int i = 0; i < ARRAY_SIZE(so->variant); i++)
+      free(so->variant[i].info.dwords);
+   free(so);
+}
+
+static void
+emit(struct fd_ringbuffer *ring, mesa_shader_stage type,
+     struct ir2_shader_info *info, struct util_dynarray *patches)
+{
+   unsigned i;
+
+   assert(info->sizedwords);
+
+   OUT_PKT3(ring, CP_IM_LOAD_IMMEDIATE, 2 + info->sizedwords);
+   OUT_RING(ring, type == MESA_SHADER_FRAGMENT);
+   OUT_RING(ring, info->sizedwords);
+
+   if (patches) {
+      util_dynarray_append(patches, &ring->cur[info->mem_export_ptr]);
+   }
+
+   for (i = 0; i < info->sizedwords; i++)
+      OUT_RING(ring, info->dwords[i]);
+}
+
+static unsigned
+ir2_glsl_type_size(const struct glsl_type *type, bool bindless)
+{
+   return glsl_count_attribute_slots(type, false);
+}
+
+static void *
+fd2_shader_state_create(struct pipe_context *pctx,
+                        const struct pipe_shader_state *cso)
+{
+   struct fd2_shader_stateobj *so = CALLOC_STRUCT(fd2_shader_stateobj);
+   if (!so)
+      return NULL;
+
+   so->nir = (cso->type == PIPE_SHADER_IR_NIR)
+                ? cso->ir.nir
+                : tgsi_to_nir(cso->tokens, pctx->screen, false);
+   so->type = so->nir->info.stage;
+   so->is_a20x = is_a20x(fd_context(pctx)->screen);
+
+   /* TGSI still arrives as IO variables, GLSL is lowered by the state
+    * tracker because we ask for nir_io_has_intrinsics
+    */
+   if (!so->nir->info.io_lowered) {
+      NIR_PASS(_, so->nir, nir_lower_io, nir_var_shader_in | nir_var_shader_out,
+                 ir2_glsl_type_size, 0);
+      /* nir_lower_io leaves the derefs behind, so they have to be dropped
+       * before the variables they reference can be
+       */
+      NIR_PASS(_, so->nir, nir_opt_dce);
+      NIR_PASS(_, so->nir, nir_remove_dead_variables,
+               nir_var_shader_in | nir_var_shader_out,
+               &(nir_remove_dead_variables_options){});
+      so->nir->info.io_lowered = true;
+   }
+
+   if (ir2_optimize_nir(so->nir, true))
+      goto fail;
+
+   so->first_immediate = so->nir->num_uniforms;
+
+   nir_foreach_function_impl (impl, so->nir) {
+      nir_foreach_block (block, impl) {
+         nir_foreach_instr (instr, block) {
+            if (instr->type != nir_instr_type_tex)
+               continue;
+
+            nir_tex_instr *tex = nir_instr_as_tex(instr);
+            if (tex->op == nir_texop_txl)
+               so->tex_lod_samplers |= BITFIELD_BIT(tex->sampler_index);
+         }
+      }
+   }
+
+   ir2_compile(so, 0, NULL);
+
+   /* Free FS NIR now.  VS NIR will need to stick around for the draw variant
+    * later.
+    */
+   if (so->nir->info.stage == MESA_SHADER_FRAGMENT) {
+      ralloc_free(so->nir);
+      so->nir = NULL;
+   }
+
+   return so;
+
+fail:
+   fd2_shader_state_delete(pctx, so);
+   return NULL;
+}
+
+static void
+patch_vtx_fetch(struct fd_context *ctx, struct pipe_vertex_element *elem,
+                instr_fetch_vtx_t *instr, uint16_t dst_swiz) assert_dt
+{
+   struct surface_format fmt = fd2_pipe2surface(elem->src_format);
+
+   instr->dst_swiz = fd2_vtx_swiz(elem->src_format, dst_swiz);
+   instr->format_comp_all = fmt.sign == SQ_TEX_SIGN_SIGNED;
+   instr->num_format_all = fmt.num_format;
+   instr->format = fmt.format;
+   instr->exp_adjust_all = fmt.exp_adjust;
+   instr->stride = elem->src_stride;
+   instr->offset = elem->src_offset;
+}
+
+static void
+patch_fetches(struct fd_context *ctx, struct ir2_shader_info *info,
+              struct fd_vertex_stateobj *vtx,
+              struct fd_texture_stateobj *tex) assert_dt
+{
+   for (int i = 0; i < info->num_fetch_instrs; i++) {
+      struct ir2_fetch_info *fi = &info->fetch_info[i];
+
+      instr_fetch_t *instr = (instr_fetch_t *)&info->dwords[fi->offset];
+      if (instr->opc == VTX_FETCH) {
+         unsigned idx =
+            (instr->vtx.const_index - 20) * 3 + instr->vtx.const_index_sel;
+         patch_vtx_fetch(ctx, &vtx->pipe[idx], &instr->vtx, fi->vtx.dst_swiz);
+         continue;
+      }
+
+      assert(instr->opc == TEX_FETCH);
+      instr->tex.const_idx = fd2_get_const_idx(ctx, tex, fi->tex.samp_id);
+      instr->tex.src_swiz = fi->tex.src_swiz;
+   }
+}
+
+static uint16_t
+tex_mag_switchover(struct fd_context *ctx, struct fd2_shader_stateobj *so)
+   assert_dt
+{
+   struct fd_texture_stateobj *tex = &ctx->tex[so->type];
+   uint16_t mask = 0;
+
+   if (!fd2_context(ctx)->mag_switchover_half)
+      return 0;
+
+   u_foreach_bit (i, so->tex_lod_samplers & tex->valid_samplers) {
+      const struct pipe_sampler_state *ss = tex->samplers[i];
+
+      /* the switch-over is decided on the biased and clamped lod */
+      if (ss->lod_bias != 0.0f || ss->min_lod > 0.0f)
+         continue;
+
+      if (ss->min_img_filter == PIPE_TEX_FILTER_NEAREST &&
+          ss->mag_img_filter == PIPE_TEX_FILTER_LINEAR &&
+          ss->min_mip_filter != PIPE_TEX_MIPFILTER_NONE)
+         mask |= BITFIELD_BIT(i);
+   }
+
+   return mask;
+}
+
+void
+fd2_program_emit(struct fd_context *ctx, struct fd_ringbuffer *ring,
+                 struct fd_program_stateobj *prog)
+{
+   struct fd2_shader_stateobj *fp = NULL, *vp;
+   struct ir2_shader_info *fpi, *vpi;
+   struct ir2_frag_linkage *f;
+   uint8_t vs_gprs, fs_gprs = 0, vs_export = 0;
+   enum a2xx_sq_ps_vtx_mode mode = POSITION_1_VECTOR;
+   bool binning = (ctx->batch && ring == ctx->batch->binning);
+   unsigned variant;
+   uint16_t switchover;
+
+   vp = prog->vs;
+   if (!binning)
+      fp = prog->fs;
+
+   switchover = tex_mag_switchover(ctx, vp);
+
+   /* find variant matching the linked fragment shader */
+   for (variant = 0; variant < ARRAY_SIZE(vp->variant); variant++) {
+      struct ir2_shader_variant *v = &vp->variant[variant];
+
+      /* if checked all variants, compile a new variant */
+      if (!v->info.sizedwords) {
+         v->tex_mag_switchover = switchover;
+         ir2_compile(vp, variant, fp);
+         break;
+      }
+
+      if (v->binning != binning || v->tex_mag_switchover != switchover)
+         continue;
+
+      /* check if fragment shader linkage matches */
+      if (binning ||
+          !memcmp(&v->f, &fp->variant[0].f, sizeof(struct ir2_frag_linkage)))
+         break;
+   }
+
+   /* keying on the sampler filters as well as the fragment linkage means the
+    * variants can run out, so recompile over the last one rather than walk
+    * off the end of the array
+    */
+   if (variant == ARRAY_SIZE(vp->variant)) {
+      variant--;
+      free(vp->variant[variant].info.dwords);
+      memset(&vp->variant[variant], 0, sizeof(vp->variant[variant]));
+      vp->variant[variant].tex_mag_switchover = switchover;
+      ir2_compile(vp, variant, fp);
+   }
+
+   vpi = &vp->variant[variant].info;
+   fpi = &fp->variant[0].info;
+   f = &fp->variant[0].f;
+
+   /* clear/gmem2mem/mem2gmem need to be changed to remove this condition */
+   if (prog != &ctx->solid_prog && prog != &ctx->blit_prog[0]) {
+      patch_fetches(ctx, vpi, ctx->vtx.vtx, &ctx->tex[MESA_SHADER_VERTEX]);
+      if (fp)
+         patch_fetches(ctx, fpi, NULL, &ctx->tex[MESA_SHADER_FRAGMENT]);
+   }
+
+   emit(ring, MESA_SHADER_VERTEX, vpi,
+        binning ? &ctx->batch->shader_patches : NULL);
+
+   if (fp) {
+      emit(ring, MESA_SHADER_FRAGMENT, fpi, NULL);
+      fs_gprs = (fpi->max_reg < 0) ? 0x80 : fpi->max_reg;
+      vs_export = MAX2(1, f->inputs_count) - 1;
+   }
+
+   vs_gprs = (vpi->max_reg < 0) ? 0x80 : vpi->max_reg;
+
+   if (vp->writes_psize && !binning)
+      mode = POSITION_2_VECTORS_SPRITE;
+
+   /* set register to use for param (fragcoord/pointcoord/frontfacing) */
+   OUT_PKT3(ring, CP_SET_CONSTANT, 2);
+   OUT_RING(ring, CP_REG(REG_A2XX_SQ_CONTEXT_MISC));
+   OUT_RING(ring,
+            A2XX_SQ_CONTEXT_MISC_SC_SAMPLE_CNTL(CENTERS_ONLY) |
+               COND(fp, A2XX_SQ_CONTEXT_MISC_PARAM_GEN_POS(f->inputs_count)) |
+               /* we need SCREEN_XY for both fragcoord and frontfacing */
+               A2XX_SQ_CONTEXT_MISC_SC_OUTPUT_SCREEN_XY);
+
+   OUT_PKT3(ring, CP_SET_CONSTANT, 2);
+   OUT_RING(ring, CP_REG(REG_A2XX_SQ_PROGRAM_CNTL));
+   OUT_RING(ring,
+            A2XX_SQ_PROGRAM_CNTL_PS_EXPORT_MODE(2) |
+               A2XX_SQ_PROGRAM_CNTL_VS_EXPORT_MODE(mode) |
+               A2XX_SQ_PROGRAM_CNTL_VS_RESOURCE |
+               A2XX_SQ_PROGRAM_CNTL_PS_RESOURCE |
+               A2XX_SQ_PROGRAM_CNTL_VS_EXPORT_COUNT(vs_export) |
+               A2XX_SQ_PROGRAM_CNTL_PS_REGS(fs_gprs) |
+               A2XX_SQ_PROGRAM_CNTL_VS_REGS(vs_gprs) |
+               COND(fp && fp->need_param, A2XX_SQ_PROGRAM_CNTL_PARAM_GEN) |
+               COND(!fp, A2XX_SQ_PROGRAM_CNTL_GEN_INDEX_VTX));
+}
+
+void
+fd2_prog_init(struct pipe_context *pctx)
+{
+   struct fd_context *ctx = fd_context(pctx);
+   struct fd_program_stateobj *prog;
+   struct fd2_shader_stateobj *so;
+   struct ir2_shader_info *info;
+   instr_fetch_vtx_t *instr;
+
+   pctx->create_fs_state = fd2_shader_state_create;
+   pctx->delete_fs_state = fd2_shader_state_delete;
+
+   pctx->create_vs_state = fd2_shader_state_create;
+   pctx->delete_vs_state = fd2_shader_state_delete;
+
+   fd_prog_init(pctx);
+
+   /* XXX maybe its possible to reuse patch_vtx_fetch somehow? */
+
+   prog = &ctx->solid_prog;
+   so = prog->vs;
+   ir2_compile(prog->vs, 1, prog->fs);
+
+#define IR2_FETCH_SWIZ_XY01 0xb08
+#define IR2_FETCH_SWIZ_XYZ1 0xa88
+
+   info = &so->variant[1].info;
+
+   instr = (instr_fetch_vtx_t *)&info->dwords[info->fetch_info[0].offset];
+   instr->const_index = 26;
+   instr->const_index_sel = 0;
+   instr->format = FMT_32_32_32_FLOAT;
+   instr->format_comp_all = false;
+   instr->stride = 12;
+   instr->num_format_all = true;
+   instr->dst_swiz = IR2_FETCH_SWIZ_XYZ1;
+
+   prog = &ctx->blit_prog[0];
+   so = prog->vs;
+   ir2_compile(prog->vs, 1, prog->fs);
+
+   info = &so->variant[1].info;
+
+   instr = (instr_fetch_vtx_t *)&info->dwords[info->fetch_info[0].offset];
+   instr->const_index = 26;
+   instr->const_index_sel = 1;
+   instr->format = FMT_32_32_FLOAT;
+   instr->format_comp_all = false;
+   instr->stride = 8;
+   instr->num_format_all = false;
+   instr->dst_swiz = IR2_FETCH_SWIZ_XY01;
+
+   instr = (instr_fetch_vtx_t *)&info->dwords[info->fetch_info[1].offset];
+   instr->const_index = 26;
+   instr->const_index_sel = 0;
+   instr->format = FMT_32_32_32_FLOAT;
+   instr->format_comp_all = false;
+   instr->stride = 12;
+   instr->num_format_all = false;
+   instr->dst_swiz = IR2_FETCH_SWIZ_XYZ1;
+}

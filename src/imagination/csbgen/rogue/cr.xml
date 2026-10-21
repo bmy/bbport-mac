@@ -1,0 +1,1409 @@
+<?xml version="1.0" ?>
+
+<!--
+Copyright © 2022 Imagination Technologies Ltd.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice (including the next
+paragraph) shall be included in all copies or substantial portions of the
+Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+-->
+
+<csbgen name="ROGUE" prefix="CR">
+
+  <define name="PM_VHEAP_TABLE_SIZE" value="0x180">
+    <doc>Size of the PM virtual heap table in DWords.</doc>
+  </define>
+
+  <enum name="CDM_ITEM_MODE">
+    <value name="FORCE_LINEAR" value="0"/>
+    <value name="2D_MORTON"    value="1"/>
+    <value name="3D_MORTON"    value="2"/>
+  </enum>
+
+  <enum name="COMP_IADDR_TYPE">
+    <doc>Compressor indirect addressing mode.</doc>
+    <value name="INDIRECT_1TILE" value="0"/>
+    <value name="INDIRECT_4TILE" value="1"/>
+  </enum>
+
+  <enum name="COMPRESS_SIZE">
+    <doc>Compressor block size extension bit.</doc>
+    <value name="BLOCK_8X8"  value="0"/>
+    <value name="BLOCK_16X4" value="1"/>
+  </enum>
+
+  <enum name="DIR_TYPE">
+    <value name="TL2BR" value="0">
+      <doc>Top-left to bottom-right.</doc>
+    </value>
+    <value name="TR2BL" value="1">
+      <doc>Top-right to bottom-left.</doc>
+    </value>
+    <value name="BL2TR" value="2">
+      <doc>Bottom-left to top-right.</doc>
+    </value>
+    <value name="BR2TL" value="3">
+      <doc>Bottom-right to top-left.</doc>
+    </value>
+  </enum>
+
+  <enum name="ISP_AA_MODE_TYPE">
+    <value name="AA_NONE" value="0">
+      <doc>Enable no anti-aliasing.</doc>
+    </value>
+    <value name="AA_2X"   value="1">
+      <doc>Enable 2x anti-aliasing.</doc>
+    </value>
+    <value name="AA_4X"   value="2">
+      <doc>Enable 4x anti-aliasing.</doc>
+    </value>
+    <value name="AA_8X"   value="3">
+      <doc>Enable 8x anti-aliasing.</doc>
+    </value>
+  </enum>
+
+  <enum name="ISP_RENDER_MODE_TYPE">
+    <value name="NORM"       value="0">
+      <doc>Normal render.</doc>
+    </value>
+    <value name="FAST_2D"    value="2">
+      <doc>Fast 2D render.</doc>
+    </value>
+    <value name="FAST_SCALE" value="3">
+      <doc>Fast scale render.</doc>
+    </value>
+  </enum>
+
+  <enum name="MEMLAYOUT">
+    <doc>Sets the memory layout.</doc>
+    <value name="LINEAR"     value="0"/>
+    <value name="TWIDDLE_2D" value="1"/>
+    <value name="TWIDDLE_3D" value="2"/>
+    <value name="TILED"      value="3"/>
+  </enum>
+
+  <enum name="PIPE_NUM">
+    <value name="PIPE_ONE"      value="0">
+      <doc>Rel 1,2: 1 Tile In Flight, others 1 tile-in-flight, for 1 cluster group.</doc>
+    </value>
+    <value name="PIPE_TWO"      value="1">
+      <doc>Rel 1,2: 2 Tiles In Flight, others 1 tile-in-flight, for 2 cluster group.</doc>
+    </value>
+    <value name="PIPE_THREE"    value="2">
+      <doc>Rel 1,2: 3 Tiles In Flight, others 2 tiles-in-flight, for 1 cluster group.</doc>
+    </value>
+    <value name="PIPE_FOUR"     value="3">
+      <doc>2 tiles-in-flight, for 2 cluster group.</doc>
+    </value>
+    <value name="PIPE_FIVE"     value="4">
+      <doc>3 tiles-in-flight, for 1 cluster group.</doc>
+    </value>
+    <value name="PIPE_SIX"      value="5">
+      <doc>3 tiles-in-flight, for 2 cluster group.</doc>
+    </value>
+    <value name="PIPE_SEVEN"    value="6">
+      <doc>4 tiles-in-flight, for 1 cluster group.</doc>
+    </value>
+    <value name="PIPE_EIGHT"    value="7">
+      <doc>4 tiles-in-flight, for 2 cluster group.</doc>
+    </value>
+    <value name="PIPE_NINE"     value="8">
+      <doc>5 tiles-in-flight, for 1 cluster group.</doc>
+    </value>
+    <value name="PIPE_TEN"      value="9">
+      <doc>5 tiles-in-flight, for 2 cluster group.</doc>
+    </value>
+    <value name="PIPE_ELEVEN"   value="10">
+      <doc>6 tiles-in-flight, for 1 cluster group.</doc>
+    </value>
+    <value name="PIPE_TWELVE"   value="11">
+      <doc>6 tiles-in-flight, for 2 cluster group.</doc>
+    </value>
+    <value name="PIPE_THIRTEEN" value="12">
+      <doc>7 tiles-in-flight, for 1 cluster group.</doc>
+    </value>
+    <value name="PIPE_FOURTEEN" value="13">
+      <doc>7 tiles-in-flight, for 2 cluster group.</doc>
+    </value>
+    <value name="PIPE_FIFTEEN"  value="14">
+      <doc>8 tiles-in-flight, for 1 cluster group.</doc>
+    </value>
+    <value name="PIPE_SIXTEEN"  value="15">
+      <doc>8 tiles-in-flight, for 2 cluster group.</doc>
+    </value>
+  </enum>
+
+  <enum name="PIXEL_WIDTH">
+    <value name="2REGISTERS" value="0"/>
+    <value name="4REGISTERS" value="1"/>
+    <value name="8REGISTERS" value="2"/>
+    <value name="1REGISTER"  value="3"/>
+  </enum>
+
+  <enum name="ROTATION_TYPE">
+    <doc>Sets the rotation.</doc>
+    <value name="0_DEG"   value="0"/>
+    <value name="90_DEG"  value="1"/>
+    <value name="180_DEG" value="2"/>
+    <value name="270_DEG" value="3"/>
+  </enum>
+
+  <enum name="SIZE">
+    <doc>Size of twiddled render in pixel units.</doc>
+    <value name="1_PIXEL"   value="0"/>
+    <value name="2_PIXEL"   value="1"/>
+    <value name="4_PIXEL"   value="2"/>
+    <value name="8_PIXEL"   value="3"/>
+    <value name="16_PIXEL"  value="4"/>
+    <value name="32_PIXEL"  value="5"/>
+    <value name="64_PIXEL"  value="6"/>
+    <value name="128_PIXEL" value="7"/>
+    <value name="256_PIXEL" value="8"/>
+    <value name="512_PIXEL" value="9"/>
+    <value name="1K_PIXEL"  value="10"/>
+    <value name="2K_PIXEL"  value="11"/>
+    <value name="4K_PIXEL"  value="12"/>
+    <value name="8K_PIXEL"  value="13"/>
+    <value name="16K_PIXEL" value="14"/>
+  </enum>
+
+  <enum name="SWIZ">
+    <doc>Sets the swizzle.</doc>
+    <value name="SOURCE_CHAN0" value="0">
+      <doc>Indicates source channel0 goes to this destination channel.</doc>
+    </value>
+    <value name="SOURCE_CHAN1" value="1">
+      <doc>Indicates source channel1 goes to this destination channel.</doc>
+    </value>
+    <value name="SOURCE_CHAN2" value="2">
+      <doc>Indicates source channel2 goes to this destination channel.</doc>
+    </value>
+    <value name="SOURCE_CHAN3" value="3">
+      <doc>Indicates source channel3 goes to this destination channel.</doc>
+    </value>
+    <value name="ONE"          value="4">
+      <doc>Send a value of 1 to this destination channel.</doc>
+    </value>
+    <value name="ZERO"         value="5">
+      <doc>Send a value of 0 to this destination channel.</doc>
+    </value>
+  </enum>
+
+  <enum name="TFBC_LOSSY">
+    <doc>Sets the lossy bit for frame buffer compression.</doc>
+    <value name="LOSSLESS" value="0"/>
+    <value name="LOSSY_75" value="1"/>
+    <value name="LOSSY_50" value="2"/>
+    <value name="LOSSY_25" value="3"/>
+  </enum>
+
+  <enum name="TWOCOMP_GAMMA">
+    <doc>Sets the gamma mode for 2 component textures.</doc>
+    <value name="GAMMA_BOTTOM_CHANNEL" value="0"/>
+    <value name="GAMMA_BOTH_CHANNELS"  value="1"/>
+  </enum>
+
+  <enum name="ZLS_FORMAT_TYPE">
+    <!-- Separate depth and stencil -->
+    <value name="F32Z"     value="0">
+      <doc>31-bit IEEE SP Float + 1-bit mask.</doc>
+    </value>
+    <!-- Packed depth and stencil -->
+    <value name="24BITINT" value="1">
+      <doc>24-bit Integer + 8-bit Stencil.</doc>
+    </value>
+    <!-- Separate depth and stencil -->
+    <value name="16BITINT" value="2">
+      <doc>16-bit Integer + 8-bit Stencil.</doc>
+    </value>
+    <!-- Packed depth and stencil -->
+    <value name="F64Z"     value="3">
+      <doc>31-bit IEEE SP Float + 1-bit mask + 8-bit Stencil + 24-bit '0's.</doc>
+    </value>
+  </enum>
+
+  <struct name="PM_MTILE_ARRAY" length="2">
+    <doc>Effective immediately.</doc>
+    <field name="base_addr" start="4" end="39" shift="4" type="address">
+      <doc>1TB Addressable, 128-bits aligned Base Address for Mtile Array Base.</doc>
+    </field>
+  </struct>
+
+  <struct name="PM_VHEAP_TABLE" length="2">
+    <doc>Effective immediately, this register defines the base address of the virtual heap table information. The size of the Virtual Heap needs to be no smaller than PM_VHEAP_TABLE_SIZE DWords.</doc>
+    <field name="base_addr" start="4" end="39" shift="4" type="address">
+      <doc>1TB Addressable, 128-bits aligned Base Address for Virtual Heap Table.</doc>
+    </field>
+  </struct>
+
+  <struct name="PM_MLIST0_BASE" length="2">
+    <doc>This register defines the base address of the MMU list 0 for the MMU pages, the stride has to be 64KBytes.</doc>
+    <field name="addr" start="4" end="39" shift="4" type="address">
+      <doc>1TB Addressable, 128-bits aligned Base Address for MMU list0 module. Effective immediately.</doc>
+    </field>
+  </struct>
+
+  <struct name="VDM_CTRL_STREAM_BASE" length="2">
+    <doc>The base address of the Vertex Data Master's Input Parameter Control Stream in external memory.</doc>
+    <field name="addr" start="2" end="39" shift="2" type="address">
+      <doc>1TB range, 32-bit aligned base address.</doc>
+    </field>
+  </struct>
+
+  <struct name="VDM_CALL_STACK_POINTER" length="2">
+    <doc>The pointer to the control stream call stack.
+
+    The current pointer within the VDM's call stack in external memory. The call stack is used whenever a call is made to another control stream, to store the return address (location in current control stream). This register should be programmed before each TA which uses a call stack. This register needs to be saved/restored for each context.</doc>
+    <field name="addr" start="3" end="39" shift="3" type="address">
+      <doc>1TB range, 64-bit aligned base address.</doc>
+    </field>
+  </struct>
+
+  <struct name="VDM_CONTEXT_STATE_BASE" length="2">
+    <doc>The base address in external memory of the VDM's context state buffer. On a context store the VDM will store its state to this address, and reload it on a context resume. The size and format of the data written is defined in the LLS section of the TRM. This register must be programmed before initiating a context store by writing to VDM_CONTEXT_STORE_START_PULSE.
+  </doc>
+  <field name="addr" start="4" end="39" shift="4" type="address">
+    <doc>1TB range, 128-bit aligned base address.</doc>
+  </field>
+  </struct>
+
+  <struct name="VDM_CONTEXT_STORE_TASK0" length="2">
+    <doc>These words define the PDS State Update task which will be inserted into the VDM pipeline on a context store operation. This register must be programmed before writing to VDM_CONTEXT_STORE_START_PULSE.</doc>
+    <field name="pds_state1" start="32" end="63" type="uint"/>
+    <field name="pds_state0" start="0" end="31" type="uint"/>
+  </struct>
+
+  <struct name="VDM_CONTEXT_STORE_TASK1" length="1">
+    <doc>This word defines the PDS State Update task which will be inserted into the VDM pipeline on a context store operation. This register must be programmed before writing to VDM_CONTEXT_STORE_START_PULSE.</doc>
+    <field name="pds_state2" start="0" end="31" type="uint"/>
+  </struct>
+
+  <struct name="VDM_CONTEXT_STORE_TASK2" length="2">
+    <doc>These words defines the Stream Out Sync program which will be inserted into the VDM pipeline as a PPP State Update on a context store operation. This register must be programmed before writing to VDM_CONTEXT_STORE_START_PULSE.</doc>
+    <field name="stream_out2" start="32" end="63" type="uint"/>
+    <field name="stream_out1" start="0" end="31" type="uint"/>
+  </struct>
+
+  <struct name="VDM_CONTEXT_RESUME_TASK0" length="2">
+    <doc>These words define the PDS State Update task which will be written by the VDM to its context resume control stream on a context store operation. This register must be programmed before writing to VDM_CONTEXT_STORE_START_PULSE.</doc>
+    <field name="pds_state1" start="32" end="63" type="uint"/>
+    <field name="pds_state0" start="0" end="31" type="uint"/>
+  </struct>
+
+  <struct name="VDM_CONTEXT_RESUME_TASK1" length="1">
+    <doc>This word defines the PDS State Update task which will be written by the VDM to its context resume control stream on a context store operation. This register must be programmed before writing to VDM_CONTEXT_STORE_START_PULSE.</doc>
+    <field name="pds_state2" start="0" end="31" type="uint"/>
+  </struct>
+
+  <struct name="VDM_CONTEXT_RESUME_TASK2" length="2">
+    <doc>These words defines the Stream Out Sync program which will be written, as a PPP State Update, by the VDM to its context resume control stream on a context store operation. This register must be programmed before writing to VDM_CONTEXT_STORE_START_PULSE.</doc>
+    <field name="stream_out2" start="32" end="63" type="uint"/>
+    <field name="stream_out1" start="0" end="31" type="uint"/>
+  </struct>
+
+  <struct name="CDM_CONTEXT_STATE_BASE" length="2">
+    <doc>The base address in external memory of the CDM's context state buffer, to which it will store its snapshot state on a context store and from which it will reload on a context resume.</doc>
+    <field name="addr" start="4" end="39" shift="4" type="address">
+      <doc>1TB range, 128-bit aligned base address.</doc>
+    </field>
+  </struct>
+
+  <struct name="CDM_CONTEXT_PDS0" length="2">
+    <doc>This register contains the PDS Code and Data Addresses for the Store/Load Program. This program is sent to PDS on Context Store and Context Load.</doc>
+    <field name="data_addr" start="36" end="63" shift="4" type="address">
+      <doc>PDS Data Address for Store/Load Program, 128-bit aligned.</doc>
+    </field>
+    <field name="code_addr" start="4" end="31" shift="4" type="address">
+      <doc>PDS Code Address for Store/Load Program, 128-bit aligned.</doc>
+    </field>
+  </struct>
+
+  <struct name="CDM_CTRL_STREAM_BASE" length="2">
+    <doc>The base address of the Compute Data Master's Input Parameter Control Stream in external memory.</doc>
+    <field name="addr" start="2" end="39" shift="2" type="address">
+      <doc>1TB range, 32-bit aligned base address.</doc>
+    </field>
+  </struct>
+
+  <struct name="CDM_CONTEXT_PDS1" length="1">
+    <doc>This register contains the PDS Task Data necessary to produce the Store/Load PDS Program Task from CDM to PDS.</doc>
+    <field name="pds_seq_dep" start="29" end="29" type="bool">
+      <doc>PDS Sequential Dependency.</doc>
+    </field>
+    <field name="usc_seq_dep" start="28" end="28" type="bool">
+      <doc>USC Sequential Dependency.</doc>
+    </field>
+    <field name="target" start="27" end="27" type="bool">
+      <doc>USC Target (0=All, 1=Any).</doc>
+    </field>
+    <field name="unified_size" start="21" end="26" type="uint">
+      <doc>Unified Size.</doc>
+    </field>
+    <field name="common_shared" start="20" end="20" type="bool">
+      <doc>PDS Common Store Allocation is Shared Registers.</doc>
+    </field>
+    <field name="common_size" start="11" end="19" type="uint">
+      <doc>PDS Common Size.</doc>
+      <define name="UNIT_SIZE" value="64"/>
+    </field>
+    <field name="temp_size" start="7" end="10" type="uint">
+      <doc>PDS Temp Size.</doc>
+    </field>
+    <field name="data_size" start="1" end="6" type="uint">
+      <doc>PDS Data Size.</doc>
+      <define name="UNIT_SIZE" value="16"/>
+    </field>
+    <field name="fence" start="0" end="0" type="bool">
+      <doc>Fence the Task in the PDS/USC - Set on Store, unset on Load.</doc>
+    </field>
+  </struct>
+
+  <struct name="CDM_TERMINATE_PDS" length="2">
+    <doc>This register contains the PDS Code and Data Addresses for the Terminate Program. This program is sent to PDS on Context Store after the Context Store Program.</doc>
+    <field name="data_addr" start="36" end="63" shift="4" type="address">
+      <doc>PDS Data Address for Terminate Program, 128-bit aligned.</doc>
+    </field>
+    <field name="code_addr" start="4" end="31" shift="4" type="address">
+      <doc>PDS Code Address for Terminate Program, 128-bit aligned.</doc>
+    </field>
+  </struct>
+
+  <struct name="CDM_TERMINATE_PDS1" length="1">
+    <doc>This register contains the PDS Task Data necessary to produce the Context Store Terminate PDS Program Task from CDM to PDS.</doc>
+    <field name="pds_seq_dep" start="29" end="29" type="bool">
+      <doc>PDS Sequential Dependency.</doc>
+    </field>
+    <field name="usc_seq_dep" start="28" end="28" type="bool">
+      <doc>USC Sequential Dependency.</doc>
+    </field>
+    <field name="target" start="27" end="27" type="bool">
+      <doc>USC Target (0=All, 1=Any).</doc>
+    </field>
+    <field name="unified_size" start="21" end="26" type="uint">
+      <doc>Unified Size.</doc>
+    </field>
+    <field name="common_shared" start="20" end="20" type="bool">
+      <doc>PDS Common Store Allocation is Shared Registers.</doc>
+    </field>
+    <field name="common_size" start="11" end="19" type="uint">
+      <doc>PDS Common Size.</doc>
+    </field>
+    <field name="temp_size" start="7" end="10" type="uint">
+      <doc>PDS Temp Size.</doc>
+    </field>
+    <field name="data_size" start="1" end="6" type="uint">
+      <doc>PDS Data Size.</doc>
+    </field>
+    <field name="fence" start="0" end="0" type="bool">
+      <doc>Fence the Task in the PDS/USC - Set on Store Terminate.</doc>
+    </field>
+  </struct>
+
+  <struct name="CDM_CONTEXT_LOAD_PDS0" length="2">
+    <doc>This register contains the PDS Code and Data Addresses for the Store/Load Program. This program is sent to PDS on Context Store and Context Load.</doc>
+    <field name="data_addr" start="36" end="63" shift="4" type="address">
+      <doc>PDS Data Address for Store/Load Program, 128-bit aligned.</doc>
+    </field>
+    <field name="code_addr" start="4" end="31" shift="4" type="address">
+      <doc>PDS Code Address for Store/Load Program, 128-bit aligned.</doc>
+    </field>
+  </struct>
+
+  <struct name="COMPUTE_CLUSTER" length="1">
+    <doc>This mask register enables CDM output to the Clusters present in the design. Resets to a single Cluster being driven with Compute Tasks. To enable Compute processing on more USCs, write this register appropriately.
+
+    The register should only be programmed with a marching 1's pattern; for example in a 4 Cluster configuration the following values are valid:
+
+      0x1 - USC0 will process Compute Tasks
+      0x3 - USC0,1 will process Compute Tasks
+      0x7 - USC0,1,2 will process Compute Tasks
+      0xF - USC0,1,2,3 will process Compute Tasks
+
+    If the system contains more than 4 Clusters, then higher values are valid to enable Compute processing on those Clusters.</doc>
+    <field name="mask" start="0" end="31" type="uint">
+      <doc>A Mask of Clusters enabled for Compute processing. 1 = USC0 only, 3 = USC0 and 1, 7=USC0,1,2 and 3 etc.</doc>
+    </field>
+  </struct>
+
+  <struct name="CDM_ITEM" length="1">
+    <doc>This register defines the order in which the CDM will output Work Items within a Work group.</doc>
+    <field name="mode" start="0" end="1" type="CDM_ITEM_MODE"/>
+  </struct>
+
+  <struct name="PDS_CTRL" length="2">
+    <doc>Controls the maximum number of tasks per data master (per USC). There are a maximum of 48 tasks in the system.</doc>
+    <field name="sm_overlap_enable" start="55" end="55" type="bool">
+      <doc>Enable per Data Master slot tracking within the PDS Slot Manager (SM) for improved performance while running overlapped.</doc>
+    </field>
+    <condition type="if" check="ROGUEXE"/>
+      <condition type="if" check="COMPUTE"/>
+        <field name="roguexe_max_num_cdm_tasks" start="24" end="31" type="uint">
+          <doc>The maximum number of compute tasks allowed on each USC, range 0 to 48.</doc>
+        </field>
+      <condition type="endif" check="COMPUTE"/>
+      <condition type="if" check="NUM_RASTER_PIPES &gt; 0"/>
+        <field name="roguexe_max_num_pdm_tasks" start="16" end="23" type="uint">
+          <doc>The maximum number of pixel tasks allowed on each USC, range 0 to 48.</doc>
+        </field>
+      <condition type="endif" check="NUM_RASTER_PIPES &gt; 0"/>
+      <condition type="if" check="NUM_TA &gt; 0"/>
+        <field name="roguexe_max_num_vdm_tasks" start="8" end="15" type="uint">
+          <doc>The maximum number of vertex tasks (VS, HS, GS when Tess not enabled) allowed on each USC, range 0 to 39 (Note reduced range to prevent Pixel/VDM system deadlock).</doc>
+        </field>
+        <condition type="endif" check="NUM_TA &gt; 0"/>
+    <condition type="else" check="ROGUEXE"/>
+      <condition type="if" check="COMPUTE"/>
+        <field name="max_num_cdm_tasks" start="24" end="30" type="uint">
+          <doc>The maximum number of compute tasks allowed on each USC, range 0 to 48.</doc>
+        </field>
+      <condition type="endif" check="COMPUTE"/>
+      <field name="max_num_pdm_tasks" start="16" end="22" type="uint">
+        <doc>The maximum number of pixel tasks allowed on each USC, range 0 to 48.</doc>
+      </field>
+      <field name="max_num_vdm_tasks" start="8" end="14" type="uint">
+        <doc>The maximum number of vertex tasks (VS, HS, GS when Tess not enabled) allowed on each USC, range 0 to 39 (Note reduced range to prevent Pixel/VDM system deadlock).</doc>
+      </field>
+    <condition type="endif" check="ROGUEXE"/>
+  </struct>
+
+  <struct name="EVENT_PIXEL_PDS_CODE" length="1">
+    <field name="addr" start="4" end="31" shift="4" type="address">
+      <doc>PDS Execution Address for pixel tasks (Positioned as a byte address, 128-bit granularity), 4 GB Range.</doc>
+    </field>
+  </struct>
+
+  <struct name="EVENT_PIXEL_PDS_DATA" length="1">
+    <!-- This is an offset actually. Note for when we auto-generate the xmls. -->
+    <field name="addr" start="4" end="31" shift="4" type="address">
+      <doc>PDS Execution Address for pixel tasks (Positioned as a byte address, 128-bit granularity), 4 GB Range.</doc>
+    </field>
+  </struct>
+
+  <struct name="EVENT_PIXEL_PDS_INFO" length="1">
+    <field name="usc_sr_size" start="9" end="14" type="uint">
+      <doc>USC Shared Register Data Size in 4x128-bit words (0=0) for pixel event task, if zero pixel event task is skipped.</doc>
+      <define name="UNIT_SIZE" value="16"/>
+    </field>
+    <field name="temp_stride" start="5" end="8" type="uint">
+      <doc>PDS Temp Size in 128-bit words (0=0) for pixel event tasks.</doc>
+      <define name="UNIT_SIZE" value="4"/>
+    </field>
+    <field name="const_size" start="0" end="4" type="uint">
+      <doc>PDS Data Size in 128-bit words (0=0) for pixel event tasks, if zero pixel event task is skipped.</doc>
+      <define name="UNIT_SIZE" value="4"/>
+    </field>
+  </struct>
+
+  <struct name="PDS_BGRND0_BASE" length="2">
+    <!-- This is an offset actually. Note for when we auto-generate the xmls. -->
+    <field name="texunicode_addr" start="36" end="63" shift="4" type="address">
+      <doc>This is the PDS Code Address used for 2 programs. The Program which issues the DMAs (DOUTD etc.) for uniform data and/or texture state.</doc>
+    </field>
+    <!-- This is an offset actually. Note for when we auto-generate the xmls. -->
+    <field name="shader_addr" start="4" end="31" shift="4" type="address">
+      <doc>The pixel shader base is the base address of the PDS Data Segment. The code segment address is PDS_PIXEL_SHADERBASE + PDS_PIXELSHADERSIZE. The pixel shader program issues the DOUTU for the Fragment Shader only.</doc>
+    </field>
+  </struct>
+
+  <struct name="PDS_BGRND1_BASE" length="2">
+    <!-- This is an offset actually. Note for when we auto-generate the xmls. -->
+    <field name="texturedata_addr" start="36" end="63" shift="4" type="address">
+      <doc>This points to the DMAs to load the Texture State (or contains the State with DOUTW commands).</doc>
+    </field>
+    <!-- Unused in the Vulkan driver. -->
+    <field name="varying_addr" start="4" end="31" shift="4" type="address">
+      <doc>This is the base address of the PDS Data Segment. The code segment address is PDS_VARYINGBASE + PDS_VARYINGSIZE (PDS_BGRND_SIZEINFO1).</doc>
+    </field>
+  </struct>
+
+  <struct name="PDS_BGRND2_BASE" length="2">
+    <!-- This is an offset actually. Note for when we auto-generate the xmls. -->
+    <field name="uniformdata_addr" start="4" end="31" shift="4" type="address">
+      <doc>This points to the DMAs to load the Uniforms (or contains the Uniforms with DOUTW commands).</doc>
+    </field>
+  </struct>
+
+  <struct name="PDS_BGRND3_SIZEINFO" length="2">
+    <doc>If any of the size fields are 0, then that program will not be run. PDS_BGRND_PIXELSHADERSIZE is always 2 128-bit words.</doc>
+    <field name="usc_sharedsize" start="55" end="63" type="uint">
+      <doc>The common store allocation size for the shared registers (texture and uniform data combined).</doc>
+      <define name="UNIT_SIZE" value="16"/>
+    </field>
+    <field name="pds_batchnum" start="32" end="45" type="uint">
+      <doc>The batch ID to be associated with the background.</doc>
+    </field>
+    <field name="pds_uniformsize" start="23" end="31" type="uint">
+      <doc>The size of the Uniform PDS Data Segment in 128-bit words.</doc>
+      <define name="UNIT_SIZE" value="4"/>
+    </field>
+    <field name="pds_texturestatesize" start="16" end="22" type="uint">
+      <doc>The size of the Texture PDS Data Segment in 128-bit words.</doc>
+      <define name="UNIT_SIZE" value="4"/>
+    </field>
+    <field name="pds_varyingsize" start="10" end="15" type="uint">
+      <doc>The size of the Varying/Coefficient PDS Data Segment in 128-bit words.</doc>
+      <define name="UNIT_SIZE" value="4"/>
+    </field>
+    <field name="usc_varyingsize" start="4" end="9" type="uint">
+      <doc>The size of the Varying/Coefficient USC Common Store Data in 4x128-bit words.</doc>
+      <define name="UNIT_SIZE" value="16"/>
+    </field>
+    <field name="pds_tempsize" start="0" end="3" type="uint">
+      <doc>0 = 0 128-bit words, 1 = 1 128-bit word, this applies to coefficient, uniform and varying state.</doc>
+      <define name="UNIT_SIZE" value="4"/>
+    </field>
+  </struct>
+
+  <struct name="TE_AA" length="1">
+    <doc>This register controls the anti-aliasing mode of the Tiling Co-Processor, independent control is provided in both the X and Y axis.
+         This register needs to be set based on the ISP Samples Per Pixel a core supports.
+
+         When ISP Samples Per Pixel = 1:
+         2xMSAA is achieved by enabling Y - TE does AA on Y plane only
+         4xMSAA is achieved by enabling Y and X - TE does AA on X and Y plane
+         8xMSAA not supported by XE cores
+
+         When ISP Samples Per Pixel = 2:
+         2xMSAA is achieved by enabling X2 - does not affect TE
+         4xMSAA is achieved by enabling Y and X2 - TE does AA on Y plane only
+         8xMSAA is achieved by enabling Y, X and X2 - TE does AA on X and Y plane
+         8xMSAA not supported by XE cores
+
+         When ISP Samples Per Pixel = 4:
+         2xMSAA is achieved by enabling X2 - does not affect TE
+         4xMSAA is achieved by enabling Y2 and X2 - TE does AA on Y plane only
+         8xMSAA not supported by XE cores</doc>
+    <condition type="if" check="SIMPLE_INTERNAL_PARAMETER_FORMAT &amp;&amp; ISP_SAMPLES_PER_PIXEL &gt; 2"/>
+    <field name="y2" start="3" end="3" type="bool">
+      <doc>Indicates 4xMSAA when X2 and Y2 are set to 1. This does not affect TE and is only used within TPW.</doc>
+      </field>
+    <condition type="endif" check="SIMPLE_INTERNAL_PARAMETER_FORMAT &amp;&amp; ISP_SAMPLES_PER_PIXEL &gt; 2"/>
+    <field name="y" start="2" end="2" type="bool">
+      <doc>Anti-Aliasing in Y Plane Enabled.</doc>
+    </field>
+    <field name="x" start="1" end="1" type="bool">
+      <doc>Anti-Aliasing in X Plane Enabled.</doc>
+    </field>
+    <field name="x2" start="0" end="0" type="bool">
+      <doc>2x Anti-Aliasing Enabled, affects PPP only.</doc>
+    </field>
+  </struct>
+
+  <struct name="TE_MTILE1" length="1">
+    <doc>MacroTile Boundaries X Plane.</doc>
+    <field name="x1" start="18" end="26" type="uint">
+      <doc>X1 MacroTile boundary, left tile X for second column of macrotiles (16MT mode) - 32 pixels across tile.</doc>
+    </field>
+    <field name="x2" start="9" end="17" type="uint">
+      <doc>X2 MacroTile boundary, left tile X for third column of macrotiles (16MT mode) - 32 pixels across tile.</doc>
+    </field>
+    <field name="x3" start="0" end="8" type="uint">
+      <doc>X3 MacroTile boundary, left tile X for fourth column of macrotiles (16MT mode) - 32 pixels across tile.</doc>
+    </field>
+  </struct>
+
+  <struct name="TE_MTILE2" length="1">
+    <doc>MacroTile Boundaries Y Plane.</doc>
+    <field name="y1" start="18" end="26" type="uint">
+      <doc>X1 MacroTile boundary, top tile Y for second column of macrotiles (16MT mode) - 32 pixels tile height.</doc>
+    </field>
+    <field name="y2" start="9" end="17" type="uint">
+      <doc>X2 MacroTile boundary, top tile Y for third column of macrotiles (16MT mode) - 32 pixels tile height.</doc>
+    </field>
+    <field name="y3" start="0" end="8" type="uint">
+      <doc>X3 MacroTile boundary, top tile Y for fourth column of macrotiles (16MT mode) - 32 pixels tile height.</doc>
+    </field>
+  </struct>
+
+  <struct name="TE_SCREEN" length="1">
+    <doc>In order to perform the tiling operation and generate the display list the maximum screen size must be configured in terms of the number of tiles in X &amp; Y axis.</doc>
+    <field name="ymax" start="12" end="20" type="uint">
+      <doc>Maximum Y tile address visible on screen, 32 pixel tile height, 16Kx16K max screen size.</doc>
+    </field>
+    <field name="xmax" start="0" end="8" type="uint">
+      <doc>Maximum X tile address visible on screen, 32 pixel tile width, 16Kx16K max screen size.</doc>
+    </field>
+  </struct>
+
+  <struct name="TE_PSG" length="1">
+    <doc>This register defines the global control for the Parameter Stream Generator within the Tiling Co-Processor. This module formats the display list generated by the Tiling Co-Processor.</doc>
+    <condition type="if" check="ROGUEXE"/>
+      <condition type="if" check="TILE_REGION_PROTECTION"/>
+        <field name="force_protect" start="22" end="22" type="uint">
+          <doc>When set, the TE will force the PROTECT bit to 1 for all tiles.</doc>
+        </field>
+      <condition type="endif" check="TILE_REGION_PROTECTION"/>
+      <field name="cs_size" start="21" end="21" type="uint">
+        <doc>Size of control stream chunk.
+             0x0        512-bit.
+             0x1        1024-bit.</doc>
+      </field>
+      <field name="enable_pwr_gate_state" start="20" end="20" type="bool">
+        <doc>Enables TE PSG power gate state init.</doc>
+      </field>
+    <condition type="endif" check="ROGUEXE"/>
+    <field name="enable_context_state_restore" start="19" end="19" type="bool">
+      <doc>Enables sampling of Driver TE_STATE_ISP_STATE_ID and TE_ACTIVE_MTILE registers on context switch/restore when set, when reset current local value is preserved.</doc>
+    </field>
+    <field name="zonlyrender" start="18" end="18" type="bool">
+      <doc>Don't invalidate Tail Pointer Cache entries on a Terminate command. Only effective when COMPLETEONTERMINATE is 0x0
+          0x0        Do Invalidate.
+          0x1        Don't Invalidate.</doc>
+    </field>
+    <field name="completeonterminate" start="17" end="17" type="bool">
+      <doc>0x1        Write region headers, terminate streams and invalidate tail pointer cache entries on terminate.
+           0x0        If ZONLYRENDER = 0x0 then force an Interrupt, however if ZONLYRENDER = 0x1 then write region headers and terminate streams.</doc>
+    </field>
+    <field name="cache_bypass" start="14" end="14" type="bool">
+      <doc>When set, PSG sets its write only cache to bypass mode, effectively disabling the cache.</doc>
+    </field>
+    <field name="forcenewstate" start="13" end="13" type="bool">
+      <doc>Always embed state information in control stream. Debug only.</doc>
+    </field>
+    <field name="region_stride" start="0" end="10" type="uint">
+      <doc>Number of 4kB Pages devoted to region headers for each Render Target - max needed = 0x500.</doc>
+      <define name="UNIT_SIZE" value="4096"/>
+    </field>
+  </struct>
+
+  <!-- FIXME: This is only a partial definition as (at the time of writing)
+       csbgen doesn't support multiple address fields within structure.
+  -->
+  <!-- FIXME: When csbgen supports conditional structs, make this
+       conditional on NUM_TA > 0.
+  -->
+  <struct name="TE_PSGREGION_ADDR" length="2">
+    <doc>This register defines the base address in memory of the Region Header writes by the TA. Region headers are the first part of the display list and contain an entry per tile with information on global setup and a link address to parameters.</doc>
+    <field name="base" start="6" end="33" shift="6" type="address">
+      <doc>16GB Addressable, 512-bit aligned Base Address for Region Header writes.</doc>
+    </field>
+  </struct>
+
+  <!-- FIXME: This is only a partial definition as (at the time of writing)
+       csbgen doesn't support multiple address fields within structure.
+  -->
+  <struct name="TE_TPC_ADDR" length="2">
+    <doc>This register defines the base address in memory of the Tail Pointer Cache. A tail pointer is the current last address written to for a tile's individual display list, an entry for active tiles is maintained as primitives are processed by the TA.</doc>
+    <field name="base" start="6" end="33" shift="6" type="address">
+      <doc>16GB Addressable, 512-bit aligned Base Address for Tail Pointer Cache entries. The tail pointer is the current last address written to for a control stream for a tile.</doc>
+    </field>
+  </struct>
+
+  <struct name="PPP_MULTISAMPLECTL" length="2">
+    <doc>Sample position grid offset for use in 2x, 4x, 8xMSAA and ODAA modes.</doc>
+    <condition type="if" check="MAX_MULTISAMPLE == 8"/>
+      <field name="msaa_y7" start="60" end="63" type="uint">
+        <doc>Unsigned sub-pixel offset for the 8th multisample Y position.</doc>
+      </field>
+      <field name="msaa_x7" start="56" end="59" type="uint">
+        <doc>Unsigned sub-pixel offset for the 8th multisample X position.</doc>
+      </field>
+      <field name="msaa_y6" start="52" end="55" type="uint">
+        <doc>Unsigned sub-pixel offset for the 7th multisample Y position.</doc>
+      </field>
+      <field name="msaa_x6" start="48" end="51" type="uint">
+        <doc>Unsigned sub-pixel offset for the 7th multisample X position.</doc>
+      </field>
+      <field name="msaa_y5" start="44" end="47" type="uint">
+        <doc>Unsigned sub-pixel offset for the 6th multisample Y position.</doc>
+      </field>
+      <field name="msaa_x5" start="40" end="43" type="uint">
+        <doc>Unsigned sub-pixel offset for the 6th multisample X position.</doc>
+      </field>
+      <field name="msaa_y4" start="36" end="39" type="uint">
+        <doc>Unsigned sub-pixel offset for the 5th multisample Y position.</doc>
+      </field>
+      <field name="msaa_x4" start="32" end="35" type="uint">
+        <doc>Unsigned sub-pixel offset for the 5th multisample X position.</doc>
+      </field>
+    <condition type="endif" check="MAX_MULTISAMPLE == 8"/>
+    <field name="msaa_y3" start="28" end="31" type="uint">
+      <doc>Unsigned sub-pixel offset for the 4th multisample Y position.</doc>
+    </field>
+    <field name="msaa_x3" start="24" end="27" type="uint">
+      <doc>Unsigned sub-pixel offset for the 4th multisample X position.</doc>
+    </field>
+    <field name="msaa_y2" start="20" end="23" type="uint">
+      <doc>Unsigned sub-pixel offset for the 3rd multisample Y position.</doc>
+    </field>
+    <field name="msaa_x2" start="16" end="19" type="uint">
+      <doc>Unsigned sub-pixel offset for the 3rd multisample X position.</doc>
+    </field>
+    <field name="msaa_y1" start="12" end="15" type="uint">
+      <doc>Unsigned sub-pixel offset for the 2nd multisample Y position.</doc>
+    </field>
+    <field name="msaa_x1" start="8" end="11" type="uint">
+      <doc>Unsigned sub-pixel offset for the 2nd multisample X position.</doc>
+    </field>
+    <field name="msaa_y0" start="4" end="7" type="uint">
+      <doc>Unsigned sub-pixel offset for the 1st multisample Y position.</doc>
+    </field>
+    <field name="msaa_x0" start="0" end="3" type="uint">
+      <doc>Unsigned sub-pixel offset for the 1st multisample X position.</doc>
+    </field>
+  </struct>
+
+  <struct name="PPP_CTRL" length="1">
+    <doc>This register controls the global setup of the PPP.</doc>
+    <field name="vpt_scissor" start="12" end="12" type="bool">
+      <doc>When 0 the PPP will insert state updates on change of VPT ID.
+           When 1 this feature is disabled.</doc>
+    </field>
+    <field name="flush_mode" start="11" end="11" type="uint">
+      <doc>When 0 PPP will suppress end of draw call flushed from reaching the Clipper and TA pipeline. This will break batch number functionality but will give better primitive block utilisation.
+           When 1 PPP will not suppress any flushes.</doc>
+    </field>
+    <field name="bfcull_restrict_clip" start="10" end="10" type="bool">
+      <doc>When set, clipped primitives are only back-face culled after the clipper.
+           0        Enable early back face cull for clipped primitives.
+           1        Disable early cull.</doc>
+    </field>
+    <field name="fixed_point_format" start="9" end="9" type="uint">
+      <doc>When set, the PPP will use a fixed point format of 16.8 rather than 16.4.
+           0        16.4 fixed point format.
+           1        16.8 fixed point format.</doc>
+    </field>
+    <field name="default_point_size" start="8" end="8" type="bool">
+      <doc>When set, the PPP will use the default point size rather than reading it from the vertex.
+           0        Point size read from vertex.
+           1        Default point size of 3F800000 used.</doc>
+    </field>
+    <field name="bfcull1_disable" start="7" end="7" type="bool">
+      <doc>Disable for fully clipped culling.
+           0        First back face cull block enabled.
+           1        First back face cull block disabled.</doc>
+    </field>
+    <field name="bfcull2_disable" start="6" end="6" type="bool">
+      <doc>Disable for fully clipped culling.
+           0        Second back face cull block enabled.
+           1        Second back face cull block disabled.</doc>
+    </field>
+    <field name="fccull_disable" start="5" end="5" type="bool">
+      <doc>Disable for fully clipped culling.
+           0        Fully clipped culling enabled.
+           1        Fully clipped culling disabled.</doc>
+    </field>
+    <field name="oscull_disable" start="4" end="4" type="bool">
+      <doc>Disable for off screen culling.
+           0        Off screen culling enabled.
+           1        Off screen culling disabled.</doc>
+    </field>
+    <field name="socull_disable" start="2" end="2" type="bool">
+      <doc>Disable for small object culling.
+           0        Small object culling enabled.
+           1        Small object culling disabled.</doc>
+    </field>
+    <field name="wclampen" start="1" end="1" type="bool">
+      <doc>Enable W clamping.
+           0        W clamping disabled.
+           1        W clamping enabled.</doc>
+    </field>
+    <field name="opengl" start="0" end="0" type="bool">
+      <doc>Select OpenGL or D3D mode.
+           0        D3D.
+           1        OpenGL.</doc>
+    </field>
+  </struct>
+
+  <struct name="PPP_SCREEN" length="1">
+    <doc>In order to perform the tiling operation and generate the display list the maximum screen size must be configured in terms of the number of pixels in X and Y axis since this may not be the same as the number of tiles defined in the ROGUE_CR_TE_SCREEN register.</doc>
+    <field name="pixymax" start="16" end="30" type="uint">
+      <doc>Screen height in pixels (16K x 16K max screen size).</doc>
+    </field>
+    <field name="pixxmax" start="0" end="14" type="uint">
+      <doc>Screen width in pixels (16K x 16K max screen size).</doc>
+    </field>
+  </struct>
+
+  <!-- FIXME: This is only a partial definition as (at the time of writing)
+       csbgen doesn't support multiple address fields within structure.
+  -->
+  <struct name="TA_RTC_ADDR" length="2">
+    <doc>This register defines the base address in memory of the TA Render Target Caches, for the VCE, TEAC and PSG.</doc>
+    <field name="base" start="6" end="33" shift="6" type="address">
+      <doc>16GB Addressable, 512-bit aligned Base Address for TA Render Target Caches.</doc>
+    </field>
+  </struct>
+
+  <struct name="TA_CONTEXT_STATE_BASE" length="2">
+    <doc>The base address in external memory of the TA's context state buffer, to which the PPP will store the state on a context store and from which the VDM will reload on a context resume.</doc>
+    <field name="addr" start="4" end="39" shift="4" type="address">
+      <doc>1TB range, 128-bit aligned base address.</doc>
+    </field>
+  </struct>
+
+  <struct name="ISP_RENDER" length="1">
+    <doc>Controls the render.</doc>
+    <field name="disable_eomt" start="5" end="5" type="bool">
+      <doc>Prevent End-of-Macro-Tile flags being sent to ISP.</doc>
+    </field>
+    <field name="resume" start="4" end="4" type="bool">
+      <doc>Render resume.</doc>
+    </field>
+    <field name="dir_type" start="2" end="3" type="DIR_TYPE">
+      <doc>Render direction.</doc>
+    </field>
+    <field name="mode_type" start="0" end="1" type="ISP_RENDER_MODE_TYPE">
+      <doc>Render type.</doc>
+    </field>
+  </struct>
+
+  <struct name="ISP_RENDER_ORIGIN" length="1">
+    <doc>This register defines the top-left tile coordinate for the render.</doc>
+    <field name="x" start="16" end="25" type="uint">
+      <doc>X coordinate, in tiles.</doc>
+    </field>
+    <field name="y" start="0" end="9" type="uint">
+      <doc>Y coordinate, in tiles.</doc>
+    </field>
+  </struct>
+
+  <struct name="ISP_MTILE_BASE" length="2">
+    <field name="addr" start="2" end="39" shift="2" type="address">
+      <doc>1TB range, 32-bit aligned base address.</doc>
+    </field>
+  </struct>
+
+  <struct name="ISP_MTILE_SIZE" length="1">
+    <field name="x" start="16" end="25" type="uint">
+      <doc>Macrotile width, in tiles. A value of zero corresponds to the maximum size.</doc>
+    </field>
+    <field name="y" start="0" end="9" type="uint">
+      <doc>Macrotile height, in tiles. A value of zero corresponds to the maximum size.</doc>
+    </field>
+  </struct>
+
+  <struct name="ISP_RGN" length="1">
+    <doc>This register defines the size of the allocation used for Region Arrays. This is used to read the correct number of words from memory without the risk of over-fetching and causing a page fault.</doc>
+    <field name="size" start="0" end="23" type="uint">
+      <doc>Number of DWords to fetch from each Region Array.</doc>
+      <define name="UNIT_SIZE" value="4"/>
+    </field>
+  </struct>
+
+  <!-- FIXME: This is the SIMPLE_INTERNAL_PARAMETER_FORMAT variant.
+       Should we use the "condition" tag for this?
+  -->
+  <struct name="ISP_RGN_SIPF" length="1">
+    <doc>This register defines the sizes of the allocations of the simple internal parameter data.</doc>
+    <condition type="if" check="IPF_CREQ_PF"/>
+      <!-- FIXME: This should have a default value of 0x1F not setting it since
+        csbgen doesn't check if the feature is present or not so this will
+        be set even when the feature is not present.
+      -->
+      <field name="cs_size_ipf_creq_pf" start="24" end="28" type="uint">
+        <doc>Number of primitive headers in the control stream for a fast 2D render. If the number of primitive headers exceeds the maximum field size or the size of the control stream is unknown, a value of all ones should be written.</doc>
+        <define name="MAX" value="31"/>
+      </field>
+    <condition type="endif" check="IPF_CREQ_PF"/>
+    <field name="size" start="0" end="23" type="uint">
+      <doc>Number of Region Headers to fetch.</doc>
+      <!-- Note that this differs from ISP_RGN. -->
+      <define name="UNIT_SIZE" value="1"/>
+    </field>
+  </struct>
+
+  <struct name="ISP_BGOBJDEPTH" length="1">
+    <doc>The ISP operates by comparing depth values of incoming objects with the results of previous depth compares, in order to make sure there are no uninitialised values at the start of the tile or to cover pixels where there are no objects in the scene, a default background object is configured under register control.
+    This register provides the floating point depth value for the hardware background object.</doc>
+    <field name="value" start="0" end="31" type="uint">
+      <doc>Note, the format in this register has to be consistent with the format defined by ZLS_STORE_FORMAT register.
+           If depth buffer is F32, then the value here should be IEEE 754 single precision floating point.
+           If depth buffer is INT16,then the value here should be UNORM24/UNORM16 format as well.
+           Out of Range value will cause undefined behaviour.</doc>
+    </field>
+  </struct>
+
+  <struct name="ISP_BGOBJVALS" length="1">
+    <doc>This register provides enable, mask and stencil information for the hardware background object.</doc>
+    <field name="enablebgtag" start="9" end="9" type="bool">
+      <doc>When set to 1, at the start of each tile the ISP tag buffer is initialised with the background object tag (default = 1).</doc>
+    </field>
+    <field name="mask" start="8" end="8" type="bool">
+      <doc>Hardware background object mask plane.</doc>
+    </field>
+    <field name="stencil" start="0" end="7" type="uint">
+      <doc>Hardware background object stencil.</doc>
+    </field>
+  </struct>
+
+  <struct name="ISP_AA" length="1">
+    <doc>Controls whether anti-aliasing is enabled or disabled.</doc>
+    <field name="mode" start="0" end="1" type="ISP_AA_MODE_TYPE" default="AA_NONE"/>
+  </struct>
+
+  <struct name="ISP_CTL" length="1">
+    <doc>ISP control register.
+
+         This register contains the PIPE_NUM field which controls the number of tiles in flight within the IPP and IPF. The values to which this register should be set are dependent on not only the number of tiles in flight that are desired, but also the version of the architecture in use.
+
+         For REL 1,2 Cores, this register can be programmed to values of 0x0-0x2 inclusive enabling 1,2 and 3 tiles in flight for the single ISP in the system. In this system the IPP and IPF are both present in the same layout block.
+
+         For REL 3,7 Cores, the IPP module is remote from the ISP module as the ISP belongs to the scalable elements in the design.
+         A Cluster Group refers to the 4 USCs in a Phantom Block, which also contains an ISP. 1 Cluster Group = 1 IPP, and 1 ISP, 2 Cluster Groups = 1 IPP and 2 ISPs.
+         The IPP module is configured using the register, and the tiles are split between them via the LSB of the Pipe Identifier.
+
+         When 2 Cluster Groups (6 or 8 USC clusters) are present, as the value of PIPE_NUM is increased, the tile in flight are spread equally between ISP0 and ISP1, as below
+         0x0: - ISP0 (1 tile in flight)  - ISP1 (Not Used - IDLE Pipe)
+         0x1: - ISP0 (1 tile in flight)  - ISP1 (1 tile in flight)
+         0x2: - ISP0 (2 tiles in flight) - ISP1 (1 tile in flight)
+         0x3: - ISP0 (2 tiles in flight) - ISP1 (2 tiles in flight)
+         0x4: - ISP0 (3 tiles in flight) - ISP1 (2 tiles in flight)
+         0x5: - ISP0 (3 tiles in flight) - ISP1 (3 tiles in flight)
+         0x6: - ISP0 (4 tiles in flight) - ISP1 (3 tiles in flight)
+         0x7: - ISP0 (4 tiles in flight) - ISP1 (4 tiles in flight)
+
+         Value of 0,2,4,6 should never be use on a 8 USC system, as they result in internal GPU imbalance.
+
+         When 1 Cluster Group is present (1,2,4 USC clusters) , as the value of PIPE_NUM is increased, the tiles in flight will increase every power of 2, since ISP1 is not present.
+         0x0: - ISP0 (1 tile in flight)
+         0x2: - ISP0 (2 tiles in flight)
+         0x4: - ISP0 (3 tiles in flight)
+         0x6: - ISP0 (4 tiles in flight)
+
+         A value which is higher than the number of IPF pipelines will result in the maximum number of pipelines being used. However, the number of pipelines being used should always be less than or equal to the number of tiles which the USC is able to concurrently process (i.e. the number of partitions). In a 4 or 8 cluster system there is 1 partition per tile. In a 2 cluster system there are 2 partitions per tile and in a 1 cluster system there are 4 partitions per tile. Effectively this means this register should be programmed according to the number of partitions available in the USC.
+
+         NUM_TILES_PER_USC:
+         00 : 1 tile.
+         01 : 2 tiles in the flight per USC cluster enabled.
+         11 : 2 tiles in the flight per USC cluster enabled.</doc>
+    <condition type="if" check="GPU_MULTICORE_SUPPORT &amp;&amp; SIMPLE_INTERNAL_PARAMETER_FORMAT" />
+      <field name="skip_init_hdrs" start="31" end="31" type="bool">
+        <doc>Used to enable skipping of initial region headers based on GPU offset.
+             '0': reads all region headers and discards the ones not needed.
+             '1': skip reading of region headers based on GPU offset.</doc>
+      </field>
+    <condition type="endif" check="GPU_MULTICORE_SUPPORT &amp;&amp; SIMPLE_INTERNAL_PARAMETER_FORMAT"/>
+    <condition type="if" check="WIDELINES_AS_RECTANGLES" />
+      <field name="line_style" start="30" end="30" type="bool">
+        <doc>Used to enable rendering widelines as rectangles.
+             '0': render as parallelograms.
+             '1': render as rectangles.</doc>
+      </field>
+      <field name="line_style_pix" start="29" end="29" type="bool">
+        <doc>Used to enable rendering single pixel widelines as rectangles.
+             '0': render as parallelograms.
+             '1': render as rectangles.</doc>
+      </field>
+    <condition type="endif" check="WIDELINES_AS_RECTANGLES" />
+    <condition type="if" check="PAIRED_TILES" />
+      <field name="pair_tiles_vert" start="28" end="28" type="bool">
+        <doc>If set, causes IPF to pair tiles vertically within its pipeline.</doc>
+      </field>
+      <field name="pair_tiles" start="27" end="27" type="bool">
+        <doc>If set, causes IPF to pair tiles within its pipeline.</doc>
+      </field>
+    <condition type="endif" check="PAIRED_TILES" />
+    <condition type="if" check="!ROGUE_XE" />
+      <field name="num_tiles_per_usc" start="21" end="22" type="uint">
+        <doc>Tiles-in-flight per USC cluster.</doc>
+      </field>
+    <condition type="endif" check="!ROGUE_XE" />
+    <field name="dbias_is_int" start="20" end="20" type="bool">
+      <doc>When set, depth bias value is a signed integer.</doc>
+    </field>
+    <field name="overlap_check_mode" start="19" end="19" type="bool">
+      <doc>0 - different samples for the same pixel will be sent to different pass groups for translucent objects (pixel to pixel overlap test).
+           1 - different samples for the same pixel will be sent as the same pass group (sample to sample overlap test).</doc>
+    </field>
+    <field name="pt_upfront_depth_disable" start="18" end="18" type="bool">
+      <doc>When set, disable UPFRONT depth test in the Depthsorter.</doc>
+    </field>
+    <field name="process_empty_tiles" start="17" end="17" type="bool">
+      <doc>When set empty tiles are always processed rather than being suppressed.</doc>
+    </field>
+    <field name="sample_pos" start="16" end="16" type="bool">
+      <doc>Specifies the sampling rule to be used when calculating the endpoint adjustment for thin lines.</doc>
+    </field>
+    <field name="pipe_enable" start="12" end="15" type="PIPE_NUM">
+      <doc>Tiles-in-flight.</doc>
+    </field>
+    <field name="valid_id" start="4" end="9" type="uint">
+      <doc>Triangle validation value.</doc>
+    </field>
+    <field name="upass_start" start="0" end="3" type="uint">
+      <doc>User pass start value.</doc>
+      <define name="SIZE_MAX" value="15"/>
+    </field>
+  </struct>
+
+  <struct name="ISP_ZLSCTL" length="2">
+    <field name="zlsextent_y_s" start="48" end="57" type="uint">
+      <doc>For stencil buffer, the value calculation is the same as ZLSEXTENT_Y_Z.</doc>
+    </field>
+    <field name="zlsextent_x_s" start="38" end="47" type="uint">
+      <doc>For stencil buffer, the value calculation is the same as ZLSEXTENT_X_Z.</doc>
+    </field>
+    <field name="stencil_extent_enable" start="37" end="37" type="bool">
+      <doc>When this bit is '1', stencil buffer will use zlsextent_x/y_s value to calculate zload/store address, otherwise, zlsextent_x/y_z value will be used.
+           The default value is '0' which disables this new function.</doc>
+    </field>
+    <field name="zlsextent_y_z" start="27" end="36" type="uint">
+      <doc>For Depth buffer
+           Display width of Y in tiles minus one: 0x000 1 tile, 0x001 2 tiles, .. , 0x2FF 1024 tiles,
+           zlsextent_y = total_samples_y / 32 samples in non-MSAA, 4xMSAA mode
+                       = total_samples_y / 64 samples in 2xMSAA, 8xMSAA mode.
+           In strided mode, zlsextent_y is set up to above result.
+           In twiddled mode, zlsextent_y uses above result and rounds the value up to the nearest value which is power of 2.</doc>
+    </field>
+    <field name="zstoreformat" start="25" end="26" type="ZLS_FORMAT_TYPE"/>
+    <field name="zloadformat" start="23" end="24" type="ZLS_FORMAT_TYPE"/>
+    <field name="fb_storeen" start="22" end="22" type="bool">
+      <doc>When set, frame buffer compression store is enabled.</doc>
+    </field>
+    <field name="fb_loaden" start="21" end="21" type="bool">
+      <doc>When set, frame buffer decompression load is enabled.</doc>
+    </field>
+    <condition type="if" check="!ROGUE_XE" />
+      <field name="mstoreen" start="20" end="20" type="bool">
+        <doc>When set and ZSTOREFORMAT = 0x0, mask plane is stored within MSB of IEEE format,
+             when set and ZSTOREFORMAT = 0x3, mask plane is stored at bit position 31 of IEEE format,
+             when set for other format, if mask_store_base_enable = '1', background object mask data '0' is stored into separate memory address,
+             when set for other format, if mask_store_base_enable = '0', mask data '0' is stored into separate memory address.</doc>
+      </field>
+    <condition type="endif" check="!ROGUE_XE" />
+    <field name="zstoreen" start="19" end="19" type="bool">
+      <doc>When set to 1, if the ZSTORE bit in the region header is also set then the depth buffer is stored to memory after each tile is processed.</doc>
+    </field>
+    <field name="sstoreen" start="18" end="18" type="bool">
+      <doc>When set to 1, if the ZSTORE bit in the region header is also set then the stencil buffer is stored to memory after each tile is processed.</doc>
+    </field>
+    <field name="storetwiddled" start="17" end="17" type="bool">
+      <doc>When set to 1 depth and stencil data is written out in "Twiddled" order.</doc>
+    </field>
+    <condition type="if" check="!ROGUE_XE" />
+      <field name="mloaden" start="16" end="16" type="bool">
+        <doc>When set and ZLOADFORMAT = 0x0, mask plane is loaded from MSB of IEEE format,
+             when set and ZLOADFORMAT = 0x3, mask plane is loaded from the bit position 31 of IEEE format,
+             when set for other format, if mask_load_base_enable = '1', mask plane is loaded from separate memory address,
+             when set for other format, if mask_load_base_enable = '0', background object mask data is used.</doc>
+      </field>
+    <condition type="endif" check="!ROGUE_XE" />
+    <field name="zloaden" start="15" end="15" type="bool">
+      <doc>When set to 1, if the ZLOAD bit in the region header is also set then the depth buffer is read from memory prior to tile processing.</doc>
+    </field>
+    <field name="sloaden" start="14" end="14" type="bool">
+      <doc>When set to 1, if the ZLOAD bit in the region header is also set then the stencil buffer is read from memory prior to tile processing.</doc>
+    </field>
+    <field name="loadtwiddled" start="13" end="13" type="bool">
+      <doc>When set to 1 depth, stencil data is loaded in "Twiddled" order.</doc>
+    </field>
+    <field name="zlsextent_x_z" start="3" end="12" type="uint">
+      <doc>For depth buffer,
+           Display width of X in tiles minus one: 0x000  1 tile, 0x001        2 tiles, .. , 0x2FF 1024 tiles.
+           For different MSAA mode,
+           1xMSAA = 1 x (32,32) pixels = 32x1 x 32x1 = 1024 samples = 32 x 32 samples,
+           2xMSAA = 2 x (32,32) pixels = 32x1 x 32x2 = 2048 samples = 32 x 64 samples,
+           4xMSAA = 4 x (32,16) pixels = 32x2 x 16x2 = 2048 samples = 64 x 32 samples,
+           8xMSAA = 8 x (16,16) pixels = 16x2 x 16x4 = 2048 samples = 32 x 64 samples,
+           So zlsextent_x = total_samples_x / 32 samples when non-MSAA, 2xMSAA, 8xMSAA
+              zlsextent_x = total_samples_x / 64 samples when 4xMSAA
+           In strided mode, zlsextent_x is set up to above result.
+           In twiddled mode, zlsextent_x uses above result and rounds the value up to the nearest value which is power of 2.</doc>
+    </field>
+    <field name="forcezstore" start="2" end="2" type="bool">
+      <doc>If set to 1 the depth/stencil buffer is always stored at the end of each tile irrespective of the region header ZSTORE bit.</doc>
+    </field>
+    <field name="forcezload" start="1" end="1" type="bool">
+      <doc>If set to 1 the depth/stencil buffer is always loaded at the start of each tile irrespective of the region header ZLOAD bit.</doc>
+    </field>
+    <field name="zonlyrender" start="0" end="0" type="bool">
+      <doc>When set, only the Z buffer is rendered. Opaque and translucent objects are stencil and depth tested as usual but no pixel spans are emitted to the PDS Pixel presenter. Pixels within punch through and depth feedback objects are emitted on their first pass as a result of passing the up-front depth test by default. However, on their feedback depth test, these pixels will not be output regardless of the depth test result. The intention is to calculate a scene Z buffer without doing any further rendering.</doc>
+    </field>
+  </struct>
+
+  <struct name="ISP_ZLOAD_BASE" length="2">
+    <doc>Base address in memory of the Z Buffer base address to load into the ISP for non-compressed ZLS formats.</doc>
+    <field name="addr" start="4" end="39" shift="4" type="address">
+      <doc>1TB Addressable, 16byte aligned Base Address of the Z Buffer Load base address.</doc>
+    </field>
+  </struct>
+
+  <struct name="ISP_STENCIL_LOAD_BASE" length="2">
+    <doc>Base address in memory of the Stencil Buffer base address to load into the ISP for non-compressed ZLS formats. This alternate stencil buffer base address is selectable based on the enable bit.</doc>
+    <field name="addr" start="4" end="39" shift="4" type="address">
+      <doc>1TB Addressable, 16byte aligned Base Address of the Z Buffer Load base address.</doc>
+    </field>
+    <field name="enable" start="0" end="0" type="bool">
+      <doc>When set to 1, enables fetching of stencil from a separate base address.</doc>
+    </field>
+  </struct>
+
+  <struct name="ISP_SCISSOR_BASE" length="2">
+    <field name="addr" start="2" end="39" shift="2" type="address">
+      <doc>1TB range, 32-bit aligned base address.</doc>
+    </field>
+  </struct>
+
+  <struct name="ISP_DBIAS_BASE" length="2">
+    <field name="addr" start="2" end="39" shift="2" type="address">
+      <doc>1TB range, 32-bit aligned base address.</doc>
+    </field>
+  </struct>
+
+  <struct name="ISP_OCLQRY_BASE" length="2">
+    <doc>Base address for occlusion query counter values.
+         For multiple phantom system, base address could be set differently and driver needs to sum up the result from different phantoms which have same occlusion query index.</doc>
+    <field name="addr" start="4" end="39" shift="4" type="address">
+      <doc>1TB range, 128-bit aligned base address.</doc>
+    </field>
+  </struct>
+
+  <struct name="ISP_ZLS_PIXELS" length="1">
+    <doc>Screen size in pixel numbers for ZLS.</doc>
+    <field name="y" start="15" end="29" type="uint">
+      <doc>Display width of Y in pixels minus one.
+           0x000 1 pixel, 0x001 2 pixels, ..., 0x7FFF 1024*32 pixels.
+           Subtile only supports for non-MSAA mode depth load/store, so
+           For non-MSAA mode, if framebuffer compression, or separate mask or separate stencil is enabled, [4 .. 0] has to be set to x"1F".
+           For 2xMSAA mode, [4 .. 0] has to be set to x"1F".
+           For 4xMSAA mode, [3 .. 0] has to be set to x"F".
+           For 8xMSAA mode, [3 .. 0] has to be set to x"F".</doc>
+    </field>
+    <field name="x" start="0" end="14" type="uint">
+      <doc>Display width of X in pixels minus one.
+           0x000 1 pixel, 0x001 2 pixels, ..., 0x7FFF 1024*32 pixels.
+           Subtile only supports for non-MSAA mode depth load/store, so
+           For non-MSAA mode, if framebuffer compression, or separate mask or separate stencil is enabled, [4 .. 0] has to be set to x"1F".
+           For 2xMSAA mode, [4 .. 0] has to be set to x"1F".
+           For 4xMSAA mode, [4 .. 0] has to be set to x"1F".
+           For 8xMSAA mode, [3 .. 0] has to be set to x"F".</doc>
+    </field>
+  </struct>
+
+  <struct name="PBE_WORD0_MRT0" length="2">
+    <condition type="if" check="TFBC"/>
+      <field name="tfbc_lossy" start="62" end="63" type="TFBC_LOSSY">
+        <doc>Sets the lossy bit for frame buffer compression.</doc>
+      </field>
+    <condition type="else" check="TFBC"/>
+      <field name="x_rsrvd" start="63" end="63" type="bool">
+        <doc>Not used.</doc>
+      </field>
+    <condition type="endif" check="TFBC"/>
+    <condition type="if" check="TFBC"/>
+      <field name="pair_tiles" start="60" end="60" type="uint">
+        <doc>If set, then PBE will pair 16x16 tiles.</doc>
+      </field>
+      <field name="x_rsrvd2" start="59" end="59" type="bool">
+        <doc>Not used.</doc>
+      </field>
+    <condition type="else" check="TFBC"/>
+      <field name="comp_iaddr_mode" start="60" end="60" type="COMP_IADDR_TYPE">
+        <doc>FBC indirect addressing mode.</doc>
+      </field>
+      <field name="comp_cor_enable" start="59" end="59" type="bool">
+        <doc>Enable FBC correlation.</doc>
+      </field>
+    <condition type="endif" check="TFBC"/>
+    <field name="dither" start="58" end="58" type="bool">
+      <doc>Enable dither.</doc>
+    </field>
+    <field name="tilerelative" start="57" end="57" type="bool">
+      <doc>Add tile offset.</doc>
+    </field>
+    <field name="downscale" start="56" end="56" type="bool">
+      <doc>Perform box filter downscale.</doc>
+    </field>
+    <field name="size_z" start="52" end="55" type="SIZE">
+      <doc>Z Size in pixels [log 2].</doc>
+    </field>
+    <field name="rotation" start="50" end="51" type="ROTATION_TYPE">
+      <doc>Rotation angle.</doc>
+    </field>
+    <field name="linestride" start="34" end="49" type="uint">
+      <doc>Linestride in 2 pixel units. 0 == 2. Supports 32K DWord stride memory write.</doc>
+      <define name="ALIGNMENT" value="2"/>
+    </field>
+    <field name="memlayout" start="32" end="33" type="MEMLAYOUT">
+      <doc>Memory layout.</doc>
+    </field>
+    <field name="swiz_chan3" start="29" end="31" type="SWIZ">
+      <doc>Swizzle for destination channel 3.</doc>
+    </field>
+    <field name="swiz_chan2" start="26" end="28" type="SWIZ">
+      <doc>Swizzle for destination channel 2.</doc>
+    </field>
+    <field name="swiz_chan1" start="23" end="25" type="SWIZ">
+      <doc>Swizzle for destination channel 1.</doc>
+    </field>
+    <field name="swiz_chan0" start="20" end="22" type="SWIZ">
+      <doc>Swizzle for destination channel 0.</doc>
+    </field>
+    <field name="minclip_x" start="6" end="19" type="uint">
+      <doc>Min X Clip.</doc>
+    </field>
+    <field name="twocomp_gamma" start="5" end="5" type="TWOCOMP_GAMMA">
+      <doc>Sets the gamma mode for 2 component targets.</doc>
+    </field>
+    <field name="gamma" start="4" end="4" type="bool">
+      <doc>Gamma enabled.</doc>
+    </field>
+    <field name="compression" start="3" end="3" type="bool">
+      <doc>Frame buffer Compression enabled.</doc>
+    </field>
+    <field name="compress_size" start="2" end="2" type="COMPRESS_SIZE">
+      <doc>Block size for the compressor, used with COMPRESS_SIZE_EXT register bit to define 8x8; 16x4 or 32x2 size.
+           COMPRESS_SIZE_EXT  COMPRESS_SIZE  SIZE
+                   0                0        8x8
+                   0                1        16x4
+                   1                0        32x2
+                   1                1        reserved</doc>
+    </field>
+    <field name="comp_indirect_table" start="1" end="1" type="bool">
+      <doc>If set indicates to the compressor that an indirect addressing is used otherwise direct addressing.</doc>
+    </field>
+    <condition type="if" check="PBE_YFLIP"/>
+      <field name="y_flip" start="0" end="0" type="bool"/>
+    <condition type="endif" check="PBE_YFLIP"/>
+  </struct>
+
+  <struct name="FRAG_SCREEN" length="1">
+    <doc>Define the screen size for fragment processing.
+         Pixels on the screen are numbered (0,0) top left, to (XMAX,YMAX) bottom right.</doc>
+    <field name="ymax" start="16" end="30" type="uint">
+      <doc>Maximum pixel number in y dimension on screen. Screen height in pixels is YMAX+1.
+           16K x 16K is the max screen size.  I.e. 2^14, bit 15 is always written as 0.</doc>
+    </field>
+    <field name="xmax" start="0" end="14" type="uint">
+      <doc>Maximum pixel number in x dimension on screen. Screen width in pixels is XMAX+1.
+           16K x 16K is the max screen size.  I.e. 2^14, bit 15 is always written as 0.</doc>
+    </field>
+  </struct>
+
+  <struct name="TPU" length="1">
+    <condition type="if" check="PDSL0SIZE &gt; 0"/>
+      <field name="mcu_pds_l0_off" start="8" end="8" type="bool">
+        <doc>Turn off MCU PDSL0 cache.</doc>
+      </field>
+    <condition type="endif" check="PDSL0SIZE &gt; 0"/>
+    <condition type="if" check="TPU_CEM_DATAMASTER_GLOBAL_REGISTERS"/>
+      <field name="tag_cem_64_face_packing" start="7" end="7" type="bool">
+        <doc>Pixel data master. Enable 64-byte alignment between CEM faces when set to 1. It applies for both when mipmap is enabled or disabled.</doc>
+      </field>
+    <condition type="endif" check="TPU_CEM_DATAMASTER_GLOBAL_REGISTERS"/>
+    <field name="tag_enable_mmu_prefetch" start="6" end="6" type="bool">
+      <doc>Enables generation of prefetch requests to the MMU.</doc>
+    </field>
+    <field name="tag_cem_4k_face_packing" start="5" end="5" type="bool">
+      <doc>Pixel data master. Enable 4K-byte alignment between CEM faces when set to 1. It applies for both when mipmap is enabled or disabled.</doc>
+    </field>
+    <field name="madd_config_l0off" start="4" end="4" type="bool">
+      <doc>When set this disables MADD P0 L0 cache.</doc>
+    </field>
+    <field name="tag_cem_face_packing" start="3" end="3" type="bool">
+      <doc>Pixel data master. Enable DWord alignment between CEM faces when set to 1.</doc>
+    </field>
+    <field name="tag_cemedge_dontfilter" start="2" end="2" type="bool">
+      <doc>Pixel data master. Disable filtering over edges/corners for CEM.
+           When set to 1, HW will be seemfull, i.e., always stay in the current map, always honour the addressmode.
+           When set to 0, HW will be seemless, i.e., ignore addressmode, filter between faces at the edges/corners.</doc>
+    </field>
+    <condition type="if" check="TPU_CEM_USG_NORMALISATION"/>
+      <field name="tag_cemgrad_dontnegate" start="1" end="1" type="bool">
+        <doc>Pixel data master. Disable negation for user supplied gradients for cem swap i.e. will only swap dudx etc not negate.</doc>
+      </field>
+    <condition type="endif" check="TPU_CEM_USG_NORMALISATION"/>
+    <field name="madd_config_dxt35_transovr" start="0" end="0" type="bool">
+      <doc>When set this disables alternative mode implied by colour0 > colour1 for DXT3 to DXT5.</doc>
+    </field>
+  </struct>
+
+  <struct name="TPU_BORDER_COLOUR_TABLE_PDM" length="2">
+    <doc>Base address for the border colour table.</doc>
+    <field name="border_colour_table_address" start="0" end="37" shift="2" type="address">
+      <doc>Base address DWord aligned for the location in memory of the border colour table for the PDM.</doc>
+    </field>
+  </struct>
+
+  <struct name="TPU_BORDER_COLOUR_TABLE_VDM" length="2">
+    <doc>Base address for the border colour table.</doc>
+    <field name="border_colour_table_address" start="0" end="37" shift="2" type="address">
+      <doc>Base address DWord aligned for the location in memory of the border colour table for the VDM.</doc>
+    </field>
+  </struct>
+
+  <struct name="TPU_BORDER_COLOUR_TABLE_CDM" length="2">
+    <doc>Base address for the border colour table.</doc>
+    <field name="border_colour_table_address" start="0" end="37" shift="2" type="address">
+      <doc>Base address DWord aligned for the location in memory of the border colour table for the CDM.</doc>
+    </field>
+  </struct>
+
+  <!-- FIXME: This register depends on TPU_DM_GLOBAL_REGISTERS. -->
+  <struct name="TPU_TAG_CDM_CTRL" length="1">
+    <field name="af_ratio_truncate_to_integer" start="3" end="3" type="bool">
+      <doc>0 current mode, 1 clear the fractional part of the calculated AF ratio.</doc>
+    </field>
+    <field name="af_ratio_truncate_to_half" start="2" end="2" type="bool">
+      <doc>0 current mode, 1 truncate the fractional part of the calculated AF ratio to 0.5.</doc>
+    </field>
+    <field name="af_filtering_mode" start="1" end="1" type="bool">
+      <doc>0 current mode, 1 new mode.</doc>
+    </field>
+    <field name="yuv_cam_invalidate" start="0" end="0" type="bool">
+      <doc>When set, will invalidate YUV CSC CAM to reset the CSC coefficients. It should be set when the TPU is not performing CSC.</doc>
+    </field>
+  </struct>
+
+  <struct name="USC_PIXEL_OUTPUT_CTRL" length="1">
+    <field name="partition_mask" start="3" end="20" type="uint">
+      <doc>Partition Enable Mask for USC pixel task.</doc>
+    </field>
+    <field name="enable_4th_partition" start="2" end="2" type="bool">
+      <doc>Enables 4th Partition.</doc>
+    </field>
+    <field name="width" start="0" end="1" type="PIXEL_WIDTH"/>
+  </struct>
+
+  <struct name="USC_CLEAR_REGISTER" length="1">
+    <field name="val" start="0" end="31" type="uint"/>
+  </struct>
+
+  <!-- FIXME: When csbgen supports conditional structs, make this conditional
+       on FB_CDC.
+  -->
+  <struct name="FB_CDC_ZLS" length="2">
+    <condition type="if" check="!ROGUEXE"/>
+      <field name="fbc_iaddr_mode" start="42" end="42" type="bool">
+        <doc>Indirect Addressing Mode; 0=indirect 1 tile; 1=indirect 4 tile.</doc>
+      </field>
+      <field name="fbdc_iaddr_mode" start="41" end="41" type="bool">
+        <doc>Indirect Addressing Mode; 0=indirect 1 tile; 1=indirect 4 tile.</doc>
+      </field>
+    <condition type="endif" check="!ROGUEXE"/>
+    <condition type="if" check="!ROGUEXE || (ROGUEXE &amp;&amp; FB_CDC_V4)"/>
+      <field name="fbdc_stencil_fmt" start="34" end="40" type="uint">
+        <doc>ZLS pixel format to use for stencil, default U8.</doc>
+      </field>
+      <field name="fbdc_depth_fmt" start="27" end="33" type="uint">
+        <doc>ZLS pixel format to use for depth, default F32.</doc>
+      </field>
+    <condition type="endif" check="!ROGUEXE || (ROGUEXE &amp;&amp; FB_CDC_V4)"/>
+    <field name="fbc_num_tiles" start="4" end="26" type="uint">
+      <doc>FBC ZLS number of compressor tiles in surface, in granularity of 8x8x32 DWords.</doc>
+    </field>
+    <field name="fbc_iaddr" start="1" end="1" type="bool">
+      <doc>FBC Addressing mode 0 = direct ; 1 = indirect.</doc>
+    </field>
+    <field name="fbdc_iaddr" start="0" end="0" type="bool">
+      <doc>FBDC Addressing mode 0 = direct ; 1 = indirect.</doc>
+    </field>
+  </struct>
+
+</csbgen>

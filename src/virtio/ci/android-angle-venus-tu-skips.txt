@@ -1,0 +1,2 @@
+# Mainly for testing platform features. Skip as take too long. Flaky on both ANV and Turnip.
+awsi-dEQP-VK.wsi.android.incremental_present.*

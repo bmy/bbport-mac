@@ -1,0 +1,3 @@
+test_custom_border_color_srgb,Fail
+test_byte_buffer_addressing_wrap,Fail
+test_structured_buffer_addressing_wrap,Fail

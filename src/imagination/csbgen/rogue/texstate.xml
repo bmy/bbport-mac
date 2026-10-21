@@ -1,0 +1,552 @@
+<?xml version="1.0" ?>
+
+<!--
+Copyright © 2022 Imagination Technologies Ltd.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice (including the next
+paragraph) shall be included in all copies or substantial portions of the
+Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+-->
+
+<csbgen name="ROGUE" prefix="TEXSTATE">
+
+  <enum name="ADDRMODE">
+    <doc>Specifies texture address mode.</doc>
+    <value name="REPEAT"               value="0"/>
+    <value name="FLIP"                 value="1"/>
+    <value name="CLAMP_TO_EDGE"        value="2"/>
+    <value name="FLIP_ONCE_THEN_CLAMP" value="3"/>
+    <value name="CLAMP_TO_BORDER"      value="4"/>
+    <value name="OGL_CLAMP"            value="5"/>
+  </enum>
+
+  <enum name="ANISOCTL">
+    <doc>Specifies maximum anisotropy.</doc>
+    <value name="DISABLED" value="0">
+      <doc>No Aniso.</doc>
+    </value>
+    <value name="X2"       value="1">
+      <doc>Aniso X2.</doc>
+    </value>
+    <value name="X4"       value="2">
+      <doc>Aniso X4.</doc>
+    </value>
+    <value name="X8"       value="3">
+      <doc>Aniso X8.</doc>
+    </value>
+    <value name="X16"      value="4">
+      <doc>Aniso X16.</doc>
+    </value>
+  </enum>
+
+  <enum name="CLAMP">
+    <doc>Sets the min/max clamp on LOD. 4.6 number format.</doc>
+    <value name="MIN"             value="0">
+      <doc>Represents 0.</doc>
+    </value>
+    <value name="MAX"             value="959">
+      <doc>Represents 14.984375.</doc>
+    </value>
+    <value name="INTEGER_BITS"    value="4"/>
+    <value name="FRACTIONAL_BITS" value="6"/>
+  </enum>
+
+  <enum name="CMP_MODE">
+    <doc>Specifies comparison modes.</doc>
+    <value name="NEVER"        value="0">
+      <doc>Never, always return 0.</doc>
+    </value>
+    <value name="LESS"         value="1">
+      <doc>Less than, Ref &lt; TexelData.</doc>
+    </value>
+    <value name="EQUAL"        value="2">
+      <doc>Equal to, Ref = TexelData.</doc>
+    </value>
+    <value name="LESSEQUAL"    value="3">
+      <doc>Less or equal to, Ref &lt;= TexelData.</doc>
+    </value>
+    <value name="GREATER"      value="4">
+      <doc>Greater than, Ref &gt; TexelData.</doc>
+    </value>
+    <value name="NOTEQUAL"     value="5">
+      <doc>Not equal to, Ref != TexelData.</doc>
+    </value>
+    <value name="GREATEREQUAL" value="6">
+      <doc>Greater or equal to, Ref &gt;= TexelData.</doc>
+    </value>
+    <value name="ALWAYS"       value="7">
+      <doc>Always, always return 1.</doc>
+    </value>
+  </enum>
+
+  <enum name="COMPRESSION_LEVEL">
+    <doc>Sets the lossy compression level for TFBC.</doc>
+    <value name="LOSSLESS" value="0">
+      <doc>Lossless compression.</doc>
+    </value>
+    <value name="LOSSY_75" value="1">
+      <doc>Lossy compression down to 75% of the original size (lowest compression ratio).</doc>
+    </value>
+    <value name="LOSSY_50" value="2">
+      <doc>Lossy compression down to 50% of the original size.</doc>
+    </value>
+    <value name="LOSSY_25" value="3">
+      <doc>Lossy compression down to 25% of the original size (highest compression ratio).</doc>
+    </value>
+  </enum>
+
+  <enum name="COMPRESSION_MODE">
+    <doc>Sets the compression mode.</doc>
+    <value name="NONE"                   value="0"/>
+    <value name="TPU"                    value="1"/>
+    <value name="FB_DIRECT_8X8"          value="2"/>
+    <value name="FB_DIRECT_16X4"         value="3"/>
+    <value name="FB_INDIRECT_1TILE_8X8"  value="4"/>
+    <value name="FB_INDIRECT_1TILE_16X4" value="5"/>
+    <value name="FB_INDIRECT_4TILE_8X8"  value="6"/>
+    <value name="FB_INDIRECT_4TILE_16X4" value="7"/>
+  </enum>
+
+  <enum name="DADJUST">
+    <doc>Sets the range of the DADJUST (aka LOD Bias). 5.8 number format.</doc>
+    <value name="MIN_UINT"        value="0">
+      <doc>Represents -15.996.</doc>
+    </value>
+    <value name="ZERO_UINT"       value="4095">
+      <doc>Represents 0.0.</doc>
+    </value>
+    <value name="MAX_UINT"        value="8191">
+      <doc>Represents 16.0.</doc>
+    </value>
+    <value name="INTEGER_BITS"    value="5"/>
+    <value name="FRACTIONAL_BITS" value="8"/>
+  </enum>
+
+  <enum name="FILTER">
+    <doc>Specifies texture filter.</doc>
+    <value name="POINT"   value="0">
+      <doc>Point filter.</doc>
+    </value>
+    <value name="LINEAR"  value="1">
+      <doc>Bilinear filter.</doc>
+    </value>
+    <value name="BICUBIC" value="2">
+      <doc>Bicubic filter.</doc>
+    </value>
+  </enum>
+
+  <enum name="FORMAT">
+    <doc>Sets the texture format.</doc>
+    <value name="U8"                        value="0"/>
+    <value name="S8"                        value="1"/>
+    <value name="A4R4G4B4"                  value="2"/>
+    <value name="A8R3G3B2"                  value="3"/>
+    <value name="A1R5G5B5"                  value="4"/>
+    <value name="R5G6B5"                    value="5"/>
+    <value name="R5sG5sB6"                  value="6"/>
+    <value name="U8U8"                      value="7"/>
+    <value name="S8S8"                      value="8"/>
+    <value name="U16"                       value="9"/>
+    <value name="S16"                       value="10"/>
+    <value name="F16"                       value="11"/>
+    <value name="U8U8U8U8"                  value="12"/>
+    <value name="S8S8S8S8"                  value="13"/>
+    <value name="A2R10B10G10"               value="14"/>
+    <value name="U16U16"                    value="15"/>
+    <value name="S16S16"                    value="16"/>
+    <value name="F16F16"                    value="17"/>
+    <value name="F32"                       value="18"/>
+    <value name="F32_SIGNMASK"              value="19"/>
+    <value name="X8U8S8S8"                  value="20"/>
+    <value name="X8U24"                     value="21"/>
+    <value name="ST8U24"                    value="22"/>
+    <value name="U8X24"                     value="23"/>
+    <value name="U32"                       value="24"/>
+    <value name="S32"                       value="25"/>
+    <value name="SE9995"                    value="26"/>
+    <value name="F11F11F10"                 value="27"/>
+    <value name="F16F16F16F16"              value="28"/>
+    <value name="U16U16U16U16"              value="29"/>
+    <value name="S16S16S16S16"              value="30"/>
+    <value name="F16F16F16"                 value="31"/>
+    <value name="U16U16U16"                 value="32"/>
+    <value name="S16S16S16"                 value="33"/>
+    <value name="F32F32"                    value="34"/>
+    <value name="U32U32"                    value="35"/>
+    <value name="S32S32"                    value="36"/>
+    <value name="X24U8F32"                  value="37"/>
+    <value name="X24X8F32"                  value="38"/>
+    <value name="X24G8X32"                  value="39"/>
+    <value name="YUV420_2PLANE"             value="54"/>
+    <value name="YVU420_2PLANE"             value="55"/>
+    <value name="YUV420_3PLANE"             value="56"/>
+    <value name="YVU420_3PLANE"             value="57"/>
+    <value name="U8U8U8"                    value="58"/>
+    <value name="S8S8S8"                    value="59"/>
+    <value name="A2F10F10F10"               value="60"/>
+    <value name="F32F32F32F32"              value="61"/>
+    <value name="U32U32U32U32"              value="62"/>
+    <value name="S32S32S32S32"              value="63"/>
+    <value name="F32F32F32"                 value="64"/>
+    <value name="U32U32U32"                 value="65"/>
+    <value name="S32S32S32"                 value="66"/>
+    <value name="A2_XRBIAS_U10U10U10"       value="67"/>
+    <value name="O8"                        value="81"/>
+    <value name="O8O8"                      value="82"/>
+    <value name="R5G5B5A1"                  value="83"/>
+    <value name="B6G5sR5s"                  value="84"/>
+    <value name="R10B10G10A2"               value="85"/>
+    <value name="X8S8S8U8"                  value="86"/>
+    <value name="U24ST8"                    value="87"/>
+    <value name="F10F11F11"                 value="88"/>
+    <value name="VYUY"                      value="89"/>
+    <value name="UYVY"                      value="90"/>
+    <value name="YVYU"                      value="91"/>
+    <value name="YUYV"                      value="92"/>
+    <value name="F10F10F10A2"               value="93"/>
+    <value name="YUV420_2PLANE_MACRO_BLOCK" value="94"/>
+    <value name="YVU420_2PLANE_MACRO_BLOCK" value="95"/>
+    <value name="ARGBV16_XR10"              value="96"/>
+    <value name="YVU8_422_2PLANE_PACK8"     value="97"/>
+    <value name="YVU8_444_2PLANE_PACK8"     value="98"/>
+    <value name="YVU10_444_1PLANE_PACK10"   value="99"/>
+    <value name="YVU10_422_2PLANE_PACK16"   value="100"/>
+    <value name="YVU10_420_2PLANE_PACK16"   value="101"/>
+    <value name="YVU10_444_2PLANE_PACK16"   value="102"/>
+    <value name="YUV8_422_2PLANE_PACK8"     value="103"/>
+    <value name="YUV8_444_3PLANE_PACK8"     value="104"/>
+    <value name="YUV10_444_3PLANE_PACK16"   value="105"/>
+    <value name="YVU10_420_2PLANE_PACK10"   value="106"/>
+    <value name="YUV10_420_2PLANE_PACK10"   value="107"/>
+    <value name="YVU10_422_2PLANE_PACK10"   value="108"/>
+    <value name="YUV10_422_2PLANE_PACK10"   value="109"/>
+    <value name="YUV10_444_3PLANE_PACK10"   value="110"/>
+    <value name="R8G8_B8G8"                 value="111"/>
+    <value name="G8R8_G8B8"                 value="112"/>
+    <value name="YVYU_IMPLIED_CSC"          value="113"/>
+    <value name="VYUY_IMPLIED_CSC"          value="114"/>
+    <value name="YUV10_420_2PLANE_PACK10_R" value="115"/>
+    <value name="YVU10_420_2PLANE_PACK10_R" value="116"/>
+    <value name="YUV10_420_2PLANE_PACK10_T" value="117"/>
+    <value name="YVU10_420_2PLANE_PACK10_T" value="118"/>
+    <value name="YUV8_420_2PLANE_PACK8_P"   value="119"/>
+    <value name="YVU8_420_2PLANE_PACK8_P"   value="120"/>
+    <value name="YUV8_420_2PLANE_PACK8_F"   value="121"/>
+    <value name="YVU8_420_2PLANE_PACK8_F"   value="122"/>
+    <value name="INVALID"                   value="0xFFFFFFFF"/>
+  </enum>
+
+  <enum name="FORMAT_COMPRESSED">
+    <doc>Sets the texture format.</doc>
+    <value name="ASTC_4x4"           value="0"/>
+    <value name="ASTC_5x4"           value="1"/>
+    <value name="ASTC_5x5"           value="2"/>
+    <value name="ASTC_6x5"           value="3"/>
+    <value name="ASTC_6x6"           value="4"/>
+    <value name="ASTC_8x5"           value="5"/>
+    <value name="ASTC_8x6"           value="6"/>
+    <value name="ASTC_8x8"           value="7"/>
+    <value name="ASTC_10x5"          value="8"/>
+    <value name="ASTC_10x6"          value="9"/>
+    <value name="ASTC_10x8"          value="10"/>
+    <value name="ASTC_10x10"         value="11"/>
+    <value name="ASTC_12x10"         value="12"/>
+    <value name="ASTC_12x12"         value="13"/>
+    <value name="PVRT2BPP"           value="40"/>
+    <value name="PVRT4BPP"           value="41"/>
+    <value name="PVRTII2BPP"         value="42"/>
+    <value name="PVRTII4BPP"         value="43"/>
+    <value name="UBC1"               value="44"/>
+    <value name="UBC2"               value="45"/>
+    <value name="UBC3"               value="46"/>
+    <value name="UBC4"               value="47"/>
+    <value name="SBC4"               value="48"/>
+    <value name="UBC5"               value="49"/>
+    <value name="SBC5"               value="50"/>
+    <value name="UBC6"               value="51"/>
+    <value name="SBC6"               value="52"/>
+    <value name="UBC7"               value="53"/>
+    <value name="ETC2_RGB"           value="68"/>
+    <value name="ETC2A_RGBA"         value="69"/>
+    <value name="ETC2_PUNCHTHROUGHA" value="70"/>
+    <value name="EAC_R11_UNSIGNED"   value="71"/>
+    <value name="EAC_R11_SIGNED"     value="72"/>
+    <value name="EAC_RG11_UNSIGNED"  value="73"/>
+    <value name="EAC_RG11_SIGNED"    value="74"/>
+    <value name="INVALID"            value="0xFFFFFFFF"/>
+  </enum>
+
+  <enum name="GAMMA">
+    <doc>Sets the gamma mode.</doc>
+    <value name="OFF" value="0"/>
+    <value name="ON"  value="1"/>
+  </enum>
+
+  <enum name="SWIZ">
+    <doc>Sets the swizzle.</doc>
+    <value name="SRCCHAN_0" value="0"/>
+    <value name="SRCCHAN_1" value="1"/>
+    <value name="SRCCHAN_2" value="2"/>
+    <value name="SRCCHAN_3" value="3"/>
+    <value name="SRC_ONE"   value="4"/>
+    <value name="SRC_ZERO"  value="5"/>
+  </enum>
+
+  <enum name="TEXTYPE">
+    <doc>Sets the texture type.</doc>
+    <value name="1D"            value="0"/>
+    <value name="2D"            value="1"/>
+    <value name="3D"            value="2"/>
+    <value name="CUBE"          value="3"/>
+    <value name="STRIDE"        value="4"/>
+    <value name="PAGETILE"      value="5"/>
+    <value name="BUFFER_LOOKUP" value="6"/>
+  </enum>
+
+  <enum name="TWOCOMP_GAMMA">
+    <doc>Sets the gamma mode for 2 component textures.</doc>
+    <value name="OFF" value="0"/>
+    <value name="R"   value="1"/>
+    <value name="RG"  value="3"/>
+  </enum>
+
+  <!-- FIXME: This is the definition for hardware with TPU_IMAGE_STATE_V2.
+       Add V1 definition when condition tags can be nested in enum tags.
+  -->
+  <enum name="CHROMAINTERP">
+    <doc>Sets the Chroma interpolation.</doc>
+    <value name="ZERO"  value="0"/>
+    <value name="ENABLED" value="1"/>
+  </enum>
+
+  <struct name="IMAGE_WORD0" length="2">
+    <field name="smpcnt" start="62" end="63" type="uint">
+      <doc>Sample count [0 = 1].</doc>
+    </field>
+    <field name="height" start="48" end="61" type="uint">
+      <doc>Texture height [0 = 1].</doc>
+    </field>
+    <field name="width" start="34" end="47" type="uint">
+      <doc>Texture width [0 = 1].</doc>
+      <define name="MAX_SIZE" value="16383"/>
+    </field>
+    <field name="texformat" start="27" end="33" type="FORMAT">
+      <doc>Texture format.</doc>
+      <define name="MAX_SIZE" value="127"/>
+    </field>
+    <field name="texformat_compressed" start="27" end="33" type="FORMAT_COMPRESSED">
+      <doc>Compressed texture format.</doc>
+    </field>
+    <field name="minlod" start="17" end="26" type="uint">
+      <doc>4.6 number format. Upper mipmap clamping level.</doc>
+    </field>
+    <field name="swiz0" start="14" end="16" type="SWIZ">
+      <doc>Blue swizzle.</doc>
+    </field>
+    <field name="swiz1" start="11" end="13" type="SWIZ">
+      <doc>Green swizzle.</doc>
+    </field>
+    <field name="swiz2" start="8" end="10" type="SWIZ">
+      <doc>Red Swizzle.</doc>
+    </field>
+    <field name="swiz3" start="5" end="7" type="SWIZ">
+      <doc>Alpha Swizzle.</doc>
+    </field>
+    <field name="twocomp_gamma" start="3" end="4" type="TWOCOMP_GAMMA">
+      <doc>Gamma for 2 component textures.</doc>
+    </field>
+    <field name="gamma" start="3" end="3" type="GAMMA">
+      <doc>Gamma.</doc>
+    </field>
+    <field name="textype" start="0" end="2" type="TEXTYPE">
+      <doc>Texture type.</doc>
+    </field>
+  </struct>
+
+  <struct name="IMAGE_WORD1" length="2">
+    <field name="baselevel" start="60" end="63" type="uint">
+      <doc>Integer value to add to the LOD in order to rebase the top level.</doc>
+    </field>
+    <field name="alpha_msb" start="59" end="59" type="bool">
+      <doc>When set to '1' the alpha channel is at most significant channel, [31:24], otherwise alpha channel is in [7:0].</doc>
+    </field>
+    <field name="border" start="58" end="58" type="bool">
+      <doc>Are there border texels.</doc>
+    </field>
+    <condition type="if" check="TPU_IMAGE_STATE_V2"/>
+      <condition type="if" check="TFBC"/>
+        <field name="lossy_compression_mode" start="56" end="57" type="COMPRESSION_LEVEL">
+          <doc>Enables lossy frame buffer compression.</doc>
+        </field>
+      <condition type="endif" check="TFBC"/>
+      <field name="tpu_image_state_v2_compression_mode" start="54" end="56" type="COMPRESSION_MODE">
+        <doc>Mode for compression, can be TPU or FBC.</doc>
+      </field>
+    <condition type="else" check="TPU_IMAGE_STATE_V2"/>
+      <field name="tile_size" start="57" end="57" type="bool">
+        <doc>Tile size for frame buffer compression, 0 8x8, 1 16x4.</doc>
+      </field>
+      <field name="index_lookup" start="56" end="56" type="bool">
+        <doc>Integer texture coordinate lookup in the range 0,2^32.</doc>
+      </field>
+      <field name="frame_buffer_compression" start="55" end="55" type="bool">
+        <doc>Flag to indicate if frame buffer compression is used.</doc>
+      </field>
+      <field name="frame_buffer_compression_addressing_mode" start="54" end="54" type="bool">
+        <doc>Flag to indicate the addressmode to be used when frame buffer compression is enabled: 0 direct addressing, 1 indirect addressing.</doc>
+      </field>
+    <condition type="endif" check="TPU_IMAGE_STATE_V2"/>
+    <field name="texaddr" start="16" end="53" shift="2" type="address">
+      <doc>Address in 32-bit units.</doc>
+    </field>
+    <field name="mipmaps_present" start="15" end="15" type="bool">
+      <doc>Flag to indicate that mipmaps are present (value 1) or not (value 0). The HW expects the full mipmap chain down to 1x1 (exceptions apply for some texture formats and 3D where the minimum memory alignment is 4x4x4) to be present, regardless of the value of the NUM_MIP_LEVELS. It does not apply to YUV planar textures.</doc>
+    </field>
+    <field name="depth" start="4" end="14" type="uint">
+      <doc>Depth of 3D texture [0 = 1].</doc>
+      <define name="MAX_SIZE" value="2047"/>
+    </field>
+    <field name="num_mip_levels" start="0" end="3" type="uint">
+      <doc>Number of miplevels. Must be at least 1.</doc>
+    </field>
+  </struct>
+
+  <struct name="STRIDE_IMAGE_WORD1" length="2">
+    <field name="num_mip_levels" start="60" end="63" type="uint">
+      <doc>Number of miplevels. Must be at least 1.</doc>
+    </field>
+    <field name="alpha_msb" start="59" end="59" type="bool">
+      <doc>When set to '1' the alpha channel is at most significant channel, [31:24], otherwise alpha channel is in [7:0].</doc>
+    </field>
+    <condition type="if" check="TPU_IMAGE_STATE_V2"/>
+      <condition type="if" check="TFBC"/>
+        <field name="lossy_compression_mode" start="56" end="57" type="COMPRESSION_LEVEL">
+          <doc>Enables lossy frame buffer compression.</doc>
+        </field>
+      <condition type="endif" check="TFBC"/>
+      <field name="tpu_image_state_v2_compression_mode" start="54" end="56" type="COMPRESSION_MODE">
+        <doc>Mode for compression, can be TPU or FBC.</doc>
+      </field>
+    <condition type="else" check="TPU_IMAGE_STATE_V2"/>
+      <field name="tile_size" start="57" end="57" type="bool">
+        <doc>Tile size for frame buffer compression, 0 8x8, 1 16x4.</doc>
+      </field>
+      <field name="index_lookup" start="56" end="56" type="bool">
+        <doc>Integer texture coordinate lookup in the range 0,2^32.</doc>
+      </field>
+      <field name="frame_buffer_compression" start="55" end="55" type="bool">
+        <doc>Flag to indicate if frame buffer compression is used.</doc>
+      </field>
+      <field name="frame_buffer_compression_addressing_mode" start="54" end="54" type="bool">
+        <doc>Flag to indicate the addressmode to be used when frame buffer compression is enabled: 0 direct addressing, 1 indirect addressing.</doc>
+      </field>
+    <condition type="endif" check="TPU_IMAGE_STATE_V2"/>
+    <field name="texaddr" start="16" end="53" shift="2" type="address">
+      <doc>Address in 32-bit units.</doc>
+    </field>
+    <field name="mipmaps_present" start="15" end="15" type="bool">
+      <doc>Flag to indicate that mipmaps are present (value 1) or not (value 0). The HW expects the full mipmap chain down to 1x1 (exceptions apply for some texture formats and 3D where the minimum memory alignment is 4x4x4) to be present, regardless of the value of the NUM_MIP_LEVELS. It does not apply to YUV planar textures.</doc>
+    </field>
+    <field name="stride" start="0" end="14" type="uint">
+      <doc>Stride in pixels [0 = 1].</doc>
+    </field>
+  </struct>
+
+  <struct name="YUV_IMAGE_WORD1" length="2">
+    <field name="csc_coeff_index" start="60" end="63" type="uint">
+      <doc>CSC coefficient index.</doc>
+    </field>
+    <field name="chroma_interpolation_v" start="59" end="59" type="CHROMAINTERP">
+      <doc>Enable chroma interpolation for YUV planar textures.</doc>
+    </field>
+    <field name="chroma_interpolation_u" start="53" end="53" type="CHROMAINTERP">
+      <doc>Enable chroma interpolation for YUV planar textures.</doc>
+    </field>
+    <field name="stride" start="38" end="52" type="uint">
+      <doc>Stride in pixels [0 = 1].</doc>
+    </field>
+    <field name="texaddr" start="0" end="37" shift="2" type="address">
+      <doc>Address in 32-bit units.</doc>
+    </field>
+  </struct>
+
+  <struct name="SAMPLER_WORD0" length="2">
+    <field name="texaddr_plane2_lo" start="50" end="63" shift="2" type="address">
+      <doc>Second plane base address for YUV 2 + 3 planar texture format, DWord granularity.</doc>
+    </field>
+    <field name="cmp_mode" start="59" end="61" type="CMP_MODE">
+      <doc>Comparison modes required for comparison filtering.</doc>
+    </field>
+    <field name="addrmode_w" start="56" end="58" type="ADDRMODE">
+      <doc>Aka WRAP_R.</doc>
+    </field>
+    <field name="bordercolor_index" start="50" end="55" type="uint">
+      <doc>Index into border colour palette.</doc>
+      <define name="MAX_SIZE" value="63"/>
+    </field>
+    <field name="non_normalized_coords" start="49" end="49" type="bool">
+      <doc>Flag to indicate that input texture coordinates are no-normalised, i.e., in the range [0,width-1] [0, height-1].</doc>
+    </field>
+    <field name="lumakey_alphamult" start="48" end="48" type="bool">
+      <doc>Multiply alpha by lumakey alpha.</doc>
+    </field>
+    <field name="lumakey" start="47" end="47" type="bool">
+      <doc>Enable for Lumakey.</doc>
+    </field>
+    <field name="addrmode_v" start="44" end="46" type="ADDRMODE">
+      <doc>Aka WRAP_T.</doc>
+    </field>
+    <field name="addrmode_u" start="41" end="43" type="ADDRMODE">
+      <doc>Aka WRAP_S.</doc>
+    </field>
+    <field name="mipfilter" start="40" end="40" type="bool">
+      <doc>Mip filter.</doc>
+    </field>
+    <field name="minfilter" start="38" end="39" type="FILTER">
+      <doc>Min Filter.</doc>
+    </field>
+    <field name="magfilter" start="36" end="37" type="FILTER">
+      <doc>Mag Filter.</doc>
+    </field>
+    <field name="anisoctl" start="33" end="35" type="ANISOCTL">
+      <doc>Aniso level.</doc>
+    </field>
+    <field name="maxlod" start="23" end="32" type="CLAMP">
+      <doc>Lower mipmap clamping level. 4.6 number format. Max Clamp.</doc>
+    </field>
+    <field name="minlod" start="13" end="22" type="CLAMP">
+      <doc>Upper mipmap clamping level. 4.6 number format. Min Clamp.</doc>
+    </field>
+    <field name="dadjust" start="0" end="12" type="DADJUST">
+      <doc>Dadjust.</doc>
+    </field>
+  </struct>
+
+  <struct name="SAMPLER_WORD1" length="2">
+    <field name="cemedge_dontfilter" start="63" end="63" type="bool">
+      <doc>CEM filter over edges - seamless/seamful filtering.</doc>
+    </field>
+    <field name="texaddr_plane3" start="24" end="61" shift="2" type="address">
+      <doc>Third plane base address for YUV 3 planar texture format, DWord granularity.</doc>
+    </field>
+    <field name="texaddr_plane2_hi" start="0" end="23" shift="16" type="address">
+      <doc>Second plane base address for YUV 2 + 3 planar texture format, DWord granularity.</doc>
+    </field>
+  </struct>
+
+</csbgen>

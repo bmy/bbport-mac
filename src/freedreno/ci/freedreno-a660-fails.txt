@@ -1,0 +1,75 @@
+KHR-GL46.shader_subroutine.control_flow_and_returned_subroutine_values_used_as_subroutine_input,Fail
+
+#glcts update
+KHR-GLES3.framebuffer_blit.framebuffer_blit_functionality_multisampled_to_singlesampled_blit,Fail
+KHR-GL46.texture_lod_bias.texture_lod_bias_all,Fail
+
+# GL tests above, Vulkan tests below
+
+# Bad assumptions in piglit about layout of multiplanar formats,
+# it should use separate buffers per plane:
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_yvu420,Fail
+
+#Unexpected CL error: CL_SUCCESS 0
+#Expected CL error: CL_INVALID_LINKER_OPTIONS -67
+#Failed (error code: CL_SUCCESS): Trigger CL_INVALID_LINKER_OPTIONS if the linker options specified by options are invalid.
+#Unexpected CL error: CL_LINK_PROGRAM_FAILURE -17
+#Expected CL error: CL_INVALID_OPERATION -59
+#Failed (error code: CL_LINK_PROGRAM_FAILURE): Trigger CL_INVALID_OPERATION if the rules for devices containing compiled binaries or libraries as described in input_programs argument above are not followed.
+#Unexpected CL error: CL_SUCCESS 0
+#Expected CL error: CL_LINK_PROGRAM_FAILURE -17
+api@cllinkprogram,Fail
+
+#
+## freedreno issues:
+#
+#Error at data[0]
+custom@r600 create release buffer bug,Fail
+
+#
+## works on OnePlus 6:
+#
+#Failed: return NULL if platform is not a valid platform
+api@clgetextensionfunctionaddressforplatform,Fail
+
+#
+## Not our problem:
+#
+# CL_DEVICE_MAX_READ_IMAGE_ARGS: failed, expected at least 128, got 16
+api@clgetdeviceinfo,Fail
+
+# broken piglit test (doesn't account for FTZ)
+program@execute@builtin@builtin-float-nextafter-1.0.generated,Fail
+program@execute@builtin@builtin-float-nextafter-1.0.generated@nextafter float1,Fail
+program@execute@builtin@builtin-float-nextafter-1.0.generated@nextafter float16,Fail
+program@execute@builtin@builtin-float-nextafter-1.0.generated@nextafter float2,Fail
+program@execute@builtin@builtin-float-nextafter-1.0.generated@nextafter float4,Fail
+program@execute@builtin@builtin-float-nextafter-1.0.generated@nextafter float8,Fail
+
+# (file=input,line=0,column=0,index=0): Unresolved external reference to "_Z21convert_char4_sat_rteDv4_i".
+program@execute@vector-conversion,Fail
+
+# Initial ANGLE failures
+angle-dEQP-GLES2.functional.shaders.algorithm.rgb_to_hsl_vertex,Fail
+
+#
+# OpenCL-CTS
+#
+
+# Test bug, doesn't check for CL_FP_DENORM:
+SPIRV new,Fail
+SPIRV new@op_neg_half,Fail
+SPIRV new@op_spec_constant_half_simple,Fail
+
+# Test bug, doesn't properly compute wave divergence point with wave128:
+Subgroups,Fail
+Subgroups@subgroup_functions_clustered_reduce,Fail
+Subgroups@subgroup_functions_ballot,Fail
+
+#
+# OpenCL-CTS uprev
+#
+
+# https://github.com/KhronosGroup/OpenCL-CTS/issues/2765
+Basic,Fail
+Basic@bufferreadwriterect,Fail

@@ -1,0 +1,472 @@
+<?xml version="1.0" ?>
+
+<!--
+Copyright © 2022 Imagination Technologies Ltd.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice (including the next
+paragraph) shall be included in all copies or substantial portions of the
+Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+-->
+
+<csbgen name="ROGUE" prefix="VDMCTRL">
+
+  <define name="GUARD_SIZE_DEFAULT" value="64">
+    <doc>The driver must not put any STREAM_LINK, STREAM_RETURN or STREAM_TERMINATE blocks in the final GUARD_SIZE bytes of the last valid page.</doc>
+  </define>
+
+  <enum name="BLOCK_TYPE">
+    <doc>The VDM control stream block header type.</doc>
+    <value name="PPP_STATE_UPDATE" value="0">
+      <doc>PPP State Update.</doc>
+    </value>
+    <value name="PDS_STATE_UPDATE" value="1">
+      <doc>PDS State Update.</doc>
+    </value>
+    <value name="VDM_STATE_UPDATE" value="2">
+      <doc>VDM State Update.</doc>
+    </value>
+    <value name="INDEX_LIST"       value="3">
+      <doc>Index List.</doc>
+    </value>
+    <value name="STREAM_LINK"      value="4">
+      <doc>Stream Link.</doc>
+    </value>
+    <value name="STREAM_RETURN"    value="5">
+      <doc>Stream Return.</doc>
+    </value>
+    <value name="STREAM_TERMINATE" value="6">
+      <doc>Stream Terminate.</doc>
+    </value>
+    <value name="CONTROL"          value="7">
+      <doc>Control.</doc>
+    </value>
+  </enum>
+
+  <enum name="DM_TARGET">
+    <value name="VDM" value="0">
+      <doc>State update is destined for the Vertex Data Master.</doc>
+    </value>
+    <value name="DDM" value="1">
+      <doc>State update is destined for the Domain Data Master.</doc>
+    </value>
+  </enum>
+
+  <enum name="FLATSHADE_CONTROL">
+    <doc>Indicates which vertex of the triangle contains the flat shaded colour source. It is only required for triangle strips which contain flat shaded data.</doc>
+    <value name="VERTEX_0" value="0">
+      <doc>Vertex 0 contains the flat shaded colour source.</doc>
+    </value>
+    <value name="VERTEX_1" value="1">
+      <doc>Vertex 1 contains the flat shaded colour source.</doc>
+    </value>
+    <value name="VERTEX_2" value="2">
+      <doc>Vertex 2 contains the flat shaded colour source.</doc>
+    </value>
+  </enum>
+
+  <enum name="INDEX_SIZE">
+    <value name="B8"  value="0"/>
+    <value name="B16" value="1"/>
+    <value name="B32" value="2"/>
+  </enum>
+
+  <enum name="PRIMITIVE_TOPOLOGY">
+    <value name="POINT_LIST"     value="0">
+      <doc>Point List.</doc>
+    </value>
+    <value name="LINE_LIST"      value="1">
+      <doc>Line List.</doc>
+    </value>
+    <value name="LINE_LIST_ADJ"  value="2">
+      <doc>Line List with adjacency.</doc>
+    </value>
+    <value name="LINE_STRIP"     value="3">
+      <doc>Line strip.</doc>
+    </value>
+    <value name="LINE_STRIP_ADJ" value="4">
+      <doc>Line strip with adjacency.</doc>
+    </value>
+    <value name="LINE_LOOP"      value="5">
+      <doc>Line loop.</doc>
+    </value>
+    <value name="TRI_LIST"       value="6">
+      <doc>Triangle list.</doc>
+    </value>
+    <value name="TRI_LIST_ADJ"   value="7">
+      <doc>Triangle with with adjacency.</doc>
+    </value>
+    <value name="TRI_LIST_EDGE"  value="8">
+      <doc>Triangle list with edge flags.</doc>
+    </value>
+    <value name="TRI_STRIP"      value="9">
+      <doc>Triangle strip.</doc>
+    </value>
+    <value name="TRI_STRIP_ADJ"  value="10">
+      <doc>Triangle strip with adjacency.</doc>
+    </value>
+    <value name="TRI_FAN"        value="11">
+      <doc>Triangle fan.</doc>
+    </value>
+    <value name="PATCH_LIST"     value="12">
+      <doc>Patch list.</doc>
+    </value>
+  </enum>
+
+  <enum name="SD_TYPE">
+    <value name="NONE" value="0">
+      <doc>None.</doc>
+    </value>
+    <value name="PDS"  value="1">
+      <doc>All clusters.</doc>
+    </value>
+    <value name="USC"  value="2">
+      <doc>Target cluster.</doc>
+    </value>
+  </enum>
+
+  <enum name="USC_TARGET">
+    <value name="ALL" value="0">
+      <doc>All clusters.</doc>
+    </value>
+    <value name="ANY" value="1">
+      <doc>Any cluster.</doc>
+    </value>
+  </enum>
+
+  <enum name="UVS_SCRATCH_SIZE_SELECT">
+    <doc>Selects how much extra space to allocate in the UVS per vertex.</doc>
+    <value name="FIVE" value="0">
+      <doc>Allocate an extra 1 DWord.</doc>
+    </value>
+    <value name="ONE"  value="1">
+      <doc>Allocate an extra 5 DWords.</doc>
+    </value>
+  </enum>
+
+  <struct name="PPP_STATE0" length="1">
+    <field name="block_type" start="29" end="31" type="BLOCK_TYPE" default="PPP_STATE_UPDATE">
+      <doc>PPP State Update Header.</doc>
+    </field>
+    <field name="word_count" start="8" end="15" type="uint">
+      <doc>Number of PPP state DWords to fetch (0=256, 1=1, ...).</doc>
+    </field>
+    <field name="addrmsb" start="0" end="7" shift="32" type="address">
+      <doc>MSB of base address of PPP state data.</doc>
+    </field>
+  </struct>
+
+  <struct name="PPP_STATE1" length="1">
+    <field name="addrlsb" start="2" end="31" shift="2" type="address">
+      <doc>LSB of base address of PPP state data.</doc>
+    </field>
+  </struct>
+
+  <struct name="PDS_STATE0" length="1">
+    <field name="block_type" start="29" end="31" type="BLOCK_TYPE" default="PDS_STATE_UPDATE">
+      <doc>PDS State Update header.</doc>
+    </field>
+    <field name="dm_target" start="28" end="28" type="DM_TARGET">
+      <doc>Which DM will run this state update.</doc>
+    </field>
+    <field name="usc_target" start="25" end="25" type="USC_TARGET">
+      <doc>Which cluster to run on.</doc>
+    </field>
+    <field name="usc_common_size" start="16" end="24" type="uint">
+      <doc>USC Common Store allocation size (64 byte chunks).</doc>
+      <define name="UNIT_SIZE" value="64"/>
+    </field>
+    <field name="usc_unified_size" start="10" end="15" type="uint">
+      <doc>USC Unified Store allocation size (16 byte chunks).</doc>
+      <define name="UNIT_SIZE" value="16"/>
+    </field>
+    <field name="pds_temp_size" start="6" end="9" type="uint">
+      <doc>Number of temporaries to allocate (16 byte chunks).</doc>
+      <define name="UNIT_SIZE" value="16"/>
+    </field>
+    <field name="pds_data_size" start="0" end="5" type="uint">
+      <doc>Number of constants to load (16 byte chunks).</doc>
+      <define name="UNIT_SIZE" value="16"/>
+    </field>
+  </struct>
+
+  <struct name="PDS_STATE1" length="1">
+    <!-- This is an offset actually. Note for when we auto-generate the xmls. -->
+    <field name="pds_data_addr" start="4" end="31" shift="4" type="address">
+      <doc>PDS Data Address for state update.</doc>
+    </field>
+    <field name="sd_type" start="2" end="3" type="SD_TYPE">
+      <doc>The sequential dependency type to apply to this task.</doc>
+    </field>
+    <field name="sd_next_type" start="0" end="1" type="SD_TYPE">
+      <doc>The sequential dependency type to apply to the next task.</doc>
+    </field>
+  </struct>
+
+  <struct name="PDS_STATE2" length="1">
+    <!-- This is an offset actually. Note for when we auto-generate the xmls. -->
+    <field name="pds_code_addr" start="4" end="31" shift="4" type="address">
+      <doc>PDS Code Address for state update.</doc>
+    </field>
+  </struct>
+
+  <struct name="STREAM_LINK0" length="1">
+    <doc>Stream Link.</doc>
+    <field name="block_type" start="29" end="31" type="BLOCK_TYPE" default="STREAM_LINK">
+      <doc>Stream Link header.</doc>
+    </field>
+    <field name="with_return" start="28" end="28" type="bool">
+      <doc>If set, stream at ADDR must end with a return, not terminate.</doc>
+    </field>
+    <field name="compare_present" start="27" end="27" type="bool">
+      <doc>Enable conditional linking, and words 2 &amp; 3 are present. If condition passes, link is followed.</doc>
+    </field>
+    <field name="compare_mode" start="24" end="26" type="uint">
+      <doc>Compare mode.</doc>
+    </field>
+    <field name="compare_data" start="8" end="23" type="uint">
+      <doc>Reference value to compare against.</doc>
+    </field>
+    <field name="link_addrmsb" start="0" end="7" shift="32" type="address">
+      <doc>MSB of Stream link address.</doc>
+    </field>
+  </struct>
+
+  <struct name="STREAM_LINK1" length="1">
+    <field name="link_addrlsb" start="2" end="31" shift="2" type="address">
+      <doc>LSB of Stream link address.</doc>
+    </field>
+  </struct>
+
+  <struct name="STREAM_RETURN" length="1">
+    <doc>VDM Stream Return.</doc>
+    <field name="block_type" start="29" end="31" type="BLOCK_TYPE" default="STREAM_RETURN"/>
+  </struct>
+
+  <struct name="STREAM_TERMINATE" length="1">
+    <doc>VDM Stream Terminate.</doc>
+    <field name="block_type" start="29" end="31" type="BLOCK_TYPE" default="STREAM_TERMINATE"/>
+    <field name="context" start="0" end="0" type="bool">
+      <doc>Indicates that the terminate is a context store terminate. Only set by HW.</doc>
+    </field>
+  </struct>
+
+  <struct name="VDM_STATE0" length="1">
+    <doc>VDM State update first word.</doc>
+    <field name="block_type" start="29" end="31" type="BLOCK_TYPE" default="VDM_STATE_UPDATE">
+      <doc>VDM State update header.</doc>
+    </field>
+    <field name="cut_index_present" start="28" end="28" type="bool">
+      <doc>Cut Index present bit.</doc>
+    </field>
+    <field name="vs_data_addr_present" start="27" end="27" type="bool">
+      <doc>VS Data Addr present bit.</doc>
+    </field>
+    <field name="vs_other_present" start="26" end="26" type="bool">
+      <doc>VS info present bit.</doc>
+    </field>
+    <field name="ds_present" start="24" end="24" type="bool">
+      <doc>DS info present bit.</doc>
+    </field>
+    <field name="gs_present" start="23" end="23" type="bool">
+      <doc>GS info present bit.</doc>
+    </field>
+    <field name="hs_present" start="22" end="22" type="bool">
+      <doc>HS info present bit.</doc>
+    </field>
+    <field name="cam_size" start="7" end="14" type="uint">
+      <doc>Applies to DS if enabled, otherwise VS.</doc>
+    </field>
+    <field name="uvs_scratch_size_select" start="6" end="6" type="UVS_SCRATCH_SIZE_SELECT">
+      <doc>Applies to whichever shader writes into the UVS. I.e., GS if enabled, else DS if enabled, else VS.
+           In addition to VERTEX_OUTPUT_SIZE, the VDM will tell the PDS to allocate additional space in the UVS based on the setting of this field.
+           If rasterisation is enabled, UVS_SCRATCH_SIZE_SELECT should be set to 5 DWords. If only streaming out to memory, 1 DWord is sufficient.
+           When 1, allocate an extra 1 DWords.
+           When 0, allocate an extra 5 DWords.
+      </doc>
+    </field>
+    <field name="cut_index_enable" start="5" end="5" type="bool">
+      <doc>Enable cut index.</doc>
+    </field>
+    <field name="tess_enable" start="4" end="4" type="bool">
+      <doc>Tessellation (DS + HS) enable.</doc>
+    </field>
+    <field name="gs_enable" start="3" end="3" type="bool">
+      <doc>Geometry shader enable.</doc>
+    </field>
+    <field name="flatshade_control" start="1" end="2" type="FLATSHADE_CONTROL">
+      <doc>Flat shade colour source.</doc>
+    </field>
+    <field name="generate_primitive_id" start="0" end="0" type="bool">
+      <doc>PrimID generate enable.</doc>
+    </field>
+  </struct>
+
+  <struct name="VDM_STATE1" length="1">
+    <field name="cut_index" start="0" end="31" type="uint">
+      <doc>Index value which restarts the primitive topology.</doc>
+    </field>
+  </struct>
+
+  <struct name="VDM_STATE2" length="1">
+    <field name="vs_pds_data_base_addr" start="4" end="31" shift="4" type="address">
+      <doc>Vertex Shader program data address.</doc>
+    </field>
+  </struct>
+
+  <struct name="VDM_STATE3" length="1">
+    <field name="vs_pds_code_base_addr" start="4" end="31" shift="4" type="address">
+      <doc>Vertex Shader program code address.</doc>
+    </field>
+  </struct>
+
+  <struct name="VDM_STATE4" length="1">
+    <field name="vs_output_size" start="0" end="7" type="uint">
+      <doc>Size of output vertex (4 byte chunks).</doc>
+      <define name="UNIT_SIZE" value="4"/>
+    </field>
+  </struct>
+
+  <struct name="VDM_STATE5" length="1">
+    <field name="vs_max_instances_ext" start="31" end="31" type="bool">
+      <doc>Extends the range of MAX_INSTANCES.
+           If both VS_MAX_INSTANCES_EXT and MAX_INSTANCES are set to 0, then the encoded max instances value is 64.
+           Otherwise, if VS_MAX_INSTANCES_EXT is set, then the encoded max instances value is equivalent to adding 32 to the literal value of the MAX_INSTANCES field;
+           And if VS_MAX_INSTANCES_EXT is not set, then the encoded max instances value is equivalent to the literal value of the MAX_INSTANCES field.
+      </doc>
+    </field>
+    <field name="vs_max_instances" start="25" end="29" type="uint">
+      <doc>Maximum number of instances to allow in a vertex shader task (0=32, 1=1, ...).</doc>
+    </field>
+    <field name="vs_usc_common_size" start="16" end="24" type="uint">
+      <doc>USC Common Store allocation size (64 byte chunks).</doc>
+      <define name="UNIT_SIZE" value="64"/>
+    </field>
+    <field name="vs_usc_unified_size" start="10" end="15" type="uint">
+      <doc>USC Unified Store allocation size (16 byte chunks).</doc>
+      <define name="UNIT_SIZE" value="16"/>
+    </field>
+    <field name="vs_pds_temp_size" start="6" end="9" type="uint">
+      <doc>Number of temporaries (16 byte chunks).</doc>
+      <define name="UNIT_SIZE" value="16"/>
+    </field>
+    <field name="vs_pds_data_size" start="0" end="5" type="uint">
+      <doc>Number of constants to load (16 byte chunks).</doc>
+      <define name="UNIT_SIZE" value="16"/>
+    </field>
+  </struct>
+
+  <struct name="INDEX_LIST0" length="1">
+    <doc>Index List word 0.</doc>
+    <field name="block_type" start="29" end="31" type="BLOCK_TYPE" default="INDEX_LIST">
+      <doc>Index List.</doc>
+    </field>
+    <field name="index_addr_present" start="28" end="28" type="bool">
+      <doc>Present bit for word 1.</doc>
+    </field>
+    <field name="index_count_present" start="27" end="27" type="bool">
+      <doc>Present bit for word 2.</doc>
+    </field>
+    <field name="index_instance_count_present" start="26" end="26" type="bool">
+      <doc>Present bit for word 3.</doc>
+    </field>
+    <field name="index_offset_present" start="25" end="25" type="bool">
+      <doc>Present bit for word 4.</doc>
+    </field>
+    <field name="start_present" start="24" end="24" type="bool">
+      <doc>Present bit for word 5 &amp; 6.</doc>
+    </field>
+    <field name="indirect_addr_present" start="23" end="23" type="bool">
+      <doc>Present bit for words 7 &amp; 8.</doc>
+    </field>
+    <field name="split_count_present" start="22" end="22" type="bool">
+      <doc>Present bit for word 9.</doc>
+    </field>
+    <condition type="if" check="VDM_DEGENERATE_CULLING"/>
+      <field name="degen_cull_enable" start="19" end="19" type="bool">
+        <doc>Enable Degenerate Culling in VDM.</doc>
+      </field>
+    <condition type="endif" check="VDM_DEGENERATE_CULLING"/>
+    <field name="index_size" start="17" end="18" type="INDEX_SIZE">
+      <doc>8-bit (0), 16-bit (1) or 32-bit (2) indices.</doc>
+    </field>
+    <field name="patch_count" start="12" end="16" type="uint">
+      <doc>Number of indices in a patch. (0=1, 1=2, ... ).</doc>
+    </field>
+    <field name="primitive_topology" start="8" end="11" type="PRIMITIVE_TOPOLOGY">
+      <doc>The primitive topology.</doc>
+    </field>
+    <field name="index_base_addrmsb" start="0" end="7" shift="32" type="address">
+      <doc>MSB of index buffer address.</doc>
+    </field>
+  </struct>
+
+  <struct name="INDEX_LIST1" length="1">
+    <field name="index_base_addrlsb" start="0" end="31" shift="0" type="address">
+      <doc>LSB of index buffer address.</doc>
+    </field>
+  </struct>
+
+  <struct name="INDEX_LIST2" length="1">
+    <field name="index_count" start="0" end="31" type="uint">
+      <doc>Number of indices to fetch per instance.</doc>
+    </field>
+  </struct>
+
+  <struct name="INDEX_LIST3" length="1">
+    <field name="instance_count" start="0" end="31" type="uint">
+      <doc>Number of instances.</doc>
+    </field>
+  </struct>
+
+  <struct name="INDEX_LIST4" length="1">
+    <field name="index_offset" start="0" end="31" type="uint">
+      <doc>Signed offset added to indices as they are read from memory.</doc>
+    </field>
+  </struct>
+
+  <struct name="INDEX_LIST5" length="1">
+    <field name="start_index" start="0" end="31" type="uint">
+      <doc>The starting index of each instance.</doc>
+    </field>
+  </struct>
+
+  <struct name="INDEX_LIST6" length="1">
+    <field name="start_instance" start="0" end="31" type="uint">
+      <doc>The starting instance of the buffer.</doc>
+    </field>
+  </struct>
+
+  <struct name="INDEX_LIST7" length="1">
+    <field name="indirect_base_addrmsb" start="0" end="7" shift="32" type="address">
+      <doc>MSB of indirect argument buffer address.</doc>
+    </field>
+  </struct>
+
+  <struct name="INDEX_LIST8" length="1">
+    <field name="indirect_base_addrlsb" start="2" end="31" shift="2" type="address">
+      <doc>LSB of indirect argument buffer address.</doc>
+    </field>
+  </struct>
+
+  <struct name="INDEX_LIST9" length="1">
+    <field name="split_count" start="0" end="15" type="uint">
+      <doc>The number of primitives after which to switch TA pipe.</doc>
+    </field>
+  </struct>
+
+</csbgen>

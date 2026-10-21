@@ -1,0 +1,598 @@
+<?xml version="1.0" ?>
+
+<!--
+Copyright © 2022 Imagination Technologies Ltd.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice (including the next
+paragraph) shall be included in all copies or substantial portions of the
+Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+-->
+
+<csbgen name="ROGUE" prefix="TA">
+
+  <enum name="CLIP_MODE">
+    <value name="NO_FRONT_OR_REAR" value="0">
+      <doc>No front or rear clipping.</doc>
+    </value>
+    <value name="FRONT_REAR"       value="1">
+      <doc>Perform front and rear clipping.</doc>
+    </value>
+    <value name="FRONT_REAR_DEPTH" value="2">
+      <doc>Perform front and rear clipping and generate depth clamped primitive.</doc>
+    </value>
+  </enum>
+
+  <enum name="CMPMODE">
+    <doc>Compare mode used in performing depth/stencil tests.</doc>
+    <value name="NEVER"            value="0"/>
+    <value name="LESS"             value="1"/>
+    <value name="EQUAL"            value="2"/>
+    <value name="LESS_OR_EQUAL"    value="3"/>
+    <value name="GREATER"          value="4"/>
+    <value name="NOT_EQUAL"        value="5"/>
+    <value name="GREATER_OR_EQUAL" value="6"/>
+    <value name="ALWAYS"           value="7"/>
+  </enum>
+
+  <enum name="CULLMODE">
+    <doc>Selects the back face culling mode.</doc>
+    <value name="NO_CULLING" value="0"/>
+    <value name="CULL_CW"    value="1"/>
+    <value name="CULL_CCW"   value="2"/>
+  </enum>
+
+  <enum name="FLATSHADE">
+    <doc>Indicates which vertex to use as the source when flat shading.</doc>
+    <value name="VTX_VERTEX_0" value="1"/>
+    <value name="VTX_VERTEX_1" value="2"/>
+    <value name="VTX_VERTEX_2" value="3"/>
+  </enum>
+
+  <enum name="GS_OUTPUT_TOPOLOGY">
+    <doc>Specifies the output primitive topology from the Geometry Shader.</doc>
+    <value name="POINT_LIST" value="0"/>
+    <value name="LINE_STRIP" value="1"/>
+    <value name="TRI_STRIP"  value="2"/>
+  </enum>
+
+  <enum name="ISPB_STENCILOP">
+    <value name="KEEP"               value="0">
+      <doc>Keeps current stencil buffer value.</doc>
+    </value>
+    <value name="ZERO"               value="1">
+      <doc>Zeroes stencil buffer value.</doc>
+    </value>
+    <value name="REPLACE"            value="2">
+      <doc>Replaces stencil buffer value with Stencil Ref Value.</doc>
+    </value>
+    <value name="INCREMENT_SATURATE" value="3">
+      <doc>Increments stencil buffer value and saturates at 0xFF.</doc>
+    </value>
+    <value name="DECREMENT_SATURATE" value="4">
+      <doc>Decrements stencil buffer value and saturates at 0x00.</doc>
+    </value>
+    <value name="INVERT"             value="5">
+      <doc>Bitwise inverts stencil buffer value.</doc>
+    </value>
+    <value name="INCREMENT"          value="6">
+      <doc>Increments stencil buffer value. Overflows from 0xFF to 0x00.</doc>
+    </value>
+    <value name="DECREMENT"          value="7">
+      <doc>Decrements stencil buffer values. Underflows from 0x00 to 0xFF.</doc>
+    </value>
+  </enum>
+
+  <enum name="OBJTYPE">
+    <value name="TRIANGLE"                   value="0"/>
+    <value name="LINE"                       value="1"/>
+    <value name="SPRITE_10UV"                value="2"/>
+    <value name="SPRITE_UV"                  value="3"/>
+    <value name="SPRITE_01UV"                value="4"/>
+    <value name="LINE_FILLED_TRIANGLE"       value="5"/>
+    <value name="POINT_FILLED_TRIANGLE"      value="6"/>
+    <value name="TESSELLATED_OBJECT_NO_GS"   value="7"/>
+    <value name="TESSELLATED_OBJECT_WITH_GS" value="8"/>
+  </enum>
+
+  <!--
+    TODO: Add support for "ifs" in csbgen root element.
+  -->
+  <enum name="PASSTYPE">
+    <doc>Identifies the ISP pass type.</doc>
+    <value name="OPAQUE"             value="0"/>
+    <value name="TRANSLUCENT"        value="1"/>
+    <value name="PUNCH_THROUGH"      value="2"/>
+    <value name="VIEWPORT_OBJECT"    value="3"/>
+    <value name="FAST_PUNCH_THROUGH" value="4"/>
+    <value name="DEPTH_FEEDBACK"     value="5">
+      <doc>Assume always alpha tested.</doc>
+    </value>
+    <value name="ANTI_ALIASED"       value="6">
+      <doc>Order dependent.</doc>
+    </value>
+  </enum>
+
+  <enum name="REGION_CLIP_MODE">
+    <doc>TA region based clip condition.</doc>
+    <value name="NONE"    value="0"/>
+    <value name="OUTSIDE" value="1"/>
+  </enum>
+
+  <struct name="STATE_HEADER" length="1">
+    <field name="not_final_term" start="26" end="26" type="bool">
+      <doc>If set, this is a terminate for one render target, but is not the final terminate.</doc>
+    </field>
+    <field name="pres_terminate" start="25" end="25" type="bool">
+      <doc>If set, the Terminate words are present.</doc>
+    </field>
+    <field name="context_switch" start="24" end="24" type="bool">
+      <doc>If set, this is a context switch terminate. No other words are present. Only set by HW.</doc>
+    </field>
+    <field name="pres_stream_out_program" start="23" end="23" type="bool">
+      <doc>If set, Stream Out configuration words 1 and 2 are present.</doc>
+    </field>
+    <field name="pres_stream_out_size" start="22" end="22" type="bool">
+      <doc>If set, Stream Out configuration word 0 is present.</doc>
+    </field>
+    <field name="pres_ppp_ctrl" start="21" end="21" type="bool">
+      <doc>If set, the PPP Control word is present.</doc>
+    </field>
+    <field name="pres_varying_word2" start="20" end="20" type="bool">
+      <doc>If set, Varying Configuration word 2 is present.</doc>
+    </field>
+    <field name="pres_varying_word1" start="19" end="19" type="bool">
+      <doc>If set, Varying Configuration word 1 is present.</doc>
+    </field>
+    <field name="pres_varying_word0" start="18" end="18" type="bool">
+      <doc>If set, Varying Configuration word 0 is present.</doc>
+    </field>
+    <field name="pres_outselects" start="17" end="17" type="bool">
+      <doc>If set, the Output Select word is present.</doc>
+    </field>
+    <field name="pres_wclamp" start="16" end="16" type="bool">
+      <doc>If set, update the value to use for clamping W.</doc>
+    </field>
+    <field name="view_port_count" start="12" end="15" type="uint">
+      <doc>The number of viewport targets minus 1.</doc>
+    </field>
+    <field name="pres_viewport" start="11" end="11" type="bool">
+      <doc>If set, the Viewport Transform words are present.</doc>
+    </field>
+    <field name="pres_region_clip" start="10" end="10" type="bool">
+      <doc>If set, the two Region Clipping DWords are present.</doc>
+    </field>>
+    <field name="pres_pds_state_ptr3" start="9" end="9" type="bool">
+      <doc>If set, Uniform Data Data Base (part of the PDS State for the 3D phase) is present.</doc>
+    </field>
+    <field name="pres_pds_state_ptr2" start="8" end="8" type="bool">
+      <doc>If set, Texture State Data Base (part of the PDS State for the 3D phase) is present.</doc>
+    </field>
+    <field name="pres_pds_state_ptr1" start="7" end="7" type="bool">
+      <doc>If set, Varyings State Data Base (part of the PDS State for the 3D phase) is present.</doc>
+    </field>
+    <field name="pres_pds_state_ptr0" start="6" end="6" type="bool">
+      <doc>If set, the first four DWords defining the PDS State for the 3D phase are present.</doc>
+    </field>
+    <field name="pres_ispctl_dbsc" start="5" end="5" type="bool">
+      <doc>If set, ISP State Word Depth Bias/Scissor is present.</doc>
+    </field>
+    <field name="pres_ispctl_bb" start="4" end="4" type="bool">
+      <doc>If set, ISP State Word BB is present.</doc>
+    </field>
+    <field name="pres_ispctl_ba" start="3" end="3" type="bool">
+      <doc>If set, ISP State Word BA is present.</doc>
+    </field>
+    <field name="pres_ispctl_fb" start="2" end="2" type="bool">
+      <doc>If set, ISP State Word FB is present.</doc>
+    </field>
+    <field name="pres_ispctl_fa" start="1" end="1" type="bool">
+      <doc>If set, ISP State Word FA is present.</doc>
+    </field>
+    <field name="pres_ispctl" start="0" end="0" type="bool">
+      <doc>If set, ISP State Word is present.</doc>
+    </field>
+  </struct>
+
+  <struct name="STATE_ISPCTL" length="1">
+    <field name="validid" start="26" end="31" type="uint">
+      <doc>For opaque and translucent objects, this value is compared against the value supplied in a global register.
+           If smaller, the HW will treat the object as though ISP_TAGWRITEDISABLE is set.
+           Punch through, fast punch through and depth feedback objects are left unchanged.
+      </doc>
+    </field>
+    <field name="upass" start="22" end="25" type="uint">
+      <doc>User pass spawn control.</doc>
+    </field>
+    <field name="tagwritedisable" start="21" end="21" type="bool">
+      <doc>If set, the object is not forwarded to the TSP for texturing and shading. This can be used for an object which only updates depth and stencil buffers.</doc>
+    </field>
+    <field name="ovgmtestdisable" start="20" end="20" type="bool">
+      <doc>If set, the OVG mask test is disabled.</doc>
+    </field>
+    <field name="two_sided" start="19" end="19" type="bool">
+      <doc>If set, two-sided stencil testing is enabled.</doc>
+    </field>
+    <field name="bpres" start="18" end="18" type="bool">
+      <doc>If set, ISP State Word B is present.</doc>
+    </field>
+    <field name="dbenable" start="17" end="17" type="bool">
+      <doc>If set, depth bias is enabled.</doc>
+    </field>
+    <field name="scenable" start="16" end="16" type="bool">
+      <doc>If set, scissor coordinates are enabled.</doc>
+    </field>
+    <field name="vistest" start="15" end="15" type="bool">
+      <doc>Occlusion queries are enabled when set to 1.</doc>
+    </field>
+    <field name="visbool" start="14" end="14" type="bool">
+      <doc>Occlusion query type is a simple Boolean rather than an accumulated value. Enabled by ISP_VISTEST.</doc>
+    </field>
+    <field name="visreg" start="0" end="13" type="uint">
+      <doc>Index pointing to the occlusion query counter to be incremented. Enabled by ISP_VISTEST.</doc>
+    </field>
+  </struct>
+
+  <struct name="STATE_ISPA" length="1">
+    <field name="objtype" start="28" end="31" type="OBJTYPE"/>
+    <field name="passtype" start="24" end="26" type="PASSTYPE"/>
+    <field name="ovgvispassmaskop" start="23" end="23" type="bool">
+      <doc>Maskplane operation for use when OVG mask test is disabled.</doc>
+    </field>
+    <field name="maskval" start="22" end="22" type="bool">
+      <doc>Maskplane data value for use with maskplane pass types when OVG mask test is disabled.</doc>
+    </field>
+    <field name="dwritedisable" start="21" end="21" type="bool">
+      <doc>When set, the depth test occurs as normal but the depth buffer is not updated.</doc>
+    </field>
+    <field name="dfbztestenable" start="20" end="20" type="bool">
+      <doc>When set, the up-front depth test is enabled for DFB pass type.</doc>
+    </field>
+    <field name="dcmpmode" start="17" end="19" type="CMPMODE"/>
+    <field name="linefilllastpixel" start="16" end="16" type="bool">
+      <doc>If set, the last pixel of a line is filled.</doc>
+    </field>
+    <field name="pointlinewidth" start="8" end="15" type="uint">
+      <doc>The width/pitch used for rendering lines, point-filled and line-filled triangles.</doc>
+      <define name="SIZE_MAX" value="255"/>
+    </field>
+    <field name="sref" start="0" end="7" type="uint">
+      <doc>Stencil reference value for this object used in the stencil comparison.</doc>
+      <define name="SIZE_MAX" value="255"/>
+    </field>
+  </struct>
+
+  <struct name="STATE_ISPB" length="1">
+    <field name="scmpmode" start="25" end="27" type="CMPMODE"/>
+    <field name="sop1" start="22" end="24" type="ISPB_STENCILOP"/>
+    <field name="sop2" start="19" end="21" type="ISPB_STENCILOP"/>
+    <field name="sop3" start="16" end="18" type="ISPB_STENCILOP"/>
+    <field name="scmpmask" start="8" end="15" type="uint">
+      <doc>Mask of bits used in stencil buffer compare. The current stencil buffer value is bitwise ANDed with this value before the stencil test is performed.</doc>
+    </field>
+    <field name="swmask" start="0" end="7" type="uint">
+      <doc>This is a per bit write enable mask. After the stencil operation has been performed on the stencil buffer, the result is bitwise ANDed with this field before being written back.</doc>
+    </field>
+  </struct>
+
+  <!-- `REGION_CLIP{0,1}` `left`,`right`,`top`,`bottom`, are all 9-bits. -->
+  <define name="REGION_CLIP_MAX" value="0x1FF"/>
+
+  <struct name="REGION_CLIP0" length="1">
+    <field name="mode" start="31" end="31" type="REGION_CLIP_MODE"/>
+    <field name="left" start="16" end="24" type="uint">
+      <doc>Left edge of the clip region, in 32 pixel units.</doc>
+    </field>
+    <field name="right" start="0" end="8" type="uint">
+      <doc>Right edge of the clip region, in 32 pixel units.</doc>
+    </field>
+  </struct>
+
+  <struct name="REGION_CLIP1" length="1">
+    <field name="top" start="16" end="24" type="uint">
+      <doc>Top edge of the clip region, in 32 pixel units.</doc>
+    </field>
+    <field name="bottom" start="0" end="8" type="uint">
+      <doc>Bottom edge of the clip region, in 32 pixel units.</doc>
+    </field>
+  </struct>
+
+  <struct name="WCLAMP" length="1">
+    <field name="val" start="0" end="31" type="uint"/>
+  </struct>
+
+  <struct name="STATE_ISPDBSC" length="1">
+    <field name="dbindex" start="16" end="31" type="uint">
+      <doc>Depth Bias Index.</doc>
+    </field>
+    <field name="scindex" start="0" end="15" type="uint">
+      <doc>Scissor Index.</doc>
+    </field>
+  </struct>
+
+  <struct name="OUTPUT_SEL" length="1">
+    <field name="vtxsize" start="24" end="31" type="uint">
+      <doc>Specifies the size of the vertex in DWords, including all DWords not output to the rasterisation phase.</doc>
+    </field>
+    <field name="tsp_unclamped_z_pres" start="21" end="21" type="bool">
+      <doc>If set, an unclamped Z value is written out at the start of the TSP data immediately after the RHW (where present).</doc>
+    </field>
+    <field name="render_tgt_pres" start="20" end="20" type="bool">
+      <doc>If set, render target is present, this is always assumed to be the last thing in the vertex.</doc>
+    </field>
+    <field name="vpt_tgt_pres" start="19" end="19" type="bool">
+      <doc>If set, viewport target is present, this is assumed to be the last thing in the vertex except render target if present.</doc>
+    </field>
+    <field name="psprite_size_pres" start="18" end="18" type="bool">
+      <doc>If set, the sprite size register in the USC output registers is valid, this is always assumed to be the last thing in the vertex except render target and viewport target if present.</doc>
+    </field>
+    <field name="isp_position_depth_clamp_z" start="17" end="17" type="bool">
+      <doc>If set, the Z value written into the ISP vertex data is depth clamped.</doc>
+    </field>
+    <field name="rhw_pres" start="16" end="16" type="bool">
+      <doc>If set, the W value is written to memory. W is always present and valid in the UVS. This bit should be set unless the object is of type viewport.</doc>
+    </field>
+    <field name="cullplane7" start="15" end="15" type="bool">
+      <doc>If set, User Plane 7 is a cull distance and should not be clipped against.</doc>
+    </field>
+    <field name="cullplane6" start="14" end="14" type="bool">
+      <doc>If set, User Plane 6 is a cull distance and should not be clipped against.</doc>
+    </field>
+    <field name="cullplane5" start="13" end="13" type="bool">
+      <doc>If set, User Plane 5 is a cull distance and should not be clipped against.</doc>
+    </field>
+    <field name="cullplane4" start="12" end="12" type="bool">
+      <doc>If set, User Plane 4 is a cull distance and should not be clipped against.</doc>
+    </field>
+    <field name="cullplane3" start="11" end="11" type="bool">
+      <doc>If set, User Plane 3 is a cull distance and should not be clipped against.</doc>
+    </field>
+    <field name="cullplane2" start="10" end="10" type="bool">
+      <doc>If set, User Plane 2 is a cull distance and should not be clipped against.</doc>
+    </field>
+    <field name="cullplane1" start="9" end="9" type="bool">
+      <doc>If set, User Plane 1 is a cull distance and should not be clipped against.</doc>
+    </field>
+    <field name="cullplane0" start="8" end="8" type="bool">
+      <doc>If set, User Plane 0 is a cull distance and should not be clipped against.</doc>
+    </field>
+    <field name="plane7" start="7" end="7" type="bool">
+      <doc>If set, clipping result of P.V for Plane 7 is present.</doc>
+    </field>
+    <field name="plane6" start="6" end="6" type="bool">
+      <doc>If set, clipping result of P.V for Plane 6 is present.</doc>
+    </field>
+    <field name="plane5" start="5" end="5" type="bool">
+      <doc>If set, clipping result of P.V for Plane 5 is present.</doc>
+    </field>
+    <field name="plane4" start="4" end="4" type="bool">
+      <doc>If set, clipping result of P.V for Plane 4 is present.</doc>
+    </field>
+    <field name="plane3" start="3" end="3" type="bool">
+      <doc>If set, clipping result of P.V for Plane 3 is present.</doc>
+    </field>
+    <field name="plane2" start="2" end="2" type="bool">
+      <doc>If set, clipping result of P.V for Plane 2 is present.</doc>
+    </field>
+    <field name="plane1" start="1" end="1" type="bool">
+      <doc>If set, clipping result of P.V for Plane 1 is present.</doc>
+    </field>
+    <field name="plane0" start="0" end="0" type="bool">
+      <doc>If set, clipping result of P.V for Plane 0 is present.</doc>
+    </field>
+  </struct>
+
+  <struct name="STATE_VARYING0" length="1">
+    <field name="f32_npc" start="16" end="23" type="uint">
+      <doc>A count of the number of DWords in the USC output registers assumed to be output from the TA as non-perspective correct interpolated 32-bit floating point values.</doc>
+    </field>
+    <field name="f32_flat" start="8" end="15" type="uint">
+      <doc>A count of the number of DWords in the USC output registers assumed to be output from the TA as flat-shaded 32-bit floating point values.
+           The value output is taken from the vertex specified by TA_FLAT_SHADE_VTX.
+      </doc>
+    </field>
+    <field name="f32_linear" start="0" end="7" type="uint">
+      <doc>A count of the number of DWords in the USC output registers assumed to be output from the TA as linearly interpolated 32-bit floating point values.</doc>
+    </field>
+  </struct>
+
+  <struct name="STATE_VARYING1" length="1">
+    <field name="f16_npc" start="24" end="31" type="uint">
+      <doc>A count of the number of DWords in the USC output registers assumed to be output from the TA as non-perspective correct interpolated 16-bit floating point values.</doc>
+    </field>
+    <field name="f16_flat" start="16" end="23" type="uint">
+      <doc>A count of the number of DWords in the USC output registers assumed to be output from the TA as flat-shaded 16-bit floating point values.
+           The value output is taken from the vertex specified by TA_FLAT_SHADE_VTX.
+      </doc>
+    </field>
+    <field name="f16_linear" start="8" end="15" type="uint">
+      <doc>A count of the number of DWords in the USC output registers assumed to be output from the TA as linearly interpolated 16-bit floating point values.</doc>
+    </field>
+  </struct>
+
+  <struct name="STATE_VARYING2" length="1">
+    <field name="output_clip_planes" start="16" end="19" type="uint">
+      <doc>Specifies the number of the User Plane values to be written out to the rasterisation phase (only the first N planes will be output).
+           When this value is configured as zero (the default) then the User Clip Planes will be used solely for Clipping and the results will not be available inside the pixel shader.
+      </doc>
+    </field>
+  </struct>
+
+  <struct name="STATE_TERMINATE0" length="1">
+    <field name="clip_right" start="18" end="26" type="uint">
+      <doc>Right edge of the clip region in 32 pixel units.</doc>
+      <define name="BLOCK_SIZE_IN_PIXELS" value="32"/>
+    </field>
+    <field name="clip_top" start="9" end="17" type="uint">
+      <doc>Top edge of the clip region in 32 pixel units.</doc>
+      <define name="BLOCK_SIZE_IN_PIXELS" value="32"/>
+    </field>
+    <field name="clip_bottom" start="0" end="8" type="uint">
+      <doc>Bottom edge of the clip region in 32 pixel units.</doc>
+      <define name="BLOCK_SIZE_IN_PIXELS" value="32"/>
+    </field>
+  </struct>
+
+  <struct name="STATE_TERMINATE1" length="1">
+    <field name="clip_left" start="23" end="31" type="uint">
+      <doc>Left edge of the clip region, in 32 pixel units.</doc>
+      <define name="BLOCK_SIZE_IN_PIXELS" value="32"/>
+    </field>
+    <field name="render_target" start="0" end="10" type="uint">
+      <doc>The render target to terminate.</doc>
+    </field>
+  </struct>
+
+  <struct name="STATE_STREAM_OUT0" length="1">
+    <field name="stream3_size" start="24" end="31" type="uint">
+      <doc>A count of the number of DWords in the USC output registers assumed to be streamed out to memory from the TA.
+           The DWord count starts at the end of Stream2 after the end of VTXSIZE+STREAM1_SIZE+STREAM2_SIZE DWords.
+      </doc>
+    </field>
+    <field name="stream2_size" start="16" end="23" type="uint">
+      <doc>A count of the number of DWords in the USC output registers assumed to be streamed out to memory from the TA.
+           The DWord count starts at the end of Stream1 after the end of VTXSIZE+STREAM1_SIZE DWords.
+      </doc>
+    </field>
+    <field name="stream1_size" start="8" end="15" type="uint">
+      <doc>A count of the number of DWords in the USC output registers assumed to be streamed out to memory from the TA.
+           The DWord count starts at the end of the current vertex after the end of VTXSIZE DWords.
+      </doc>
+    </field>
+    <field name="stream0_mem_output" start="1" end="1" type="bool">
+      <doc>Controls whether Stream0, as defined by VTXSIZE, should be streamed out to memory.</doc>
+    </field>
+    <field name="stream0_ta_output" start="0" end="0" type="bool">
+      <doc>Controls whether Stream0, as defined by VTXSIZE, should be processed by the TA and written into primitive blocks.</doc>
+    </field>
+  </struct>
+
+  <struct name="STATE_STREAM_OUT1" length="1">
+    <field name="sync" start="10" end="10" type="bool">
+      <doc>Indicates that a state update stream program should be issued.</doc>
+    </field>
+    <field name="pds_data_size" start="4" end="9" type="uint">
+      <doc>The number of constants to load in 16 byte chunks.</doc>
+      <define name="UNIT_SIZE" value="16"/>
+    </field>
+    <field name="pds_temp_size" start="0" end="3" type="uint">
+      <doc>The number of temporaries to allocate in 16 byte chunks.</doc>
+      <define name="UNIT_SIZE" value="16"/>
+    </field>
+  </struct>
+
+  <struct name="STATE_STREAM_OUT2" length="1">
+    <!-- This is an offset actually. Note for when we auto-generate the xmls. -->
+    <field name="pds_data_addr" start="4" end="31" shift="4" type="address">
+      <doc>The PDS data address 4GB range, 16-byte granularity.</doc>
+    </field>
+  </struct>
+
+  <struct name="STATE_PDS_SHADERBASE" length="1">
+    <doc> The pixel shader base is the base address of the PDS Data Segment. The code segment is address is PDS_PIXEL_SHADERBASE + PDS_PIXELSHADERSIZE. The pixel shader program issues the DOUTU for the Fragment Shader only.</doc>
+    <!-- This is an offset actually. Note for when we auto-generate the xmls. -->
+    <field name="addr" start="4" end="31" shift="4" type="address"/>
+  </struct>
+
+  <struct name="STATE_PDS_TEXUNICODEBASE" length="1">
+    <doc>This is the PDS Code Address used for 2 programs. The Program which issues the DMAs (DOUTD etc.) for uniform data and/or texture state.</doc>
+    <field name="addr" start="4" end="31" shift="4" type="address"/>
+  </struct>
+
+  <struct name="STATE_PDS_VARYINGBASE" length="1">
+    <doc>This is the base address of the PDS Data Segment. The code segment is address is PDS_VARYINGBASE + PDS_VARYINGSIZE.</doc>
+    <!-- This is an offset actually. Note for when we auto-generate the xmls. -->
+    <field name="addr" start="4" end="31" shift="4" type="address"/>
+  </struct>
+
+  <struct name="STATE_PDS_TEXTUREDATABASE" length="1">
+    <doc>This points to the DMAs to load the Texture State (or contains the State with DOUTW commands).</doc>
+    <field name="addr" start="4" end="31" shift="4" type="address"/>
+  </struct>
+
+  <struct name="STATE_PDS_UNIFORMDATABASE" length="1">
+    <doc>This points to the DMAs to load the Uniforms (or contains the Uniforms with DOUTW commands).</doc>
+    <!-- This is an offset actually. Note for when we auto-generate the xmls. -->
+    <field name="addr" start="4" end="31" shift="4" type="address"/>
+  </struct>
+
+  <struct name="STATE_PDS_SIZEINFO1" length="1">
+    <doc>If any of the size fields are 0, then that program will not be run. PDS_PIXELSHADERSIZE is always 2 128-bit Words.</doc>
+    <field name="pds_uniformsize" start="23" end="31" type="uint">
+      <define name="UNIT_SIZE" value="4"/>
+    </field>
+    <field name="pds_texturestatesize" start="16" end="22" type="uint">
+      <define name="UNIT_SIZE" value="4"/>
+    </field>
+    <field name="pds_varyingsize" start="10" end="15" type="uint">
+      <define name="UNIT_SIZE" value="4"/>
+    </field>
+    <field name="usc_varyingsize" start="4" end="9" type="uint">
+      <define name="UNIT_SIZE" value="16"/>
+      <define name="MAX_SIZE" value="63"/>
+    </field>
+    <field name="pds_tempsize" start="0" end="3" type="uint">
+      <doc>0 = 16 128-bit words, 1 = 1 128-bit word.</doc>
+      <define name="UNIT_SIZE" value="4"/>
+    </field>
+  </struct>
+
+  <struct name="STATE_PDS_SIZEINFO2" length="1">
+    <doc>If any of the size fields are 0, then that program will not be run.</doc>
+    <field name="usc_sharedsize" start="23" end="31" type="uint">
+      <define name="UNIT_SIZE" value="16"/>
+    </field>
+    <field name="pds_tri_merge_disable" start="14" end="14" type="bool">
+      <doc>Disable triangle merging.</doc>
+    </field>
+    <field name="pds_batchnum" start="0" end="13" type="uint"/>
+  </struct>
+
+  <struct name="STATE_PPP_CTRL" length="1">
+    <field name="prim_msaa" start="15" end="15" type="bool">
+      <doc>When set, per-primitive MSAA is enabled.</doc>
+    </field>
+    <field name="gs_output_topology" start="13" end="14" type="GS_OUTPUT_TOPOLOGY"/>
+    <field name="pres_prim_id" start="12" end="12" type="bool">
+      <doc>When set, per-primitive ID is present.</doc>
+    </field>
+    <field name="clip_mode" start="10" end="11" type="CLIP_MODE"/>
+    <field name="drawclippededges" start="9" end="9" type="bool">
+      <doc>Defines whether edges created by the clipper are drawn or not.</doc>
+    </field>
+    <field name="flatshade_vtx" start="7" end="8" type="FLATSHADE"/>
+    <field name="pretransform" start="6" end="6" type="bool">
+      <doc>If set, clipping and viewport transform are disabled, as the data from the USC is treated as being in screen space.</doc>
+    </field>
+    <field name="wclampen" start="5" end="5" type="bool">
+      <doc>If set, the W value going into the view port transform is clamped to the WCLAMP value.</doc>
+    </field>
+    <field name="wbuffen" start="4" end="4" type="bool">
+      <doc>Selects W Buffering mode during view port transform.</doc>
+    </field>
+    <field name="resetbbox" start="3" end="3" type="bool">
+      <doc>Reset primitive max bounding box reported in registers ROGUE_CR_TE_RGNBBOX_X and ROGUE_CR_TE_RGNBBOX_Y at start of this primitive.</doc>
+    </field>
+    <field name="updatebbox" start="2" end="2" type="bool">
+      <doc>If set, primitive max bounding box registers (ROGUE_CR_TE_RGNBBOX_X and ROGUE_CR_TE_RGNBBOX_Y) and updated for these primitives.</doc>
+    </field>
+    <field name="cullmode" start="0" end="1" type="CULLMODE">
+      <doc>00 = no culling, 01 = cull clockwise, 10 = cull counter clockwise.</doc>
+    </field>
+  </struct>
+
+</csbgen>

@@ -1,0 +1,6 @@
+# Timeouts
+shaders@glsl-predication-on-large-array
+
+# Missing test
+# https://gitlab.freedesktop.org/anholt/deqp-runner/-/issues/44
+spec@arb_internalformat_query2@minmax check for samples/num_sample_counts

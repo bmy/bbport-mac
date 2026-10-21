@@ -1,0 +1,62 @@
+# Please include a comment with the log message and a testcase triggering each
+# VUID at the bottom of the file.
+khronos_validation.message_id_filter = VUID-VkPhysicalDeviceProperties2-pNext-pNext,VUID-VkDeviceCreateInfo-pNext-pNext,VUID-vkDestroyDevice-device-05137,VUID-VkImageMemoryBarrier2-srcAccessMask-07454,UNASSIGNED-Threading-MultipleThreads-Read,VUID-VkSwapchainCreateInfoKHR-imageFormat-01273,UNASSIGNED-Threading-MultipleThreads-Write,VUID-vkCmdDrawMultiIndexedEXT-None-10909,VUID-VkRenderingAttachmentInfo-None-12256,VUID-VkDeviceAddress-size-11364,VUID-VkStridedDeviceAddressRangeKHR-address-11365
+khronos_validation.report_flags = error
+khronos_validation.debug_action = VK_DBG_LAYER_ACTION_LOG_MSG,VK_DBG_LAYER_ACTION_BREAK
+VK_LAYER_ENABLES=VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT
+khronos_validation.printf_buffer_size = 40960
+khronos_validation.printf_to_stdout = true
+khronos_validation.log_filename = stdout
+
+# VUID-VkPhysicalDeviceProperties2-pNext-pNext
+# VUID-VkDeviceCreateInfo-pNext-pNext
+# never error due to unrecognized extensions
+
+
+# dEQP-GLES3.functional.draw.random.135
+#
+# Validation Error: [ VUID-vkDestroyDevice-device-05137 ] | MessageID = 0x4872eaa0
+# vkDestroyDevice(): Object Tracking - For VkDevice 0xaaab09ea5e50, VkImage 0x210000000021 has not been destroyed.
+# The Vulkan spec states: All child objects created on device that can be destroyed or freed must have been destroyed or freed prior to destroying device
+# (https://docs.vulkan.org/spec/latest/chapters/devsandqueues.html#VUID-vkDestroyDevice-device-05137)
+# Objects: 1
+#     [0] VkImage 0x210000000021
+
+# Validation Error: [ VUID-VkImageMemoryBarrier2-srcAccessMask-07454 ] | MessageID = 0x3fac578b
+# vkCmdPipelineBarrier2(): pDependencyInfo->pImageMemoryBarriers[0].srcAccessMask (VK_ACCESS_SHADER_READ_BIT) is not supported by stage mask (VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT).
+# The Vulkan spec states: If srcAccessMask includes VK_ACCESS_2_SHADER_READ_BIT, srcStageMask must include VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, VK_PIPELINE_STAGE_2_MICROMAP_BUILD_BIT_EXT, or one of the VK_PIPELINE_STAGE_*_SHADER_BIT stages (https://docs.vulkan.org/spec/latest/chapters/synchronization.html#VUID-VkImageMemoryBarrier2-srcAccessMask-07454)
+# Objects: 1
+#     [0] VkCommandBuffer 0xaaaadb3dc670[zink barrier cmdbuf]
+
+# dEQP-EGL.functional.sharing.gles2.multithread.random_egl_server_sync.images.copytexsubimage2d.9
+#
+# Validation Error: [ UNASSIGNED-Threading-MultipleThreads-Read ] | MessageID = 0x3c39afb8
+# vkBindImageMemory(): THREADING ERROR : object of type VkDeviceMemory is simultaneously used in current thread 281473121812768 and thread 281473138721056
+# Objects: 1
+#     [0] VkDeviceMemory 0xa700000000a7
+
+# dEQP-EGL.functional.query_context.get_current_surface.rgba5551_window
+#
+# Validation Error: [ VUID-VkSwapchainCreateInfoKHR-imageFormat-01273 ] | MessageID = 0x9cf8f42b
+# vkCreateSwapchainKHR(): pCreateInfo->imageFormat is VK_FORMAT_A1R5G5B5_UNORM_PACK16.
+# The Vulkan spec states: imageFormat and imageColorSpace must match the format and colorSpace members, respectively, of one of the VkSurfaceFormatKHR structures returned by vkGetPhysicalDeviceSurfaceFormatsKHR for the surface (https://docs.vulkan.org/spec/latest/chapters/VK_KHR_surface/wsi.html#VUID-VkSwapchainCreateInfoKHR-imageFormat-01273)
+
+# dEQP-EGL.functional.sharing.gles2.multithread.random_egl_sync.images.texsubimage2d.9
+#
+# Validation Error: [ UNASSIGNED-Threading-MultipleThreads-Write ] | MessageID = 0xa05b236e
+# vkMapMemory(): THREADING ERROR : object of type VkDeviceMemory is simultaneously used in current thread 281472932675872 and thread 281472426570016
+# Objects: 1
+#     [0] VkDeviceMemory 0x750000000075
+#
+# This can happen intermittently
+
+# dEQP-GLES2.functional.multisampled_render_to_texture.readpixels
+#
+# Validation Error: [ VUID-VkRenderingAttachmentInfo-None-12256 ] | MessageID = 0x93b0a512
+# vkCmdBeginRendering(): pRenderingInfo->pColorAttachments[0].resolveMode is VK_RESOLVE_MODE_NONE but imageView is VK_SAMPLE_COUNT_1_BIT and VkMultisampledRenderToSingleSampledInfoEXT::multisampledRenderToSingleSampledEnable is VK_TRUE.
+# The Vulkan spec states: If all of the following are true: imageView is not VK_NULL_HANDLE imageView has a sample count of VK_SAMPLE_COUNT_1_BIT the pNext chain of VkRenderingInfo includes a VkMultisampledRenderToSingleSampledInfoEXT structure with the multisampledRenderToSingleSampledEnable field equal to VK_TRUE then resolveMode must not be VK_RESOLVE_MODE_NONE (https://docs.vulkan.org/spec/latest/chapters/renderpass.html#VUID-VkRenderingAttachmentInfo-None-12256)
+# Objects: 1
+#     [0] VkCommandBuffer 0xaaaae2a8e0d0[zink barrier cmdbuf]
+
+# VUID-VkDeviceAddress-size-11364,VUID-VkStridedDeviceAddressRangeKHR-address-11365
+# needs vk extension

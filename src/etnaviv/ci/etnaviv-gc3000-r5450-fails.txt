@@ -1,0 +1,15 @@
+dEQP-GLES2.functional.fbo.completeness.renderable.renderbuffer.color0.r16f,Fail
+dEQP-GLES2.functional.fbo.completeness.renderable.renderbuffer.color0.rg16f,Fail
+dEQP-GLES2.functional.fbo.completeness.renderable.renderbuffer.depth.r16f,Fail
+dEQP-GLES2.functional.fbo.completeness.renderable.renderbuffer.depth.rg16f,Fail
+dEQP-GLES2.functional.fbo.completeness.renderable.renderbuffer.stencil.r16f,Fail
+dEQP-GLES2.functional.fbo.completeness.renderable.renderbuffer.stencil.rg16f,Fail
+dEQP-GLES2.functional.shaders.invariance.highp.loop_2,Fail
+dEQP-GLES2.functional.shaders.invariance.highp.subexpression_precision_lowp,Fail
+dEQP-GLES2.functional.shaders.invariance.lowp.loop_2,Fail
+dEQP-GLES2.functional.shaders.invariance.lowp.subexpression_precision_highp,Fail
+dEQP-GLES2.functional.shaders.invariance.lowp.subexpression_precision_lowp,Fail
+dEQP-GLES2.functional.shaders.invariance.lowp.subexpression_precision_mediump,Fail
+dEQP-GLES2.functional.shaders.invariance.mediump.loop_2,Fail
+dEQP-GLES2.functional.shaders.invariance.mediump.loop_3,Fail
+dEQP-GLES2.functional.shaders.invariance.mediump.subexpression_precision_lowp,Fail

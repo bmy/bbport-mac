@@ -1,0 +1,496 @@
+<?xml version="1.0" ?>
+
+<!--
+Copyright © 2022 Imagination Technologies Ltd.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice (including the next
+paragraph) shall be included in all copies or substantial portions of the
+Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+-->
+
+<csbgen name="ROGUE" prefix="PBESTATE">
+
+  <enum name="COMP_IADDR_TYPE">
+    <doc>Compressor indirect addressing mode.</doc>
+    <value name="INDIRECT_1TILE" value="0"/>
+    <value name="INDIRECT_4TILE" value="1"/>
+  </enum>
+
+  <enum name="COMPRESS_SIZE">
+    <doc>Compressor block size.</doc>
+    <value name="BLOCK_8X8"  value="0"/>
+    <value name="BLOCK_16X4" value="1"/>
+  </enum>
+
+  <enum name="COMPRESS_SIZE_EXT">
+    <doc>Compressor block size extension bit.</doc>
+    <value name="BLOCK_8X8_16X4"   value="0"/>
+    <value name="BLOCK_32X2_RSRVD" value="1"/>
+  </enum>
+
+  <enum name="COMPRESSION">
+    <doc>Sets the frame buffer compression.</doc>
+    <value name="DISABLED" value="0"/>
+    <value name="ENABLED"  value="1"/>
+  </enum>
+
+  <enum name="LOSSY">
+    <doc>Sets the lossy bit for frame buffer compression.</doc>
+    <value name="DISABLED" value="0"/>
+    <value name="ENABLED"  value="1"/>
+  </enum>
+
+  <enum name="MEMLAYOUT">
+    <doc>Sets the memory layout.</doc>
+    <value name="LINEAR"     value="0"/>
+    <value name="TWIDDLE_2D" value="1"/>
+    <value name="TWIDDLE_3D" value="2"/>
+    <value name="TILED"      value="3"/>
+  </enum>
+
+  <enum name="PACKMODE">
+    <doc>Sets the memory layout.</doc>
+    <value name="U8U8U8U8"            value="0x0"/>
+    <value name="S8S8S8S8"            value="0x1"/>
+    <value name="X8U8S8S8"            value="0x2"/>
+    <value name="X8S8S8U8"            value="0x3"/>
+    <value name="A1R5G5B5"            value="0x4"/>
+    <value name="R5G5B5A1"            value="0x5"/>
+    <value name="A4R4G4B4"            value="0x6"/>
+    <value name="A8R3G3B2"            value="0x7"/>
+    <value name="U16U16U16U16"        value="0x8"/>
+    <value name="S16S16S16S16"        value="0x9"/>
+    <value name="F16F16F16F16"        value="0xa"/>
+    <value name="U32U32U32U32"        value="0xb"/>
+    <value name="S32S32S32S32"        value="0xc"/>
+    <value name="F32F32F32F32"        value="0xd"/>
+    <value name="A2R10B10G10"         value="0xe"/>
+    <value name="R10B10G10A2"         value="0xf"/>
+    <value name="A2F10F10F10"         value="0x10"/>
+    <value name="F10F10F10A2"         value="0x11"/>
+    <value name="U8U8U8"              value="0x12">
+      <doc>24-bit packed.</doc>
+    </value>
+    <value name="S8S8S8"              value="0x13">
+      <doc>24-bit packed.</doc>
+    </value>
+    <value name="R5G6B5"              value="0x14"/>
+    <value name="R5SG5SB6"            value="0x15"/>
+    <value name="B6G5SR5S"            value="0x16"/>
+    <value name="U16U16U16"           value="0x17"/>
+    <value name="S16S16S16"           value="0x18"/>
+    <value name="F16F16F16"           value="0x19"/>
+    <value name="U32U32U32"           value="0x1a"/>
+    <value name="S32S32S32"           value="0x1b"/>
+    <value name="F11F11F10"           value="0x1c"/>
+    <value name="F10F11F11"           value="0x1d"/>
+    <value name="SE9995"              value="0x1e"/>
+    <value name="F32F32F32"           value="0x1f"/>
+    <value name="X24U8F32"            value="0x20"/>
+    <value name="X24X8F32"            value="0x21"/>
+    <value name="X24G8X32"            value="0x22"/>
+    <value name="U8U8"                value="0x23"/>
+    <value name="S8S8"                value="0x24"/>
+    <value name="U16U16"              value="0x25"/>
+    <value name="S16S16"              value="0x26"/>
+    <value name="F16F16"              value="0x27"/>
+    <value name="U32U32"              value="0x28"/>
+    <value name="S32S32"              value="0x29"/>
+    <value name="F32F32"              value="0x2a"/>
+    <value name="U24ST8"              value="0x2b"/>
+    <value name="ST8U24"              value="0x2c"/>
+    <value name="X8U24"               value="0x2d"/>
+    <value name="U8X24"               value="0x2e"/>
+    <value name="U8"                  value="0x2f"/>
+    <value name="S8"                  value="0x30"/>
+    <value name="U16"                 value="0x31"/>
+    <value name="S16"                 value="0x32"/>
+    <value name="F16"                 value="0x33"/>
+    <value name="U32"                 value="0x34"/>
+    <value name="S32"                 value="0x35"/>
+    <value name="F32"                 value="0x36"/>
+    <value name="PBYTE"               value="0x37">
+      <doc>Order of packed bytes. Indicated by ROTMODE and MEML.</doc>
+    </value>
+    <value name="PWORD"               value="0x38">
+      <doc>Order of packed (16-bit) words. Indicated by ROTMODE and MEML.</doc>
+    </value>
+    <value name="ARGBV16_XR10"        value="0x39"/>
+    <value name="A2_XRBIAS_U10U10U10" value="0x3a">
+      <doc>Same as the DX XRBIAS packmode BUT A[1:0] == '11'b should be set always.</doc>
+    </value>
+    <value name="YUV"                 value="0x3b">
+      <doc>YUV placeholder pointing to the YUV_PMODE.</doc>
+    </value>
+    <value name="U10U10U10_XRBIAS_A2" value="0x3c">
+      <doc>Same as the DX XRBIAS packmode BUT A[1:0] == '11'b should be set always.</doc>
+    </value>
+    <value name="INVALID"             value="0xFFFFFFFF"/>
+  </enum>
+
+  <enum name="PAIR_TILES">
+    <doc>Enables tile pairing.</doc>
+    <value name="DISABLED" value="0"/>
+    <value name="ENABLED"  value="1"/>
+  </enum>
+
+  <enum name="ROTATION_TYPE">
+    <doc>Sets the rotation.</doc>
+    <value name="0_DEG"   value="0"/>
+    <value name="90_DEG"  value="1"/>
+    <value name="180_DEG" value="2"/>
+    <value name="270_DEG" value="3"/>
+  </enum>
+
+  <enum name="SIZE">
+    <doc>Size of twiddled render in pixel units.</doc>
+    <value name="1_PIXEL"   value="0"/>
+    <value name="2_PIXEL"   value="1"/>
+    <value name="4_PIXEL"   value="2"/>
+    <value name="8_PIXEL"   value="3"/>
+    <value name="16_PIXEL"  value="4"/>
+    <value name="32_PIXEL"  value="5"/>
+    <value name="64_PIXEL"  value="6"/>
+    <value name="128_PIXEL" value="7"/>
+    <value name="256_PIXEL" value="8"/>
+    <value name="512_PIXEL" value="9"/>
+    <value name="1K_PIXEL"  value="10"/>
+    <value name="2K_PIXEL"  value="11"/>
+    <value name="4K_PIXEL"  value="12"/>
+    <value name="8K_PIXEL"  value="13"/>
+    <value name="16K_PIXEL" value="14"/>
+  </enum>
+
+  <enum name="SOURCE_FORMAT">
+    <doc>Indicates USC output buffer packing. Not needed for F32 source format since the F32 packing mode automatically implies that the source format is F32 as well.</doc>
+    <value name="F16_PER_CHANNEL" value="0">
+      <doc>Only needed for F16 source format where the packing mode is equal to or less than 16-bits.</doc>
+    </value>
+    <value name="8_PER_CHANNEL"   value="1">
+      <doc>Only for 8-bits source formats where the packing mode is equal to or less than 8-bits.</doc>
+    </value>
+  </enum>
+
+  <enum name="SOURCE_POS">
+    <doc>Start position in source buffer.</doc>
+    <value name="START_BIT0"  value="0"/>
+    <value name="START_BIT32" value="1"/>
+    <value name="START_BIT64" value="2"/>
+    <value name="START_BIT96" value="3"/>
+  </enum>
+
+  <enum name="SWIZ">
+    <doc>Sets the swizzle.</doc>
+    <value name="SOURCE_CHAN0" value="0">
+      <doc>Indicates source channel0 goes to this destination channel.</doc>
+    </value>
+    <value name="SOURCE_CHAN1" value="1">
+      <doc>Indicates source channel1 goes to this destination channel.</doc>
+    </value>
+    <value name="SOURCE_CHAN2" value="2">
+      <doc>Indicates source channel2 goes to this destination channel.</doc>
+    </value>
+    <value name="SOURCE_CHAN3" value="3">
+      <doc>Indicates source channel3 goes to this destination channel.</doc>
+    </value>
+    <value name="ONE"          value="4">
+      <doc>Send a value of 1 to this destination channel.</doc>
+    </value>
+    <value name="ZERO"         value="5">
+      <doc>Send a value of 0 to this destination channel.</doc>
+    </value>
+  </enum>
+
+  <enum name="TFBC_LOSSY">
+    <doc>Sets the lossy bits for frame buffer compression.</doc>
+    <value name="LOSSLESS" value="0">
+      <doc>Lossless compression.</doc>
+    </value>
+    <value name="LOSSY75"  value="1">
+      <doc>Lossy compression down to 75% of the original size.</doc>
+    </value>
+    <value name="LOSSY50"  value="2">
+      <doc>Lossy compression down to 50% of the original size.</doc>
+    </value>
+    <value name="LOSSY25"  value="3">
+      <doc>Lossy compression down to 25% of the original size.</doc>
+    </value>
+  </enum>
+
+  <enum name="TWOCOMP_GAMMA">
+    <doc>Sets the gamma mode for 2 component textures.</doc>
+    <value name="GAMMA_BOTTOM_CHANNEL" value="0"/>
+    <value name="GAMMA_BOTH_CHANNELS"  value="1"/>
+  </enum>
+
+  <enum name="Y_FLIP">
+    <doc>Enables Y Flipping.</doc>
+    <value name="DISABLED" value="0"/>
+    <value name="ENABLED"  value="1"/>
+  </enum>
+
+  <enum name="YUV_DOWNSCALE">
+    <doc>Sets the YUV downscale.</doc>
+    <value name="NO_DOWNSCALING"   value="0">
+      <doc>No downscale applied.</doc>
+    </value>
+    <value name="ONE_SAMPLE_LEFT"  value="1">
+      <doc>Cosited for 422 &amp; 420, selects src0.</doc>
+    </value>
+    <value name="EMPTY"            value="2">
+      <doc>Empty definition, for future use.</doc>
+    </value>
+    <value name="TWO_SAMPLES"      value="3">
+      <doc>Centered for 422, Horizontally Centered &amp; Vertically Cosited for 420, results to (src0+src1)/2.</doc>
+    </value>
+    <value name="FOUR_SAMPLES"     value="4">
+      <doc>Centered for 420, results to (src0+src1+src2+src3)/4.</doc>
+    </value>
+    <value name="ONE_SAMPLE_RIGHT" value="5">
+      <doc>Cosited for 422 &amp; 420, selects src1.</doc>
+    </value>
+  </enum>
+
+  <enum name="YUV_PMODE">
+    <doc>Defines new YUV packmodes.</doc>
+    <value name="UV8_420_2PLANE"   value="0">
+      <doc>8-bit UV components from a YUV420 2 Plane format.</doc>
+    </value>
+    <value name="U8_420_3PLANE"    value="1">
+      <doc>8-bit U component from a YUV420 2 Plane format.</doc>
+    </value>
+    <value name="V8_420_3PLANE"    value="2">
+      <doc>8-bit V component from a YUV420 2 Plane format.</doc>
+    </value>
+    <value name="YUV8_422_1PLANE"  value="3">
+      <doc>8-bit YUV components from a YUV422 1 Plane format.</doc>
+    </value>
+    <value name="UV8_422_2PLANE"   value="4">
+      <doc>8-bit UV components from a YUV422 2 Plane format.</doc>
+    </value>
+    <value name="UV8_444_2PLANE"   value="5">
+      <doc>8-bit UV components from a YUV444 2 Plane format.</doc>
+    </value>
+    <value name="Y8_23PLANE"       value="6">
+      <doc>8-bit Y component from a YUV444/422/420 2/3 Plane format.</doc>
+    </value>
+    <value name="U8_444_3PLANE"    value="7">
+      <doc>8-bit U component from a YUV444 3 Plane format.</doc>
+    </value>
+    <value name="V8_444_3PLANE"    value="8">
+      <doc>8-bit V component from a YUV444 3 Plane format.</doc>
+    </value>
+    <value name="YUV10_444_1PLANE" value="9">
+      <doc>10-bit YUV components from a YUV444 1 Plane format, packed in 32-bit word.</doc>
+    </value>
+    <value name="RESERVED_YUV1"    value="10">
+      <doc>Reserved for future YUV packmodes.</doc>
+    </value>
+    <value name="RESERVED_YUV2"    value="11">
+      <doc>Reserved for future YUV packmodes.</doc>
+    </value>
+    <value name="YUV10_422_1PLANE" value="12">
+      <doc>10-bit packed YUV components from a YUV422 1 Plane format.</doc>
+    </value>
+    <value name="UV10_420_2PLANE"  value="13">
+      <doc>10-bit packed UV components from a YUV420 2 Plane format.</doc>
+    </value>
+    <value name="Y10_23PLANE"      value="14">
+      <doc>10-bit packed Y component from a YUV444/422/420 2/3 Plane format.</doc>
+    </value>
+    <value name="UV16_420_2PLANE"  value="15">
+      <doc>10-bit UV components from a YUV420 2 Plane format, packed as 16-bits in 32-bit word.</doc>
+    </value>
+    <value name="UV16_422_2PLANE"  value="16">
+      <doc>10-bit UV components from a YUV422 2 Plane format, packed as 16-bits in 32-bit word.</doc>
+    </value>
+    <value name="UV16_444_2PLANE"  value="17">
+      <doc>10-bit UV components from a YUV444 2 Plane format, packed as 16-bits in 32-bit word.</doc>
+    </value>
+    <value name="Y16_23PLANE"      value="18">
+      <doc>10-bit Y component from a YUV444/422/420 2/3 Plane format, packed as 16-bits in 32-bit word.</doc>
+    </value>
+    <value name="U16_444_3PLANE"   value="19">
+      <doc>10-bit U component from a YUV444 3 Plane format, packed as 16-bits in 32-bit word.</doc>
+    </value>
+    <value name="V16_444_3PLANE"   value="20">
+      <doc>10-bit V component from a YUV444 3 Plane format, packed as 16-bits in 32-bit word.</doc>
+    </value>
+  </enum>
+
+  <struct name="STATE_WORD0" length="1">
+    <field name="address_low" start="0" end="31" shift="2" type="address">
+      <doc>FB address in 32-bit units.</doc>
+    </field>
+  </struct>
+
+  <struct name="STATE_WORD1" length="1">
+    <condition type="if" check="8_OUTPUT_REGISTERS"/>
+      <field name="source_pos_offset_128" start="28" end="28" type="bool">
+        <doc>Start position in source buffer offset from 128-bits.</doc>
+      </field>
+    <condition type="endif" check="8_OUTPUT_REGISTERS"/>
+    <field name="yuv_pmode" start="23" end="27" type="YUV_PMODE">
+      <doc>YUV packing modes.</doc>
+    </field>
+    <field name="yuv_downscale" start="20" end="22" type="YUV_DOWNSCALE">
+      <doc>YUV downscaling.</doc>
+    </field>
+    <field name="source_format" start="19" end="19" type="SOURCE_FORMAT">
+      <doc>Source pack mode.</doc>
+    </field>
+    <field name="mrt_index" start="16" end="18" type="uint">
+      <doc>Index into the MRT table.</doc>
+    </field>
+    <field name="source_pos" start="14" end="15" type="SOURCE_POS">
+      <doc>Start position in source buffer.</doc>
+    </field>
+    <field name="norm" start="13" end="13" type="bool">
+      <doc>Integer or fixed point packmode;0 - Integer, 1 - Fixed point.</doc>
+    </field>
+    <field name="packmode" start="7" end="12" type="PACKMODE">
+      <doc>Pack mode.</doc>
+    </field>
+    <field name="emptytile" start="6" end="6" type="bool">
+      <doc>Is tile empty.</doc>
+    </field>
+    <field name="address_high" start="0" end="5" shift="34" type="address">
+      <doc>FB address in 32-bit units.</doc>
+    </field>
+  </struct>
+
+  <struct name="REG_WORD0" length="2">
+    <condition type="if" check="TFBC"/>
+      <field name="tfbc_lossy" start="62" end="63" type="TFBC_LOSSY">
+        <doc>Sets the lossy bits for frame buffer compression.</doc>
+        <define name="LOSSY37_75_TFBC_LOSSY_37_PERCENT_ENABLED" value="1"/>
+      </field>
+    <condition type="else" check="TFBC"/>
+      <field name="lossy" start="62" end="62" type="LOSSY">
+        <doc>Sets the lossy bit for frame buffer compression.</doc>
+      </field>
+    <condition type="endif" check="TFBC"/>
+    <field name="compress_size_ext" start="61" end="61" type="COMPRESS_SIZE_EXT">
+      <doc>Extra bit to support 32x2 compression size, used with COMPRESS_SIZE register bit.</doc>
+    </field>
+    <field name="comp_iaddr_mode" start="60" end="60" type="COMP_IADDR_TYPE">
+      <doc>FBC indirect addressing mode.</doc>
+    </field>>
+    <field name="comp_cor_enable" start="59" end="59" type="bool">
+      <doc>Enable FBC correlation.</doc>
+    </field>
+    <field name="dither" start="58" end="58" type="bool">
+      <doc>Enable dither.</doc>
+    </field>
+    <field name="tilerelative" start="57" end="57" type="bool">
+      <doc>Add tile offset.</doc>
+    </field>
+    <field name="downscale" start="56" end="56" type="bool">
+      <doc>Perform box filter downscale.</doc>
+    </field>
+    <field name="size_z" start="52" end="55" type="SIZE">
+      <doc>Z Size in pixels [log 2].</doc>
+    </field>
+    <field name="rotation" start="50" end="51" type="ROTATION_TYPE">
+      <doc>Rotation angle.</doc>
+    </field>
+    <field name="linestride" start="34" end="49" type="uint">
+      <doc>Linestride in 2 pixel units. 0 == 2. Supports 32K DWord stride memory write.</doc>
+      <define name="UNIT_SIZE" value="2"/>
+    </field>
+    <field name="memlayout" start="32" end="33" type="MEMLAYOUT">
+      <doc>Memory layout.</doc>
+    </field>
+    <field name="swiz_chan3" start="29" end="31" type="SWIZ">
+      <doc>Swizzle for destination channel 3.</doc>
+    </field>
+    <field name="swiz_chan2" start="26" end="28" type="SWIZ">
+      <doc>Swizzle for destination channel 2.</doc>
+    </field>
+    <field name="swiz_chan1" start="23" end="25" type="SWIZ">
+      <doc>Swizzle for destination channel 1.</doc>
+    </field>
+    <field name="swiz_chan0" start="20" end="22" type="SWIZ">
+      <doc>Swizzle for destination channel 0.</doc>
+    </field>
+    <field name="minclip_x" start="6" end="19" type="uint">
+      <doc>Min X Clip.</doc>
+    </field>
+    <field name="twocomp_gamma" start="5" end="5" type="TWOCOMP_GAMMA">
+      <doc>Sets the gamma mode for 2 component targets.</doc>
+    </field>
+    <field name="gamma" start="4" end="4" type="bool">
+      <doc>Gamma enabled.</doc>
+    </field>
+    <field name="compression" start="3" end="3" type="COMPRESSION">
+      <doc>Frame buffer Compression enabled.</doc>
+    </field>
+    <field name="compress_size" start="2" end="2" type="COMPRESS_SIZE">
+      <doc>Block size for the compressor.
+
+      COMPRESS_SIZE_EXT  COMPRESS_SIZE  SIZE
+              0                0        8x8
+              0                1        16x4
+              1                0        32x2
+              1                1        reserved
+      </doc>
+    </field>
+    <field name="comp_indirect_table" start="1" end="1" type="bool">
+      <doc>If set indicates to the compressor that an indirect addressing is used otherwise direct addressing.</doc>
+    </field>
+    <field name="y_flip" start="0" end="0" type="Y_FLIP"/>
+  </struct>
+
+  <struct name="REG_WORD1" length="2">
+    <field name="size_x" start="60" end="63" type="SIZE">
+      <doc>X Size in pixels [log 2].</doc>
+    </field>
+    <field name="minclip_y" start="46" end="59" type="uint">
+      <doc>Min Y Clip.</doc>
+    </field>
+    <field name="maxclip_x" start="32" end="45" type="uint">
+      <doc>Max X clip.</doc>
+    </field>
+    <field name="size_y" start="28" end="31" type="SIZE">
+      <doc>Y Size in pixels [log 2].</doc>
+    </field>
+    <field name="zslice" start="14" end="27" type="uint">
+      <doc>Slice number for render to 3D twiddle target.</doc>
+    </field>
+    <field name="maxclip_y" start="0" end="13" type="uint">
+      <doc>Max Y clip.</doc>
+    </field>
+  </struct>
+
+  <struct name="REG_WORD2" length="2">
+    <condition type="if" check="PAIRED_TILES"/>
+      <field name="pair_tiles" start="46" end="46" type="PAIR_TILES">
+        <doc>If set, then PBE will pair 16x16 tiles.</doc>
+        <!-- TODO: Do we need this? -->
+        <define name="SHIFT" value="46"/>
+      </field>
+    <condition type="endif" check="PAIRED_TILES"/>
+    <field name="surface_y_size" start="32" end="45" type="uint">
+      <doc>Y Size in pixels (only used for strided memory layout with FBC).</doc>
+    </field>
+    <field name="sw_bytemask" start="0" end="31" type="uint">
+      <doc>SW driven mask.</doc>
+    </field>
+  </struct>
+
+</csbgen>

@@ -1,0 +1,320 @@
+/*
+ * Copyright © 2010 Intel Corporation
+ * SPDX-License-Identifier: MIT
+ */
+
+#include <inttypes.h>
+
+#include "brw_reg.h"
+#include "util/macros.h"
+
+bool
+brw_reg_negate_immediate(brw_reg *reg)
+{
+   switch (reg->type) {
+   case BRW_TYPE_D:
+   case BRW_TYPE_UD:
+      reg->d = -reg->d;
+      return true;
+   case BRW_TYPE_W:
+   case BRW_TYPE_UW: {
+      uint16_t value = -(int16_t)reg->ud;
+      reg->ud = value | (uint32_t)value << 16;
+      return true;
+   }
+   case BRW_TYPE_F:
+      reg->f = -reg->f;
+      return true;
+   case BRW_TYPE_VF:
+      reg->ud ^= 0x80808080;
+      return true;
+   case BRW_TYPE_DF:
+      reg->df = -reg->df;
+      return true;
+   case BRW_TYPE_UQ:
+   case BRW_TYPE_Q:
+      reg->d64 = -reg->d64;
+      return true;
+   case BRW_TYPE_UB:
+   case BRW_TYPE_B:
+      UNREACHABLE("no UB/B immediates");
+   case BRW_TYPE_UV:
+   case BRW_TYPE_V:
+      UNREACHABLE("unimplemented: negate UV/V immediate");
+   case BRW_TYPE_HF:
+      reg->ud ^= 0x80008000;
+      return true;
+   default:
+      UNREACHABLE("invalid type");
+   }
+
+   return false;
+}
+
+bool
+brw_reg_abs_immediate(brw_reg *reg)
+{
+   switch (reg->type) {
+   case BRW_TYPE_D:
+      reg->d = abs(reg->d);
+      return true;
+   case BRW_TYPE_W: {
+      uint16_t value = abs((int16_t)reg->ud);
+      reg->ud = value | (uint32_t)value << 16;
+      return true;
+   }
+   case BRW_TYPE_F:
+      reg->f = fabsf(reg->f);
+      return true;
+   case BRW_TYPE_DF:
+      reg->df = fabs(reg->df);
+      return true;
+   case BRW_TYPE_VF:
+      reg->ud &= ~0x80808080;
+      return true;
+   case BRW_TYPE_Q:
+      reg->d64 = imaxabs(reg->d64);
+      return true;
+   case BRW_TYPE_UB:
+   case BRW_TYPE_B:
+      UNREACHABLE("no UB/B immediates");
+   case BRW_TYPE_UQ:
+   case BRW_TYPE_UD:
+   case BRW_TYPE_UW:
+   case BRW_TYPE_UV:
+      /* Presumably the absolute value modifier on an unsigned source is a
+       * nop, but it would be nice to confirm.
+       */
+      UNREACHABLE("unimplemented: abs unsigned immediate");
+   case BRW_TYPE_V:
+      UNREACHABLE("unimplemented: abs V immediate");
+   case BRW_TYPE_HF:
+      reg->ud &= ~0x80008000;
+      return true;
+   default:
+      UNREACHABLE("invalid type");
+   }
+
+   return false;
+}
+
+bool
+brw_reg::is_zero() const
+{
+   if (file != IMM)
+      return false;
+
+   assert(brw_type_size_bytes(type) > 1);
+
+   switch (type) {
+   case BRW_TYPE_HF:
+      assert((d & 0xffff) == ((d >> 16) & 0xffff));
+      return (d & 0xffff) == 0 || (d & 0xffff) == 0x8000;
+   case BRW_TYPE_F:
+      return f == 0;
+   case BRW_TYPE_DF:
+      return df == 0;
+   case BRW_TYPE_W:
+   case BRW_TYPE_UW:
+      assert((d & 0xffff) == ((d >> 16) & 0xffff));
+      return (d & 0xffff) == 0;
+   case BRW_TYPE_D:
+   case BRW_TYPE_UD:
+      return d == 0;
+   case BRW_TYPE_UQ:
+   case BRW_TYPE_Q:
+      return u64 == 0;
+   default:
+      return false;
+   }
+}
+
+bool
+brw_reg::is_one() const
+{
+   if (file != IMM)
+      return false;
+
+   assert(brw_type_size_bytes(type) > 1);
+
+   switch (type) {
+   case BRW_TYPE_HF:
+      assert((d & 0xffff) == ((d >> 16) & 0xffff));
+      return (d & 0xffff) == 0x3c00;
+   case BRW_TYPE_F:
+      return f == 1.0f;
+   case BRW_TYPE_DF:
+      return df == 1.0;
+   case BRW_TYPE_W:
+   case BRW_TYPE_UW:
+      assert((d & 0xffff) == ((d >> 16) & 0xffff));
+      return (d & 0xffff) == 1;
+   case BRW_TYPE_D:
+   case BRW_TYPE_UD:
+      return d == 1;
+   case BRW_TYPE_UQ:
+   case BRW_TYPE_Q:
+      return u64 == 1;
+   default:
+      return false;
+   }
+}
+
+bool
+brw_reg::is_negative_one() const
+{
+   if (file != IMM)
+      return false;
+
+   assert(brw_type_size_bytes(type) > 1);
+
+   switch (type) {
+   case BRW_TYPE_HF:
+      assert((d & 0xffff) == ((d >> 16) & 0xffff));
+      return (d & 0xffff) == 0xbc00;
+   case BRW_TYPE_F:
+      return f == -1.0;
+   case BRW_TYPE_DF:
+      return df == -1.0;
+   case BRW_TYPE_W:
+      assert((d & 0xffff) == ((d >> 16) & 0xffff));
+      return (d & 0xffff) == 0xffff;
+   case BRW_TYPE_D:
+      return d == -1;
+   case BRW_TYPE_Q:
+      return d64 == -1;
+   default:
+      return false;
+   }
+}
+
+bool
+brw_reg::is_address() const
+{
+   return file == ADDRESS;
+}
+
+unsigned
+brw_reg::address_slot(unsigned byte_offset) const
+{
+   assert(is_address());
+   return (reg_offset(*this) + byte_offset) / 2;
+}
+
+bool
+brw_reg::equals(const brw_reg &r) const
+{
+   return brw_regs_equal(this, &r);
+}
+
+bool
+brw_reg::negative_equals(const brw_reg &r) const
+{
+   return brw_regs_negative_equal(this, &r);
+}
+
+bool
+brw_reg::is_contiguous() const
+{
+   switch (file) {
+   case ADDRESS:
+   case ARF:
+   case FIXED_GRF:
+      return hstride == BRW_HORIZONTAL_STRIDE_1 &&
+             vstride == width + hstride;
+   case VGRF:
+   case ATTR:
+      return stride == 1;
+   case UNIFORM:
+   case IMM:
+   case BAD_FILE:
+      return true;
+   }
+
+   UNREACHABLE("Invalid register file");
+}
+
+unsigned
+brw_reg::component_size(unsigned width) const
+{
+   if (file == ADDRESS || file == ARF || file == FIXED_GRF) {
+      const unsigned w = MIN2(width, 1u << this->width);
+      const unsigned h = width >> this->width;
+      const unsigned vs = vstride ? 1 << (vstride - 1) : 0;
+      const unsigned hs = hstride ? 1 << (hstride - 1) : 0;
+      assert(w > 0);
+      /* Note this rounds up to next horizontal stride to be consistent with
+       * the VGRF case below.
+       */
+      return ((MAX2(1, h) - 1) * vs + MAX2(w * hs, 1)) * brw_type_size_bytes(type);
+   } else {
+      return MAX2(width * stride, 1) * brw_type_size_bytes(type);
+   }
+}
+
+extern "C" uint32_t
+brw_register_file_size(const struct intel_device_info *devinfo)
+{
+   return (devinfo->ver >= 30 ? XE3_MAX_GRF :
+           devinfo->ver >= 20 ? XE2_MAX_GRF :
+           BRW_MAX_GRF) * REG_SIZE;
+}
+
+unsigned
+brw_implicit_accumulator_bits(unsigned exec_size, unsigned group,
+                              brw_reg_type type)
+{
+   if (type == BRW_TYPE_DF) {
+      /* On platforms that support this, there is a single SIMD4
+       * accumulator. These platforms have acc0 and acc1. Both are accessed.
+       */
+      return 0x3;
+   } else if (brw_type_is_int(type)) {
+      /* Integer types are always 33-bits. Yes, 33. This means that accesses
+       * uses twice the number of accumulators that would be expected.
+       *
+       * The Bspec says, "Writing to acc1/acc3 using any datatype may corrupt
+       * this result." Marking the accesses as always writing a pair of
+       * accumulators is the safe thing.
+       *
+       * For implicit access, acc2 is not possible.
+       */
+      return exec_size <= 8 ? 0x3 : 0xf;
+   } else if (type == BRW_TYPE_F || type == BRW_TYPE_HF) {
+      unsigned nr = group / 8;
+
+      return ((1u << (exec_size / 8)) - 1) << nr;
+   } else {
+      UNREACHABLE("Bad type.");
+      return 0xffffffff;
+   }
+}
+
+unsigned
+brw_explicit_accumulator_bits(unsigned exec_size, const brw_reg &reg)
+{
+   unsigned nr = reg.nr & 0x0f;
+
+   if (reg.type == BRW_TYPE_DF) {
+      /* On platforms that support this, there is a single SIMD4
+       * accumulator. These platforms have acc0 and acc1. Both are accessed.
+       */
+      return 0x3;
+   } else if (brw_type_is_int(reg.type)) {
+      /* Integer types are always 33-bits. Yes, 33. This means that accesses
+       * use twice the number of accumulators that would be expected.
+       *
+       * The Bspec says, "Writing to acc1/acc3 using any datatype may corrupt
+       * this result." Marking the accesses as always writing a pair of
+       * accumulators is the safe thing.
+       */
+      unsigned bits = exec_size <= 8 ? 0x3 : 0xf;
+
+      return bits << nr;
+   } else if (reg.type == BRW_TYPE_F || reg.type == BRW_TYPE_HF) {
+      return ((1u << (exec_size / 8)) - 1) << nr;
+   } else {
+      UNREACHABLE("Bad type.");
+      return 0xffffffff;
+   }
+}

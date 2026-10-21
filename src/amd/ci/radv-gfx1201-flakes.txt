@@ -1,0 +1,10 @@
+dEQP-VK.api.buffer_marker.compute.default_mem.bottom_of_pipe.memory_dep.buffer_copy
+dEQP-VK.api.buffer_marker.compute.external_host_mem.bottom_of_pipe.memory_dep.dispatch
+dEQP-VK.pipeline.*depth.*compare_ops.(line|triangle)_list_.*
+dEQP-VK.sparse_resources.image_sparse_residency.3d.rgba16_snorm.1024_128_8
+dEQP-VK.video.encode.av1.720x480_10le_420.i_15.rc_disabled_lr_layered_dpb
+dEQP-VK.video.encode.av1.720x480_8le_420.i_p_open_15.qindex192_tiling_1x2_rc_disabled_lr_layered_dpb
+
+# Nightly run expectations update
+dEQP-VK.subgroups.quad.mesh.subgroupquadswaphorizontal_i64vec4_task
+dEQP-VK.subgroups.shuffle.mesh.subgroupshuffledown_i8vec3_dynamically_uniform_task

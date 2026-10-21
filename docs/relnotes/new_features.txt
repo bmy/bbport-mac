@@ -1,0 +1,58 @@
+VK_IMG_filter_linear_2d on pvr
+VK_KHR_maintenance7 on pvr
+Vulkan 1.3 on panvk/v6-7
+VK_KHR_maintenance4 on panvk/v6-7
+VK_KHR_maintenance5 on panvk/v6-7
+VK_KHR_maintenance7 on panvk/v6-7
+VK_KHR_maintenance8 on panvk/v6-7
+VK_KHR_shader_float_controls2 on panvk/v6-7
+VK_KHR_shader_subgroup_extended_types on panvk/v6-7
+VK_EXT_subgroup_size_control on panvk/v6-7
+VK_ARM_shader_core_builtins on panvk/v6-7
+VK_ARM_shader_core_properties on panvk/v6-7
+VK_ARM_scheduling_controls on panvk/v6-7
+shaderCoreBuiltins on panvk/v6-7
+schedulingControls on panvk/v6-7
+VK_KHR_synchronization2 on pvr
+VK_KHR_copy_memory_indirect on panvk
+VK_KHR_maintenance6 on panvk/v6-7
+VK_KHR_spirv_1_4 on panvk/v6-7
+VK_EXT_device_memory_report on v3dv
+shaderUniformBufferArrayDynamicIndexing on pvr
+shaderStorageBufferArrayDynamicIndexing on pvr
+shaderSampledImageArrayDynamicIndexing on pvr
+shaderStorageImageArrayDynamicIndexing on pvr
+shaderInputAttachmentArrayDynamicIndexing on pvr
+shaderUniformTexelBufferArrayDynamicIndexing on pvr
+shaderStorageTexelBufferArrayDynamicIndexing on pvr
+VK_KHR_video_encode_feedback2 on RADV
+VK_EXT_global_priority on pvr
+VK_EXT_global_priority_query on pvr
+VK_KHR_global_priority on pvr
+VK_KHR_cooperative_matrix on panvk
+Support for Mali G68 GPU on Panfrost
+cl_ext_float_atomics on iris, llvmpipe and zink
+cl_khr_semaphore on iris
+cl_khr_external_semaphore on iris
+cl_khr_external_semaphore_sync_fd on iris
+VK_EXT_inline_uniform_block on pvr
+VK_KHR_shader_fma on pvr
+fragmentStoresAndAtomics on pvr
+VK_EXT_cooperative_matrix_maintenance1 on radv, lavapipe
+VK_KHR_device_address_commands on nvk
+Support for G715 and G615 GPUs on Panfrost and PanVK
+GL_ARB_texture_multisample on etnaviv/HALTI5
+VK_KHR_shader_constant_data on panvk
+Support for BXM-4-64 (36.52.104.182) on pvr
+VK_KHR_shader_float_controls2 on pvr
+VK_KHR_performance_query on GFX12
+GLSL 130 on etnaviv/HALTI2
+GL_EXT_texture_integer on etnaviv/HALTI2
+GL_ARB_shader_bit_encoding on etnaviv/HALTI2
+GL_ARB_texture_rgb10_a2ui on etnaviv/HALTI2
+VK_EXT_primitive_topology_list_restart on pvr
+VK_KHR_incremental_present on panvk
+VK_EXT_swapchain_colorspace on panvk
+VK_KHR_push_descriptor on pvr
+VK_EXT_image_sliced_view_of_3d on pvr
+VK_EXT_image_compression_control on panvk

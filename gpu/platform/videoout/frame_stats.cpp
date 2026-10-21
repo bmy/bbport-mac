@@ -456,11 +456,13 @@ void OnFlipStats() {
             const u64 merged = BbStats::pass_merge_bindings.exchange(0);
             const u64 merged_bytes = BbStats::pass_merge_bytes.exchange(0);
             const u64 flushed = BbStats::pass_merge_flushed.exchange(0);
-            if (merged && frames) {
+            const u64 reused = BbStats::pass_merge_reused.exchange(0);
+            if ((merged || reused) && frames) {
                 std::printf("Pass merge: %.1f bindings/frame read from stream copies while a render "
-                            "pass was open, %.0f KiB/frame; %.1f ranges/frame uploaded afterwards\n",
+                            "pass was open (%.0f KiB/frame), %.1f more reused one; %.1f ranges/frame "
+                            "uploaded afterwards\n",
                             double(merged) / frames, merged_bytes / (1024.0 * frames),
-                            double(flushed) / frames);
+                            double(reused) / frames, double(flushed) / frames);
             }
         }
         BbWaitTrace::Report(window);

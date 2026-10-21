@@ -1187,6 +1187,9 @@ void BufferCache::FlushPassMergeUploads() {
         if (!IsRegionCpuModified(address, size) || IsRegionGpuModified(address, size)) {
             continue; // uploaded since, or the GPU wrote it: its own path now
         }
+        if (memory->ClampRangeSize(address, size) != size) {
+            continue; // unmapped since (in part): nothing to keep resident for it
+        }
         const u64 first_block = address >> block_shift;
         const u64 last_block = (address + size - 1) >> block_shift;
         const auto* arena = GetArena(first_block, last_block);
@@ -1374,12 +1377,26 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
     if (pass_merge_take.on && !is_written && !is_texel_buffer && size > STREAM_THRESHOLD &&
         size <= PassMergeMaxBytes() && !no_stream && !GuestInPlace() && !LayerMode() &&
         scheduler.IsRendering() && !stream_buffer.mapped_data.empty() &&
-        pass_merge_pending.size() < MaxPassMergePending &&
         !BbToggle::Disabled(BbToggle::DeferredStreamCopies) && PassMerge() &&
         IsRegionCpuModified(device_addr, size) && !IsRegionGpuModified(device_addr, size)) {
-        // No waiting for the GPU to free ring space: without it, the upload as before.
-        if (const auto offset =
-                stream_buffer.Reserve(size, instance.UniformMinAlignment(), false)) {
+        // The same range bound again in this submission, with no CPU change noted since (a
+        // WRITE_DATA or DMA write, a write fault): the same copy. The game does not change
+        // memory a submitted command buffer reads while the GPU may run it.
+        const u64 epoch = BbMem::cpu_change_epoch.load(std::memory_order_acquire);
+        const u64 tick = scheduler.CurrentTick();
+        auto& memo = pass_merge_memo[(device_addr >> 6 ^ size) % pass_merge_memo.size()];
+        if (memo.address == device_addr && memo.size == size && memo.epoch == epoch &&
+            memo.tick == tick) {
+            BbStats::pass_merge_reused.fetch_add(1, std::memory_order_relaxed);
+            TraceBinding(device_addr, size, false, 3);
+            return {&stream_buffer, memo.offset};
+        }
+        // Not with the pending list full, nor waiting for the GPU to free ring space: then the
+        // upload as before.
+        const auto offset = pass_merge_pending.size() < MaxPassMergePending
+                                ? stream_buffer.Reserve(size, instance.UniformMinAlignment(), false)
+                                : std::nullopt;
+        if (offset) {
             SmallGuestCopy({
                 .run = &RunGuestCopy,
                 .context = this,
@@ -1389,6 +1406,7 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
                 .extra = reinterpret_cast<u64>(static_cast<Buffer*>(&stream_buffer)),
             });
             pass_merge_pending.emplace_back(device_addr, size);
+            memo = {device_addr, size, *offset, epoch, tick};
             BbStats::pass_merge_bindings.fetch_add(1, std::memory_order_relaxed);
             BbStats::pass_merge_bytes.fetch_add(size, std::memory_order_relaxed);
             TraceBinding(device_addr, size, false, 3);

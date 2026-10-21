@@ -806,6 +806,7 @@ private:
     /// bbport (BB_PASS_MERGE): the draw being bound may read stream copies instead of uploads
     /// that would end its render pass (BindResources; also the vertex buffers resolved later).
     bool draw_pass_merge = false;
+    int draw_pass_merge_off = 0; ///< why not (BbStats::PassMergeMiss), for the miss counters
     bool scene_debug_frame = false; ///< BB_SCENE_DEBUG: this frame's passes are printed
     u32 preupload_frame = ~0u; ///< bbport: frame of the last background pre-upload
     bool PendingWriteOverlaps(VAddr address, u64 size);

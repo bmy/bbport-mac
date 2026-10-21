@@ -299,6 +299,9 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
         }
         ~PassMergeScope() {
             VideoCore::BufferCache::SetPassMergeReads(false);
+            // Outside a draw's bindings: counted as such (the late resolve in DrawRecord sets
+            // its own).
+            VideoCore::BufferCache::SetPassMergeOff(0);
         }
     };
     using Miss = BbStats::PassMergeMiss;
@@ -318,7 +321,8 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
     }();
     // Also for the vertex and index buffers resolved after the draw's render pass began.
     draw_pass_merge = pass_merge_off == Miss::Count;
-    VideoCore::BufferCache::SetPassMergeOff(draw_pass_merge ? 0 : int(pass_merge_off));
+    draw_pass_merge_off = draw_pass_merge ? 0 : int(pass_merge_off);
+    VideoCore::BufferCache::SetPassMergeOff(draw_pass_merge_off);
     const bool pass_merge = draw_pass_merge && scheduler.IsRendering();
     if (pipeline->IsCompute() || !scheduler.IsRendering()) {
         buffer_cache.FlushPassMergeUploads();
@@ -690,7 +694,9 @@ void Rasterizer::ResolveIndexBuffer(u32 index_offset) {
     const u32 index_size = index16 ? sizeof(u16) : sizeof(u32);
     const VAddr address = regs.index_base_address.Address<VAddr>() + u64(index_offset) * index_size;
     const u32 size = regs.num_indices * index_size;
+    VideoCore::BufferCache::SetBindingKind(2);
     const auto [buffer, offset] = buffer_cache.ObtainBuffer(address, size, false);
+    VideoCore::BufferCache::SetBindingKind(0);
     needs_barrier |= runtime.IsBufferAccessed(buffer, offset, size);
     if (InPlaceReads::Enabled()) {
         InPlaceReads::Note(address, size, scheduler.CurrentTick(), 0, 3);

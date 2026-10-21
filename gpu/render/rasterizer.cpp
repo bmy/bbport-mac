@@ -481,14 +481,19 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     const auto state = BeginRendering(pipeline);
 
     if (!inputs_resolved) {
-        // bbport (BB_PASS_MERGE): after BeginRendering, so an upload would end the draw's own
-        // render pass; as in BindResources, reads of stream copies instead where allowed.
-        VideoCore::BufferCache::SetPassMergeReads(draw_pass_merge && scheduler.IsRendering());
+        // bbport (BB_PASS_MERGE): an upload here ends the open render pass, which this draw
+        // continues if its state matches; as in BindResources, reads of stream copies instead
+        // where allowed.
+        // Only while the pass open is the one this draw continues (the pass begins below).
+        VideoCore::BufferCache::SetPassMergeOff(draw_pass_merge_off);
+        VideoCore::BufferCache::SetPassMergeReads(draw_pass_merge &&
+                                                  scheduler.IsRenderingWith(state));
         ResolveVertexBuffers(pipeline, draw_prepared);
         if (is_indexed) {
             ResolveIndexBuffer(index_offset);
         }
         VideoCore::BufferCache::SetPassMergeReads(false);
+        VideoCore::BufferCache::SetPassMergeOff(0);
     }
     EmitVertexBuffers();
     if (is_indexed) {
@@ -1152,9 +1157,7 @@ void Rasterizer::DispatchIndirectRecord(const ComputePipeline* pipeline, VAddr a
     if (!BindResources(pipeline)) {
         return;
     }
-    VideoCore::BufferCache::SetBindingKind(2);
     const auto [buffer, base] = buffer_cache.ObtainBuffer(address, size, false);
-    VideoCore::BufferCache::SetBindingKind(0);
     needs_barrier |= runtime.IsBufferAccessed(buffer, base, size);
 
     if (needs_barrier) {

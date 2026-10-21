@@ -803,6 +803,9 @@ private:
     u64 proxy_samples = 0; ///< texture bindings that read a scene proxy (statistics)
     float sampler_lod_bias = 0.0f; ///< bbport: extra bias of this draw's samplers
     bool pipeline_is_compute = false; ///< bbport: the bound pipeline of BindResources
+    /// bbport (BB_PASS_MERGE): the draw being bound may read stream copies instead of uploads
+    /// that would end its render pass (BindResources; also the vertex buffers resolved later).
+    bool draw_pass_merge = false;
     bool scene_debug_frame = false; ///< BB_SCENE_DEBUG: this frame's passes are printed
     u32 preupload_frame = ~0u; ///< bbport: frame of the last background pre-upload
     bool PendingWriteOverlaps(VAddr address, u64 size);

@@ -158,6 +158,11 @@ public:
     /// (an upload is a buffer copy, which ends it). The rasterizer sets it around a graphics
     /// draw's bindings (Rasterizer::BindResources).
     static void SetPassMergeReads(bool on);
+    /// BB_PASS_MERGE diagnostics: what the bindings that follow are (0 descriptors, 1 vertex
+    /// streams, 2 the index buffer), for the misses counted in BB_FRAME_STATS.
+    static void SetBindingKind(int kind);
+    /// Why the rasterizer did not allow it for this draw (0: it did; see PassMergeOff).
+    static void SetPassMergeOff(int reason);
     /// BB_PASS_MERGE=0/1: on by default on macOS; experiment bit 128 switches it off in a running
     /// game (A/B).
     [[nodiscard]] static bool PassMerge();

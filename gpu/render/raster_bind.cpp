@@ -301,18 +301,25 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
             VideoCore::BufferCache::SetPassMergeReads(false);
         }
     };
-    const bool pass_merge = [&] {
-        if (pipeline->IsCompute() || !scheduler.IsRendering() ||
-            !VideoCore::BufferCache::PassMerge()) {
-            return false;
+    using Miss = BbStats::PassMergeMiss;
+    const Miss pass_merge_off = [&] {
+        if (pipeline->IsCompute()) {
+            return Miss::Compute;
+        }
+        if (!VideoCore::BufferCache::PassMerge()) {
+            return Miss::Disabled;
         }
         for (const auto* stage : pipeline->GetStages()) {
             if (stage && stage->uses_dma) {
-                return false;
+                return Miss::PageTable;
             }
         }
-        return true;
+        return Miss::Count; // allowed
     }();
+    // Also for the vertex and index buffers resolved after the draw's render pass began.
+    draw_pass_merge = pass_merge_off == Miss::Count;
+    VideoCore::BufferCache::SetPassMergeOff(draw_pass_merge ? 0 : int(pass_merge_off));
+    const bool pass_merge = draw_pass_merge && scheduler.IsRendering();
     if (pipeline->IsCompute() || !scheduler.IsRendering()) {
         buffer_cache.FlushPassMergeUploads();
     }
@@ -591,7 +598,9 @@ void Rasterizer::ResolveVertexBuffers(const GraphicsPipeline* pipeline,
     }
     for (auto& range : ranges) {
         const u64 size = memory->ClampRangeSize(range.begin, range.end - range.begin);
+        VideoCore::BufferCache::SetBindingKind(1);
         std::tie(range.buffer, range.offset) = buffer_cache.ObtainBuffer(range.begin, size, false);
+        VideoCore::BufferCache::SetBindingKind(0);
         if (InPlaceReads::Enabled()) {
             InPlaceReads::Note(range.begin, size, scheduler.CurrentTick(), 0, 2);
         }

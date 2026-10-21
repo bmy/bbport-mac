@@ -1158,6 +1158,19 @@ void BufferCache::SetPassMergeReads(bool on) {
     pass_merge_reads = on;
 }
 
+namespace {
+thread_local int binding_kind = 0;
+thread_local int pass_merge_off = 0;
+} // namespace
+
+void BufferCache::SetBindingKind(int kind) {
+    binding_kind = kind;
+}
+
+void BufferCache::SetPassMergeOff(int reason) {
+    pass_merge_off = reason;
+}
+
 bool BufferCache::PassMerge() {
     static const bool enabled = [] {
         const char* env = std::getenv("BB_PASS_MERGE");
@@ -1409,9 +1422,22 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
             return {&stream_buffer, *offset};
         }
     }
-    BB_SECTION(ObtainVram);
-    if (!is_written) {
+    // BB_FRAME_STATS: a read-only upload into the arena while a render pass is open (it ends
+    // the pass), by binding kind and why it was not given a stream copy.
+    if (BbStats::enabled && !is_written && scheduler.IsRendering() &&
+        IsRegionCpuModified(device_addr, size)) {
+        using M = BbStats::PassMergeMiss;
+        const M why = !pass_merge_take.on       ? M(pass_merge_off ? pass_merge_off : int(M::Scope))
+                      : is_texel_buffer        ? M::Texel
+                      : no_stream || GuestInPlace() || LayerMode() ? M::Model
+                      : IsRegionGpuModified(device_addr, size) ? M::GpuWritten
+                      : size <= STREAM_THRESHOLD ? M::Small
+                      : size > PassMergeMaxBytes() ? M::TooBig
+                                                   : M::Full; // again, pending or ring full
+        BbStats::pass_merge_misses[std::clamp(binding_kind, 0, 2)][int(why)].fetch_add(
+            1, std::memory_order_relaxed);
     }
+    BB_SECTION(ObtainVram);
     const u64 uploaded_before = BbStats::buffer_upload_bytes.load(std::memory_order_relaxed);
     if (GuestInPlace()) {
         BbStats::bound_vram_bytes.fetch_add(size, std::memory_order_relaxed);

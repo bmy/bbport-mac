@@ -139,6 +139,23 @@ inline std::atomic<std::uint64_t> buffer_upload_bytes{0};
 /// BB_PASS_MERGE (BufferCache::ObtainBuffer): read-only bindings in an open render pass given a
 /// stream copy instead of an upload that would end the pass, and their bytes.
 inline std::atomic<std::uint64_t> pass_merge_bindings{0}, pass_merge_bytes{0}, pass_merge_flushed{0};
+/// Read-only uploads in an open render pass not given a stream copy, by binding kind
+/// (descriptors, vertex streams, index buffer) and why.
+enum class PassMergeMiss {
+    Scope,      ///< not in a draw's bindings
+    Compute,    ///< a dispatch (it ends the pass anyway)
+    Disabled,   ///< BB_PASS_MERGE=0 or experiment bit 128
+    PageTable,  ///< a stage reads memory through the page table
+    Texel,
+    Model,      ///< in place, layer memory, BB_EXP_NO_STREAM
+    GpuWritten, ///< the game's memory is older than the arena
+    Small,      ///< up to 16 KiB and not given a stream copy (so GPU-written)
+    TooBig,     ///< over BB_PASS_MERGE_MAX_KB
+    Full,       ///< bound again since the last flush, or the pending list or ring full
+    Count,
+};
+inline std::array<std::array<std::atomic<std::uint64_t>, std::size_t(PassMergeMiss::Count)>, 3>
+    pass_merge_misses{};
 inline std::atomic<int> gpu_thread_clock{-1}; ///< clockid_t of the GPU command thread
 inline std::atomic<std::uint64_t> draws{0}, dispatches{0}, submissions{0};
 /// Frames the GPU command thread has started (display pass), for per-frame diagnostics.

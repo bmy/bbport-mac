@@ -462,6 +462,26 @@ void OnFlipStats() {
                             double(merged) / frames, merged_bytes / (1024.0 * frames),
                             double(flushed) / frames);
             }
+            static constexpr const char* kinds[] = {"descriptors", "vertex", "index"};
+            static constexpr const char* whys[] = {"scope",   "compute",     "disabled",
+                                                   "page table", "texel", "memory model",
+                                                   "GPU-written", "small", "too big",
+                                                   "again/full"};
+            std::string misses;
+            for (size_t kind = 0; kind < 3; ++kind) {
+                for (size_t why = 0; why < std::size(whys); ++why) {
+                    if (const u64 n = BbStats::pass_merge_misses[kind][why].exchange(0); n && frames) {
+                        char text[96];
+                        std::snprintf(text, sizeof(text), "%s%s %s %.1f", misses.empty() ? "" : ", ",
+                                      kinds[kind], whys[why], double(n) / frames);
+                        misses += text;
+                    }
+                }
+            }
+            if (!misses.empty()) {
+                std::printf("Pass merge misses (uploads in an open render pass, per frame): %s\n",
+                            misses.c_str());
+            }
         }
         BbWaitTrace::Report(window);
         // Frame pacing: spread of the guest flip intervals (judder that the mean hides).

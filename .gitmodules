@@ -1,0 +1,4 @@
+[submodule "externals/mesa"]
+	path = externals/mesa
+	url = https://github.com/shadexternals/mesa.git
+	shallow = true

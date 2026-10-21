@@ -1,0 +1,48 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
+jobs:
+  build:
+    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, x86_64]
+    steps:
+    - name: Checkout Source
+      uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+        submodules: recursive
+
+    - name: Setup Cache
+      uses: hendrikmuhs/ccache-action@v1.2
+      with:
+        create-symlink: true
+        key: ${{ github.job }}-${{ runner.os }}-${{ matrix.arch }}
+
+    - name: Install Build Dependencies
+      run: |
+        brew install cmake meson pkg-config llvm spirv-tools spirv-llvm-translator
+        pip3 install --break-system-packages mako packaging pyyaml
+
+    - name: Configure
+      run: |
+        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }}
+
+    - name: Build
+      run: |
+        cmake --build build --parallel$(sysctl -n hw.ncpu)
+
+    - name: Upload
+      uses: actions/upload-artifact@v7
+      with:
+        name: kosmickrisp-${{ matrix.arch }}
+        path: build/outputs/

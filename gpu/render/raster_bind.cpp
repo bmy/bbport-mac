@@ -289,6 +289,30 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
     // log2(render / output)). Shadows, post-processing and UI keep the guest's bias.
     sampler_lod_bias = 0.0f;
     pipeline_is_compute = pipeline->IsCompute();
+    // bbport (BB_PASS_MERGE): a graphics draw's read-only bindings may read stream copies instead
+    // of uploads that would end the open render pass (BufferCache::ObtainBuffer). Not with stages
+    // reading memory through the page table: SynchronizeDmaBuffers uploads for them anyway.
+    struct PassMergeScope {
+        explicit PassMergeScope(bool on) {
+            VideoCore::BufferCache::SetPassMergeReads(on);
+        }
+        ~PassMergeScope() {
+            VideoCore::BufferCache::SetPassMergeReads(false);
+        }
+    };
+    const bool pass_merge = [&] {
+        if (pipeline->IsCompute() || !scheduler.IsRendering() ||
+            !VideoCore::BufferCache::PassMerge()) {
+            return false;
+        }
+        for (const auto* stage : pipeline->GetStages()) {
+            if (stage && stage->uses_dma) {
+                return false;
+            }
+        }
+        return true;
+    }();
+    const PassMergeScope pass_merge_scope{pass_merge};
     if (!pipeline->IsCompute() && !BbToggle::Disabled(BbToggle::SceneMipBias) &&
         std::popcount(static_cast<const GraphicsPipeline*>(pipeline)->GetGraphicsKey().mrt_mask &
                       0xff) >= 5) {

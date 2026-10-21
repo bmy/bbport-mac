@@ -153,6 +153,15 @@ public:
     /// Attempts to obtain a buffer without modifying the cache contents.
     [[nodiscard]] std::pair<const Buffer*, u64> ObtainBufferForImage(VAddr device_addr, u32 size);
 
+    /// bbport (BB_PASS_MERGE): while set on this thread, ObtainBuffer may give a read-only binding
+    /// whose memory the CPU changed a stream copy instead of an upload, if a render pass is open
+    /// (an upload is a buffer copy, which ends it). The rasterizer sets it around a graphics
+    /// draw's bindings (Rasterizer::BindResources).
+    static void SetPassMergeReads(bool on);
+    /// BB_PASS_MERGE=0/1: on by default on macOS; experiment bit 128 switches it off in a running
+    /// game (A/B).
+    [[nodiscard]] static bool PassMerge();
+
     /// bbport BB_GUEST_IN_PLACE: where a command processor write (WRITE_DATA) the GPU performs in
     /// stream order lands: the arena over the game's memory, if the range is bound there in place.
     /// Not counted as a GPU write of the block (those move blocks to VRAM): it is CPU data, as a PC

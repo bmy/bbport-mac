@@ -136,6 +136,9 @@ inline std::atomic<std::int64_t> hot_pages{0};
 inline std::atomic<std::uint64_t> images_registered{0};
 inline std::atomic<std::uint64_t> image_upload_bytes{0};
 inline std::atomic<std::uint64_t> buffer_upload_bytes{0};
+/// BB_PASS_MERGE (BufferCache::ObtainBuffer): read-only bindings in an open render pass given a
+/// stream copy instead of an upload that would end the pass, and their bytes.
+inline std::atomic<std::uint64_t> pass_merge_bindings{0}, pass_merge_bytes{0};
 inline std::atomic<int> gpu_thread_clock{-1}; ///< clockid_t of the GPU command thread
 inline std::atomic<std::uint64_t> draws{0}, dispatches{0}, submissions{0};
 /// Frames the GPU command thread has started (display pass), for per-frame diagnostics.

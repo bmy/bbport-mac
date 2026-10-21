@@ -1140,6 +1140,40 @@ void PrintBufferStats() {
 }
 } // namespace
 
+namespace {
+/// BufferCache::SetPassMergeReads: per thread (the texture helper binds at the same time).
+thread_local bool pass_merge_reads = false;
+/// BB_PASS_MERGE_MAX_KB: the largest binding given a stream copy (default 1024).
+u64 PassMergeMaxBytes() {
+    static const u64 bytes = [] {
+        const char* env = std::getenv("BB_PASS_MERGE_MAX_KB");
+        return (env && *env ? std::strtoull(env, nullptr, 10) : 1024ull) * 1024;
+    }();
+    return bytes;
+}
+} // namespace
+
+void BufferCache::SetPassMergeReads(bool on) {
+    pass_merge_reads = on;
+}
+
+bool BufferCache::PassMerge() {
+    static const bool enabled = [] {
+        const char* env = std::getenv("BB_PASS_MERGE");
+#ifdef __APPLE__
+        const bool on = !(env && env[0] == '0');
+#else
+        const bool on = env && env[0] == '1';
+#endif
+        std::printf("Buffers: %s (BB_PASS_MERGE=%d)\n",
+                    on ? "uploads that would end an open render pass read stream copies instead"
+                       : "uploads end an open render pass",
+                    on ? 1 : 0);
+        return on;
+    }();
+    return enabled && !BbToggle::Experiment(128);
+}
+
 std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 size,
                                                         bool is_written, bool is_texel_buffer) {
     BB_SECTION(ObtainBuffer);
@@ -1290,6 +1324,37 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
         stream_buffer.Commit();
         TraceBinding(device_addr, size, false, 3);
         return {&stream_buffer, offset};
+    }
+    // bbport (BB_PASS_MERGE, macOS by default): a larger read-only binding of memory the CPU
+    // changed, drawn in a render pass that is still open (the draw before used the same
+    // attachments), reads a stream copy like the small ones above instead of an upload into the
+    // arena. The upload is a buffer copy, which ends the render pass, and the draw opens it again:
+    // on a tile-based GPU every attachment is stored and loaded again (about 32 times a frame at
+    // 2560x1600 on an M5 Max, 2026-10-21). The arena keeps the change pending (still CPU-modified):
+    // it is uploaded where the range is next bound outside a render pass, or for shaders reading
+    // memory through the page table (SynchronizeDmaBuffers, which the rasterizer excludes here
+    // anyway). Not for GPU-written ranges: the game's memory is older than the arena there.
+    if (pass_merge_reads && !is_written && !is_texel_buffer && size > STREAM_THRESHOLD &&
+        size <= PassMergeMaxBytes() && !no_stream && !GuestInPlace() && !LayerMode() &&
+        scheduler.IsRendering() && !stream_buffer.mapped_data.empty() &&
+        !BbToggle::Disabled(BbToggle::DeferredStreamCopies) && PassMerge() &&
+        IsRegionCpuModified(device_addr, size) && !IsRegionGpuModified(device_addr, size)) {
+        // No waiting for the GPU to free ring space: without it, the upload as before.
+        if (const auto offset =
+                stream_buffer.Reserve(size, instance.UniformMinAlignment(), false)) {
+            SmallGuestCopy({
+                .run = &RunGuestCopy,
+                .context = this,
+                .source = device_addr,
+                .destination = reinterpret_cast<u64>(stream_buffer.mapped_data.data() + *offset),
+                .size = size,
+                .extra = reinterpret_cast<u64>(static_cast<Buffer*>(&stream_buffer)),
+            });
+            BbStats::pass_merge_bindings.fetch_add(1, std::memory_order_relaxed);
+            BbStats::pass_merge_bytes.fetch_add(size, std::memory_order_relaxed);
+            TraceBinding(device_addr, size, false, 3);
+            return {&stream_buffer, *offset};
+        }
     }
     const u64 first_block = device_addr >> block_shift;
     const u64 last_block = (device_addr + size - 1) >> block_shift;

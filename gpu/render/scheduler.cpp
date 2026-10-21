@@ -8,6 +8,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <map>
+#include <tuple>
 #include <unordered_map>
 #include <array>
 #include <mutex>
@@ -313,8 +315,8 @@ void Scheduler::BeginRendering(const RenderState& state) {
     // A cut of the command stream (MaybeSplit) closed this render pass: it goes on in the next
     // command buffer, its attachments not cleared again.
     const bool resume = resume_rendering && !is_rendering && render_state == state;
-    if (!is_rendering && render_state == state && pass_end_caller) {
-        TracePassBreak(pass_end_caller);
+    if (!is_rendering && render_state == state && pass_end_stack[0]) {
+        TracePassBreak(pass_end_stack);
     }
     resume_rendering = false;
     EndRendering();
@@ -383,7 +385,13 @@ void Scheduler::EndRendering() {
         return env && env[0] == '1';
     }();
     if (trace) {
-        pass_end_caller = __builtin_return_address(0);
+        // This function, then its caller and theirs.
+        std::array<void*, std::tuple_size_v<PassEndStack> + 1> frames{};
+        const int depth = backtrace(frames.data(), int(frames.size()));
+        pass_end_stack = {};
+        for (int i = 1; i < depth; ++i) {
+            pass_end_stack[i - 1] = frames[i];
+        }
     }
     CarrySuspend(true);
     is_rendering = false;
@@ -391,34 +399,49 @@ void Scheduler::EndRendering() {
     CarryResume(false);
 }
 
-void Scheduler::TracePassBreak(void* caller) {
+void Scheduler::TracePassBreak(const PassEndStack& stack) {
     static std::mutex mutex;
-    static std::unordered_map<void*, u64> callers;
+    static std::map<PassEndStack, u64> callers;
     static u64 breaks = 0;
     static auto last = std::chrono::steady_clock::now();
     std::scoped_lock lk{mutex};
-    ++callers[caller];
+    ++callers[stack];
     ++breaks;
     const auto now = std::chrono::steady_clock::now();
     if (now - last < std::chrono::seconds(5)) {
         return;
     }
-    std::vector<std::pair<u64, void*>> top;
-    for (const auto& [address, count] : callers) {
-        top.emplace_back(count, address);
+    std::vector<std::pair<u64, PassEndStack>> top;
+    for (const auto& [frames, count] : callers) {
+        top.emplace_back(count, frames);
     }
     std::ranges::sort(top, std::greater{});
     std::printf("Render pass breaks (the same pass begun again): %llu in %.0f s\n",
                 static_cast<unsigned long long>(breaks),
                 std::chrono::duration<double>(now - last).count());
-    for (size_t i = 0; i < std::min<size_t>(top.size(), 10); ++i) {
-        Dl_info info{};
-        dladdr(top[i].second, &info);
-        std::printf("Render pass break caller: %llu x %s+0x%lx\n",
-                    static_cast<unsigned long long>(top[i].first),
-                    info.dli_fname ? info.dli_fname : "?",
-                    static_cast<unsigned long>(reinterpret_cast<uintptr_t>(top[i].second) -
-                                               reinterpret_cast<uintptr_t>(info.dli_fbase)));
+    for (size_t i = 0; i < std::min<size_t>(top.size(), 12); ++i) {
+        std::string line;
+        for (void* frame : top[i].second) {
+            if (!frame) {
+                break;
+            }
+            Dl_info info{};
+            char text[256];
+            if (dladdr(frame, &info) && info.dli_sname) {
+                std::snprintf(text, sizeof(text), "%s+0x%lx", info.dli_sname,
+                              static_cast<unsigned long>(reinterpret_cast<uintptr_t>(frame) -
+                                                         reinterpret_cast<uintptr_t>(info.dli_saddr)));
+            } else {
+                std::snprintf(text, sizeof(text), "%s+0x%lx",
+                              info.dli_fname ? info.dli_fname : "?",
+                              static_cast<unsigned long>(reinterpret_cast<uintptr_t>(frame) -
+                                                         reinterpret_cast<uintptr_t>(info.dli_fbase)));
+            }
+            line += line.empty() ? "" : " <- ";
+            line += text;
+        }
+        std::printf("Render pass break caller: %llu x %s\n",
+                    static_cast<unsigned long long>(top[i].first), line.c_str());
     }
     callers.clear();
     breaks = 0;

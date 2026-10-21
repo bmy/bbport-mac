@@ -147,8 +147,10 @@ public:
     /// Closes the open render pass, if any.
     [[gnu::noinline]] void EndRendering();
     /// BB_PASS_BREAK_TRACE=1 (diagnostics): who ended a render pass that began again with the same
-    /// state (a break: its attachments stored and loaded again), every 5 s.
-    static void TracePassBreak(void* caller);
+    /// state (a break: its attachments stored and loaded again), every 5 s. bbport: the caller and
+    /// the callers above it (what ended it: a buffer copy alone does not say why it was made).
+    using PassEndStack = std::array<void*, 4>;
+    static void TracePassBreak(const PassEndStack& callers);
 
     /// Called at every submission, before it is prepared (it may add waits and signals).
     void SetSubmitCallback(SubmitFunc&& callback) {
@@ -600,7 +602,7 @@ private:
     size_t segment_bytes = 0;          ///< closures of the current segment handed over or retired
     size_t split_bytes = 0;            ///< segment length at which the stream is cut
     bool resume_rendering = false;     ///< a cut closed the render pass with render_state
-    void* pass_end_caller = nullptr;   ///< BB_PASS_BREAK_TRACE: who ended the last render pass
+    PassEndStack pass_end_stack{};     ///< BB_PASS_BREAK_TRACE: who ended the last render pass
     std::unique_ptr<RecordChunk> record_chunk;
     std::vector<std::unique_ptr<RecordChunk>> full_chunks;
     std::unique_ptr<RecordChunk> ordered_chunk;

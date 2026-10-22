@@ -2,6 +2,7 @@
 #include "textures/image_view.h"
 
 #include <algorithm>
+#include <atomic>
 
 #include "common/logging/log.h"
 #include "shader/resource.h"
@@ -125,6 +126,21 @@ ImageView::ImageView(const Vulkan::Instance& instance, const ImageViewInfo& info
         aspect = vk::ImageAspectFlagBits::eStencil;
     }
 
+    // bbport: an image made without mutable formats (Instance::IsCompressibleImages) has views
+    // of its own format only; another one would be invalid there.
+    vk::Format view_format = instance.GetSupportedFormat(format, image.format_features);
+    const auto& image_ci = image.backing->image.image_ci;
+    if (!(image_ci.flags & vk::ImageCreateFlagBits::eMutableFormat) &&
+        view_format != image_ci.format) {
+        static std::atomic<u32> warnings{0};
+        if (warnings.fetch_add(1, std::memory_order_relaxed) < 8) {
+            LOG_WARNING(Render_Vulkan, "view format {} of a {} image without mutable formats: "
+                        "viewed in the image's own format", vk::to_string(view_format),
+                        vk::to_string(image_ci.format));
+        }
+        view_format = image_ci.format;
+    }
+
     if (!ViewFitsImage(info.type, image.info.type)) {
         LOG_ERROR(Render_Vulkan, "image view type {} does not fit image type {}", u64(info.type),
                   u64(image.info.type));
@@ -133,7 +149,7 @@ ImageView::ImageView(const Vulkan::Instance& instance, const ImageViewInfo& info
         .pNext = &usage,
         .image = image.GetImage(),
         .viewType = ViewType(info.type),
-        .format = instance.GetSupportedFormat(format, image.format_features),
+        .format = view_format,
         .components = info.mapping,
         .subresourceRange{
             .aspectMask = aspect,

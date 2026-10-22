@@ -175,6 +175,11 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
 
     vk::ImageCreateFlags create_flags =
         vk::ImageCreateFlagBits::eMutableFormat | vk::ImageCreateFlagBits::eExtendedUsage;
+    if (info.props.is_depth && instance.IsCompressibleImages()) {
+        // bbport (macOS): a depth image is only ever viewed in its own format (ImageView), and
+        // a mutable format would keep Metal from compressing it.
+        create_flags = {};
+    }
     if (info.props.is_volume) {
         create_flags |= vk::ImageCreateFlagBits::e2DArrayCompatible;
         if (instance.Is2dViewOf3dSupported()) {

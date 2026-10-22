@@ -158,6 +158,12 @@ void Instance::ReadProperties() {
         chain.get<vk::PhysicalDevicePushDescriptorPropertiesKHR>().maxPushDescriptors;
     const auto& driver = chain.get<vk::PhysicalDeviceDriverProperties>();
     driver_id = driver.driverID;
+    if (driver_id == vk::DriverId::eMesaKosmickrisp) {
+        const char* env = std::getenv("BB_TEXTURE_COMPRESSION");
+        compressible_images = !(env && env[0] == '0');
+        std::printf("Vulkan: compressible images %s (BB_TEXTURE_COMPRESSION)\n",
+                    compressible_images ? "on" : "off");
+    }
     memory_properties = physical_device.getMemoryProperties();
 
     const auto [result, extensions] = physical_device.enumerateDeviceExtensionProperties();

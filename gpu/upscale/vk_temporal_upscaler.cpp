@@ -1276,12 +1276,14 @@ void TemporalUpscaler::Run() {
     runtime.FlushBarriers();
     vk::Image input_color = color.GetImage(), input_depth = depth.GetImage();
     vk::ImageView input_color_view = color_view, input_depth_view = depth_view;
+    vk::ImageUsageFlags input_color_usage = color.usage_flags;
     if (reduced) {
         VideoCore::ImageViewInfo ci;
         ci.format = color.info.pixel_format;
-        // The reactive mask and FSR may read it as a storage image; MetalFX copies it.
-        ci.is_storage = !UseMetalFx();
+        // Only the reactive mask reads it as a storage image (TAA and FSR sample it).
+        ci.is_storage = !mask_ready && ReactiveOn();
         const auto c = scene_targets.Read(scene_color, ci);
+        input_color_usage = c.usage;
         ci.format = depth.info.pixel_format;
         ci.is_storage = false;
         const auto d = scene_targets.Read(camera_motion.Depth(), ci);
@@ -1360,7 +1362,7 @@ void TemporalUpscaler::Run() {
         info.structSize = sizeof(info);
         info.commandBuffer = cmdbuf;
         info.color = Describe(input_color, color.info.pixel_format, w, h,
-                              color.usage_flags, vk::ImageAspectFlagBits::eColor,
+                              input_color_usage, vk::ImageAspectFlagBits::eColor,
                               FFX_VK_PORTABLE_RESOURCE_STATE_GENERIC_READ);
         info.depth = Describe(input_depth, depth_format, w, h, depth.usage_flags,
                               vk::ImageAspectFlagBits::eDepth,
@@ -1888,12 +1890,14 @@ void TemporalUpscaler::RunScaled() {
     // Views kept across frames: FSR 4 registers images by view in a registry of eight.
     vk::Image depth_image = depth.GetImage(), color_image = color.GetImage();
     vk::ImageView depth_view{}, color_view{};
+    vk::ImageUsageFlags color_usage = color.usage_flags;
     u32 source_width = iw, source_height = ih;
     if (!scaled_session) {
         VideoCore::ImageViewInfo ci, di;
         ci.format = color.info.pixel_format;
         di.format = depth_format;
         const auto cp = scene_targets.Read(ldr_target, ci);
+        color_usage = cp.usage;
         const auto dp = scene_targets.Read(camera_motion.Depth(), di);
         color_image = cp.image;
         color_view = cp.view;
@@ -2151,7 +2155,7 @@ void TemporalUpscaler::RunScaled() {
     FfxVkPortableUpscaleDispatchInfo info{};
     info.structSize = sizeof(info);
     info.color = Describe(color_image, color.info.pixel_format, source_width, source_height,
-                          color.usage_flags, vk::ImageAspectFlagBits::eColor,
+                          color_usage, vk::ImageAspectFlagBits::eColor,
                           FFX_VK_PORTABLE_RESOURCE_STATE_GENERIC_READ);
     info.depth = Describe(depth_image, depth_format, source_width, source_height, depth.usage_flags,
                           vk::ImageAspectFlagBits::eDepth,

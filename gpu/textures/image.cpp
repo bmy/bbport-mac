@@ -288,6 +288,9 @@ bool Image::NeedsFullUsage(const ImageViewInfo& view_info) const {
     if (view_info.is_storage) {
         return true;
     }
+    if (view_info.format == backing->image.image_ci.format) {
+        return false; // the common case, without the format lookup
+    }
     const vk::Format format =
         runtime->GetInstance().GetSupportedFormat(view_info.format, format_features);
     return !ViewableWithoutMutableFormat(format, backing->image.image_ci.format);

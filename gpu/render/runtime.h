@@ -101,6 +101,11 @@ public:
     /// contents over when `copy_backing`.
     void SetBackingSamples(VideoCore::Image* image, u32 num_samples, bool copy_backing = true);
 
+    /// bbport (macOS): replaces `image`'s compressible backing (Image::NeedsFullUsage) with one
+    /// of its full usage, the contents copied over; the old one and its views go once the GPU
+    /// is done with them. `why` is for the log. Nothing to do for other backings.
+    void UpgradeUsage(VideoCore::Image* image, const char* why);
+
     /// Records an access of [offset, offset + size) of `buffer` by commands just recorded.
     void AccessBuffer(const VideoCore::Buffer* buffer, u64 offset, u64 size,
                       vk::PipelineStageFlags2 stage, vk::AccessFlags2 access);

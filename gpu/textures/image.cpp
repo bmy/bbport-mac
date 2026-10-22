@@ -217,8 +217,26 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
                             ? properties.value.imageFormatProperties.sampleCounts
                             : vk::SampleCountFlagBits::e1;
 
+    // bbport (macOS): color images start without storage usage, mutable formats and the feedback
+    // loop usage, so that Metal can compress them; a binding that needs one upgrades the image
+    // (Runtime::UpgradeUsage). Not block-compressed images (never compressed by Metal), 3D ones
+    // (2D views), multisampled ones (upgrades copy single-sample images only) or those in a
+    // stand-in format (the blitter views them in the guest's format).
+    full_usage = usage_flags;
+    full_create_flags = create_flags;
+    compressible = instance.IsCompressibleImages() && !info.props.is_depth &&
+                   !info.props.is_block && !info.props.is_volume && info.num_samples <= 1 &&
+                   format == info.pixel_format;
+    if (compressible) {
+        create_flags &= ~(vk::ImageCreateFlagBits::eMutableFormat |
+                          vk::ImageCreateFlagBits::eExtendedUsage);
+        usage_flags &= ~(vk::ImageUsageFlagBits::eStorage |
+                         vk::ImageUsageFlagBits::eAttachmentFeedbackLoopEXT);
+    }
+
     backing = &backing_images.emplace_back();
     backing->num_samples = info.num_samples;
+    backing->compressible = compressible;
     backing->image = HostImage{instance.GetDevice(), instance.GetAllocator()};
     backing->image.Create(vk::ImageCreateInfo{
         .flags = create_flags,
@@ -245,6 +263,9 @@ ImageView& Image::FindView(const ImageViewInfo& view_info, bool ensure_guest_sam
     if (ensure_guest_samples && (backing->num_samples > 1) != (info.num_samples > 1)) {
         runtime->SetBackingSamples(this, info.num_samples);
     }
+    if (NeedsFullUsage(view_info)) {
+        runtime->UpgradeUsage(this, view_info.is_storage ? "storage view" : "view format");
+    }
     auto& infos = backing->image_view_infos;
     auto& ids = backing->image_view_ids;
     if (backing->last_view < infos.size() && infos[backing->last_view] == view_info) {
@@ -258,6 +279,18 @@ ImageView& Image::FindView(const ImageViewInfo& view_info, bool ensure_guest_sam
     infos.push_back(view_info);
     ids.push_back(id);
     return (*slot_image_views)[id];
+}
+
+bool Image::NeedsFullUsage(const ImageViewInfo& view_info) const {
+    if (!backing || !backing->compressible) {
+        return false;
+    }
+    if (view_info.is_storage) {
+        return true;
+    }
+    const vk::Format format =
+        runtime->GetInstance().GetSupportedFormat(view_info.format, format_features);
+    return !ViewableWithoutMutableFormat(format, backing->image.image_ci.format);
 }
 
 void Image::GetBarriers(Barriers& out, vk::ImageLayout dst_layout, vk::AccessFlags2 dst_mask,

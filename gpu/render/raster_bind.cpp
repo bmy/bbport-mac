@@ -115,6 +115,12 @@ bool Rasterizer::TexturesBindableOnHelper(const Shader::Info& stage,
             image->prompt_icon =
                 u8(BbPrompts::IconOf(reinterpret_cast<const void*>(image->info.guest_address), 1024));
         }
+        // A compressible image this binding or a feedback loop needs in full usage: upgraded
+        // on the GPU thread (BindTextures).
+        if (image->backing && image->backing->compressible &&
+            (image->binding.is_target || image->NeedsFullUsage(entry.found_desc.view_info))) {
+            return false;
+        }
         if (image->binding.needs_rebind || !texture_cache.IsUpToDate(image_id) ||
             scene_targets->Tracks(image->image_uid) || ((image->prompt_icon || image->prompt_atlas) && prompts->Active()) ||
             (upscaler->Enabled() && upscaler->RedirectsSampled(image_id))) {

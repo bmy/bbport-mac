@@ -1138,13 +1138,19 @@ void TemporalUpscaler::OnSceneComposite() {
                                 : std::array<u32, 2>{color.info.size.width, color.info.size.height};
     const u32 w = reduced ? scene_targets.Size().width : scene[0];
     const u32 h = reduced ? scene_targets.Size().height : scene[1];
-    if (w != width || h != height || !(color.usage_flags & vk::ImageUsageFlagBits::eStorage)) {
+    if (w != width || h != height) {
+        return;
+    }
+    // bbport (macOS): the mask reads the scene color as a storage image.
+    runtime.UpgradeUsage(&color, "upscaler reactive mask");
+    if (!(color.usage_flags & vk::ImageUsageFlagBits::eStorage)) {
         return;
     }
     scheduler.EndRendering();
     if (reduced) {
         VideoCore::ImageViewInfo ci;
         ci.format = color.info.pixel_format;
+        ci.is_storage = true;
         const auto proxy = scene_targets.Read(scene_color, ci);
         mask_ready = RecordReactive(proxy.view);
         return;
@@ -1244,8 +1250,12 @@ void TemporalUpscaler::Run() {
     const u32 w = reduced ? scene_targets.Size().width : ow;
     const u32 h = reduced ? scene_targets.Size().height : oh;
     if (color.info.pixel_format != vk::Format::eR16G16B16A16Sfloat ||
-        depth.info.size.width != ow || depth.info.size.height != oh ||
-        !(color.usage_flags & vk::ImageUsageFlagBits::eStorage)) {
+        depth.info.size.width != ow || depth.info.size.height != oh) {
+        return;
+    }
+    // bbport (macOS): the result is merged back into the scene color as a storage image.
+    runtime.UpgradeUsage(&color, "upscaler output merge");
+    if (!(color.usage_flags & vk::ImageUsageFlagBits::eStorage)) {
         return;
     }
     if (!EnsureResources(w, h, ow, oh, true)) {
@@ -1269,8 +1279,11 @@ void TemporalUpscaler::Run() {
     if (reduced) {
         VideoCore::ImageViewInfo ci;
         ci.format = color.info.pixel_format;
+        // The reactive mask and FSR may read it as a storage image; MetalFX copies it.
+        ci.is_storage = !UseMetalFx();
         const auto c = scene_targets.Read(scene_color, ci);
         ci.format = depth.info.pixel_format;
+        ci.is_storage = false;
         const auto d = scene_targets.Read(camera_motion.Depth(), ci);
         input_color = c.image;
         input_depth = d.image;
@@ -1879,6 +1892,7 @@ void TemporalUpscaler::RunScaled() {
     if (!scaled_session) {
         VideoCore::ImageViewInfo ci, di;
         ci.format = color.info.pixel_format;
+        ci.is_storage = !UseMetalFx(); // as in Run
         di.format = depth_format;
         const auto cp = scene_targets.Read(ldr_target, ci);
         const auto dp = scene_targets.Read(camera_motion.Depth(), di);

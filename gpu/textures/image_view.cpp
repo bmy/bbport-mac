@@ -58,7 +58,29 @@ Gcn::ImageType TargetViewType(u32 layers) {
     return layers > 1 ? Gcn::ImageType::Color2DArray : Gcn::ImageType::Color2D;
 }
 
+/// The linear format of an sRGB one (else the format itself).
+vk::Format LinearOf(vk::Format format) {
+    switch (format) {
+    case vk::Format::eR8Srgb:
+        return vk::Format::eR8Unorm;
+    case vk::Format::eR8G8Srgb:
+        return vk::Format::eR8G8Unorm;
+    case vk::Format::eR8G8B8A8Srgb:
+        return vk::Format::eR8G8B8A8Unorm;
+    case vk::Format::eB8G8R8A8Srgb:
+        return vk::Format::eB8G8R8A8Unorm;
+    case vk::Format::eA8B8G8R8SrgbPack32:
+        return vk::Format::eA8B8G8R8UnormPack32;
+    default:
+        return format;
+    }
+}
+
 } // namespace
+
+bool ViewableWithoutMutableFormat(vk::Format view, vk::Format image) {
+    return view == image || LinearOf(view) == LinearOf(image);
+}
 
 ImageViewInfo::ImageViewInfo(const Gcn::Image& image, const Shader::ImageResource& desc) noexcept
     : is_storage{desc.is_written} {
@@ -100,7 +122,7 @@ ImageViewInfo::ImageViewInfo(const Gcn::DepthBuffer& buffer, Gcn::DepthView view
 ImageView::ImageView(const Vulkan::Instance& instance, const ImageViewInfo& info_,
                      const Image& image)
     : info{info_} {
-    vk::ImageViewUsageCreateInfo usage{.usage = image.usage_flags};
+    vk::ImageViewUsageCreateInfo usage{.usage = image.backing->image.image_ci.usage};
     if (!info.is_storage) {
         usage.usage &= ~vk::ImageUsageFlagBits::eStorage;
     }
@@ -127,11 +149,12 @@ ImageView::ImageView(const Vulkan::Instance& instance, const ImageViewInfo& info
     }
 
     // bbport: an image made without mutable formats (Instance::IsCompressibleImages) has views
-    // of its own format only; another one would be invalid there.
+    // of its own format (or its sRGB twin) only; another one would be invalid there (color
+    // images are upgraded before: Image::FindView).
     vk::Format view_format = instance.GetSupportedFormat(format, image.format_features);
     const auto& image_ci = image.backing->image.image_ci;
     if (!(image_ci.flags & vk::ImageCreateFlagBits::eMutableFormat) &&
-        view_format != image_ci.format) {
+        !ViewableWithoutMutableFormat(view_format, image_ci.format)) {
         static std::atomic<u32> warnings{0};
         if (warnings.fetch_add(1, std::memory_order_relaxed) < 8) {
             LOG_WARNING(Render_Vulkan, "view format {} of a {} image without mutable formats: "
@@ -139,6 +162,9 @@ ImageView::ImageView(const Vulkan::Instance& instance, const ImageViewInfo& info
                         vk::to_string(image_ci.format));
         }
         view_format = image_ci.format;
+        if (aspect == (vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil)) {
+            aspect = vk::ImageAspectFlagBits::eDepth; // a sampled view has one aspect
+        }
     }
 
     if (!ViewFitsImage(info.type, image.info.type)) {

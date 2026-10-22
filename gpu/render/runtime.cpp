@@ -620,8 +620,16 @@ void Runtime::SetBackingSamples(VideoCore::Image* image, u32 num_samples, bool c
     } else {
         auto create_info = backing->image.image_ci;
         create_info.samples = GcnToVk::NumSamples(num_samples, image->supported_samples);
+        // bbport (macOS): multisampled backings in full usage (UpgradeUsage copies single-sample
+        // backings only).
+        const bool compressible = backing->compressible && num_samples <= 1;
+        if (backing->compressible && !compressible) {
+            create_info.flags |= image->full_create_flags;
+            create_info.usage = image->full_usage;
+        }
         target = &image->backing_images.emplace_back();
         target->num_samples = num_samples;
+        target->compressible = compressible;
         target->image = VideoCore::HostImage{instance.GetDevice(), instance.GetAllocator()};
         target->image.Create(create_info);
         SetObjectName(instance.GetDevice(), target->image.image,
@@ -660,6 +668,101 @@ void Runtime::SetBackingSamples(VideoCore::Image* image, u32 num_samples, bool c
         target->state.pl_stage = Stages;
     }
     backing = target;
+    image->usage_flags = target->image.image_ci.usage;
+}
+
+void Runtime::UpgradeUsage(VideoCore::Image* image, const char* why) {
+    BeforeImageAccess();
+    VideoCore::Image::BackingImage* old = image->backing;
+    if (!old || !old->compressible) {
+        return;
+    }
+    const auto& info = image->info;
+    auto create_info = old->image.image_ci;
+    create_info.flags |= image->full_create_flags;
+    create_info.usage = image->full_usage;
+    auto& next = image->backing_images.emplace_back();
+    next.num_samples = old->num_samples;
+    next.image = VideoCore::HostImage{instance.GetDevice(), instance.GetAllocator()};
+    next.image.Create(create_info);
+    SetObjectName(instance.GetDevice(), next.image.image,
+                  "Image {}x{}x{} {} {} {:#x}:{:#x} L:{} M:{} S:{} (full usage)", info.size.width,
+                  info.size.height, info.size.depth, Gcn::NameOf(info.tile_mode),
+                  vk::to_string(info.pixel_format), info.guest_address, info.guest_size,
+                  info.resources.layers, info.resources.levels, next.num_samples);
+
+    // The contents, unless the old backing was never used (an image made for this binding).
+    const bool used =
+        old->state.layout != Layout::eUndefined || !old->subresource_states.empty();
+    if (used) {
+        scheduler.EndRendering();
+        const TransferMark mark{*this, "image usage upgrade", *image};
+        Transit(image, Layout::eTransferSrcOptimal, Stage::eCopy, AccessBit::eTransferRead);
+        image_barriers.push_back({
+            .srcStageMask = Stage::eNone,
+            .srcAccessMask = AccessBit::eNone,
+            .dstStageMask = Stage::eCopy,
+            .dstAccessMask = AccessBit::eTransferWrite,
+            .oldLayout = Layout::eUndefined,
+            .newLayout = Layout::eTransferDstOptimal,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = next.image,
+            .subresourceRange = {image->aspect_mask, 0, VK_REMAINING_MIP_LEVELS, 0,
+                                 VK_REMAINING_ARRAY_LAYERS},
+        });
+        FlushBarriers();
+        const auto& extent = create_info.extent;
+        boost::container::small_vector<vk::ImageCopy, 16> regions;
+        for (u32 level = 0; level < create_info.mipLevels; ++level) {
+            const vk::ImageSubresourceLayers layers{image->aspect_mask, level, 0,
+                                                    create_info.arrayLayers};
+            regions.push_back({
+                .srcSubresource = layers,
+                .dstSubresource = layers,
+                .extent = {std::max(extent.width >> level, 1u),
+                           std::max(extent.height >> level, 1u),
+                           std::max(extent.depth >> level, 1u)},
+            });
+        }
+        scheduler.Record([src = old->image.image, dst = next.image.image,
+                          regions = scheduler.RecordData(std::span<const vk::ImageCopy>(
+                              regions.data(), regions.size()))](vk::CommandBuffer cmdbuf) {
+            cmdbuf.copyImage(src, Layout::eTransferSrcOptimal, dst, Layout::eTransferDstOptimal,
+                             u32(regions.size()), regions.data());
+        });
+        next.state = {Stage::eCopy, AccessBit::eTransferWrite, Layout::eTransferDstOptimal};
+    }
+
+    // The old backing stays in the list (pointers to it tell memos it changed) but is never
+    // found again; its image and views go once the commands recorded so far are done.
+    old->num_samples = 0;
+    old->compressible = false;
+    old->image_view_infos.clear();
+    scheduler.DeferOperation([views = image->slot_image_views, ids = std::move(old->image_view_ids),
+                              host = std::move(old->image)]() mutable {
+        for (const VideoCore::ImageViewId id : ids) {
+            views->erase(id);
+        }
+    });
+    old->image_view_ids.clear();
+    old->last_view = 0;
+    image->backing = &next;
+    image->usage_flags = create_info.usage;
+
+    static std::atomic<u64> upgrades{0}, bytes{0};
+    const u64 count = upgrades.fetch_add(1, std::memory_order_relaxed) + 1;
+    const u64 total = bytes.fetch_add(used ? next.image.size_bytes : 0,
+                                      std::memory_order_relaxed) +
+                      (used ? next.image.size_bytes : 0);
+    if (count <= 32 || count % 256 == 0) {
+        std::printf("Texture usage upgrade %llu (%s): %ux%ux%u %s, %u levels, %u layers, %u "
+                    "samples%s; %.1f MB copied in all\n",
+                    (unsigned long long)count, why, info.size.width, info.size.height,
+                    info.size.depth, vk::to_string(info.pixel_format).c_str(),
+                    info.resources.levels, info.resources.layers, next.num_samples,
+                    used ? "" : " (unused, not copied)", double(total) / 1e6);
+    }
 }
 
 } // namespace Vulkan

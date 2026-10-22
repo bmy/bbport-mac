@@ -445,6 +445,10 @@ void Rasterizer::BindColorAttachments(RenderState& state, const GraphicsPipeline
         }
         texture_cache.UpdateImage(image_id);
         runtime.SetBackingSamples(image, key.color_samples[cb]);
+        if (!reduced && image->binding.is_bound && image->backing->compressible) {
+            // A feedback loop BindTextures did not see (bbport, macOS).
+            runtime.UpgradeUsage(image, "feedback loop (target)");
+        }
         const auto& view = texture_cache.FindRenderTarget(image_id, desc);
         const u32 slice = view.info.range.base.layer;
         const u32 mip = view.info.range.base.level;

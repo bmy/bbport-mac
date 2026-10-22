@@ -111,6 +111,9 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
     // TextureSetMemo: what this call resolves, to remember when the set qualifies.
     std::array<TextureSetEntry, TextureSet::MaxImages> resolved{};
     bool set_ok = set_slot != nullptr;
+    // A proxy upgraded while binding (SceneTargets::UpgradeProxy) leaves earlier bindings with
+    // views of the replaced proxy: such a set is not remembered.
+    const u64 scene_generation = scene_targets->Generation();
     // SampleSceneProxies: bindings that may read a reduced scene proxy instead of the native
     // image (normalized sampling only; see Shader::ImageResource::needs_native).
     boost::container::small_vector<bool, 16> binding_proxy_ok;
@@ -233,6 +236,28 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
         }
 
         image_descriptor_array_sizes.push_back(num_bindings);
+    }
+
+    // bbport (macOS): compressible images this stage needs in full usage (a storage or another
+    // format's view, or a feedback loop with a target of this draw) are upgraded before any
+    // binding takes a view, so that no binding of the stage holds a view of a replaced backing.
+    // (The helper never gets such stages: TexturesBindableOnHelper.)
+    if (!on_helper && instance.IsCompressibleImages()) {
+        for (const auto& [image_id, desc_ptr] : image_bindings) {
+            if (!image_id) {
+                continue;
+            }
+            auto& image = texture_cache.GetImage(image_id);
+            if (!image.backing || !image.backing->compressible) {
+                continue;
+            }
+            if (image.binding.is_target && !pipeline_is_compute) {
+                runtime.UpgradeUsage(&image, "feedback loop");
+            } else if (image.NeedsFullUsage(desc_ptr->view_info)) {
+                runtime.UpgradeUsage(&image, desc_ptr->view_info.is_storage ? "storage view"
+                                                                           : "view format");
+            }
+        }
     }
 
     // Second pass to re-bind images that were updated after binding
@@ -442,7 +467,8 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
             }
         }
     }
-    if (set_ok && image_bindings.size() == stage.images.size()) {
+    if (set_ok && image_bindings.size() == stage.images.size() &&
+        scene_targets->Generation() == scene_generation) {
         // Remember the set: the same T#s resolve the same way while no image is (un)registered.
         set_slot->generation = texture_cache.RegistryGeneration();
         set_slot->scene_generation = scene_targets->Generation();

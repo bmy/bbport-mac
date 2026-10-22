@@ -1892,7 +1892,6 @@ void TemporalUpscaler::RunScaled() {
     if (!scaled_session) {
         VideoCore::ImageViewInfo ci, di;
         ci.format = color.info.pixel_format;
-        ci.is_storage = !UseMetalFx(); // as in Run
         di.format = depth_format;
         const auto cp = scene_targets.Read(ldr_target, ci);
         const auto dp = scene_targets.Read(camera_motion.Depth(), di);

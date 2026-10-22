@@ -519,7 +519,8 @@ void SceneTargets::UpgradeProxy(Entry& e, const VideoCore::Image& original) {
         });
         layout = vk::ImageLayout::eTransferDstOptimal;
     }
-    scheduler.DeferOperation([old = std::move(e.image), views = std::move(e.views)]() mutable {});
+    // Earlier bindings of this draw may hold views of the old one (Runtime::Retire).
+    runtime.Retire([old = std::move(e.image), views = std::move(e.views)]() mutable {});
     e.image = std::move(next);
     e.views.clear();
     e.layout = layout;

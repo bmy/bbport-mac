@@ -117,8 +117,12 @@ bool Rasterizer::TexturesBindableOnHelper(const Shader::Info& stage,
         }
         // A compressible image this binding or a feedback loop needs in full usage: upgraded
         // on the GPU thread (BindTextures).
-        if (image->backing && image->backing->compressible &&
-            (image->binding.is_target || image->NeedsFullUsage(entry.found_desc.view_info))) {
+        // (FindView may first switch to another sample count's backing, which may need it.)
+        if (image->compressible && image->backing &&
+            ((image->backing->num_samples > 1) != (image->info.num_samples > 1) ||
+             (image->backing->compressible &&
+              (image->binding.is_target ||
+               image->NeedsFullUsage(entry.found_desc.view_info))))) {
             return false;
         }
         if (image->binding.needs_rebind || !texture_cache.IsUpToDate(image_id) ||
@@ -674,6 +678,8 @@ void Rasterizer::ResetBindings(bool is_compute) {
     for (auto& image_id : bound_images) {
         texture_cache.GetImage(image_id).binding = {};
     }
+    runtime.ReleaseRetired(); // the draw recorded: images it replaced can go after it
+
     for (const auto [buffer, offset, size, is_written] : bound_buffers) {
         const auto dst_stage = is_compute ? vk::PipelineStageFlagBits2::eComputeShader
                                           : vk::PipelineStageFlagBits2::eAllGraphics;

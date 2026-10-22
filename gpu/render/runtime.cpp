@@ -105,6 +105,17 @@ Runtime::~Runtime() = default;
 
 void Runtime::TickFrame() {
     staging_pool.TickFrame();
+    ReleaseRetired();
+}
+
+void Runtime::ReleaseRetired() {
+    if (retired.empty()) {
+        return;
+    }
+    for (auto& release : retired) {
+        scheduler.DeferOperation(std::move(release));
+    }
+    retired.clear();
 }
 
 bool Runtime::IsBufferAccessed(const VideoCore::Buffer* buffer, u64 offset, u64 size,
@@ -735,12 +746,13 @@ void Runtime::UpgradeUsage(VideoCore::Image* image, const char* why) {
     }
 
     // The old backing stays in the list (pointers to it tell memos it changed) but is never
-    // found again; its image and views go once the commands recorded so far are done.
+    // found again; its image and views go once the GPU is done with this draw (Retire: an
+    // earlier binding of it may already hold one of its views).
     old->num_samples = 0;
     old->compressible = false;
     old->image_view_infos.clear();
-    scheduler.DeferOperation([views = image->slot_image_views, ids = std::move(old->image_view_ids),
-                              host = std::move(old->image)]() mutable {
+    Retire([views = image->slot_image_views, ids = std::move(old->image_view_ids),
+            host = std::move(old->image)]() mutable {
         for (const VideoCore::ImageViewId id : ids) {
             views->erase(id);
         }

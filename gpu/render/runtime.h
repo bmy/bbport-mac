@@ -11,9 +11,11 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <vector>
 
 #include "buffers/buffer.h"
 #include "common/types.h"
+#include "common/unique_function.h"
 #include "textures/image.h"
 #include "textures/types.h"
 #include "vulkan/access_tracker.h"
@@ -106,6 +108,15 @@ public:
     /// is done with them. `why` is for the log. Nothing to do for other backings.
     void UpgradeUsage(VideoCore::Image* image, const char* why);
 
+    /// bbport: `release` frees a replaced backing or proxy (UpgradeUsage, UpgradeProxy). The
+    /// draw or dispatch being bound may still hold its views: it runs once the GPU is done
+    /// with the commands recorded up to the next ReleaseRetired (after that draw, from
+    /// Rasterizer::ResetBindings, and at each frame).
+    void Retire(Common::UniqueFunction<void>&& release) {
+        retired.push_back(std::move(release));
+    }
+    void ReleaseRetired();
+
     /// Records an access of [offset, offset + size) of `buffer` by commands just recorded.
     void AccessBuffer(const VideoCore::Buffer* buffer, u64 offset, u64 size,
                       vk::PipelineStageFlags2 stage, vk::AccessFlags2 access);
@@ -153,6 +164,7 @@ private:
     vk::PipelineStageFlags2 pending_stages{};  ///< of accesses since the last barrier
     vk::AccessFlags2 pending_writes{};         ///< their write accesses
     bool global_write = false;                 ///< AccessGlobal wrote since the last barrier
+    std::vector<Common::UniqueFunction<void>> retired; ///< Retire, until ReleaseRetired
 };
 
 } // namespace Vulkan

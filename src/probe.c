@@ -28,6 +28,7 @@
 #ifdef __APPLE__
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
+#include <sys/sysctl.h>
 #elif defined(_WIN32)
 #include <process.h>
 #include <windows.h>
@@ -807,7 +808,23 @@ static int probe_main(int argc, char **argv) {
 typedef struct { int argc; char **argv; } MainArgs;
 static void *probe_thread(void *arg) {
     const MainArgs *args = arg;
+    /* bbport (macOS): named for the CPU-by-thread report, where it counts as the game's (a
+     * "bb-probe" prefix would count as the port's: bbport_thread_cpu_mac.cpp, Owner). */
+    bb_set_thread_name("GameMain");
     exit(probe_main(args->argc, args->argv));
+}
+/* bbport (macOS): the performance and efficiency cores, for logs from small Macs (4P+4E): the
+ * game under Rosetta and the GPU side's threads share them. */
+static void log_core_counts(void) {
+    int perf = 0, eff = 0, logical = 0;
+    size_t size = sizeof(int);
+    if (sysctlbyname("hw.perflevel0.physicalcpu", &perf, &size, NULL, 0) != 0) perf = 0;
+    size = sizeof(int);
+    if (sysctlbyname("hw.perflevel1.physicalcpu", &eff, &size, NULL, 0) != 0) eff = 0;
+    size = sizeof(int);
+    if (sysctlbyname("hw.logicalcpu", &logical, &size, NULL, 0) != 0) logical = 0;
+    if (perf > 0) printf("CPU: %d performance cores, %d efficiency cores (%d logical)\n", perf, eff, logical);
+    else printf("CPU: %d logical cores (no performance levels)\n", logical);
 }
 int main(int argc, char **argv) {
     static MainArgs args;
@@ -815,6 +832,7 @@ int main(int argc, char **argv) {
     /* stdout is a pipe (run.sh tees it to out/last-run.log): line-buffer it so diagnostics
      * printed just before a crash reach the log. */
     setvbuf(stdout, NULL, _IOLBF, 0);
+    log_core_counts();
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setstacksize(&attr, (size_t)64 << 20);

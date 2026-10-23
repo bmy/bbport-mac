@@ -452,6 +452,9 @@ private:
     bool BindResources(const Pipeline* pipeline);
     /// The layout transition of an image a shader reads (or writes, `is_storage`); true when
     /// it records a barrier.
+    /// bbport (macOS): `range` of the image overlaps a target of the draw being bound.
+    [[nodiscard]] bool OverlapsTarget(VideoCore::ImageId image_id,
+                                      const VideoCore::SubresourceRange& range) const;
     bool TransitSampled(VideoCore::Image& image, const VideoCore::TextureCache::ImageDesc& desc,
                         const VideoCore::Image::Binding& binding, bool is_storage);
     void ForceAnisotropy(Gcn::Sampler& sharp, bool is_depth) const;

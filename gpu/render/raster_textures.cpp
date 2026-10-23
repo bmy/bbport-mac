@@ -53,6 +53,23 @@ Rasterizer::ImageDescCacheEntry& Rasterizer::CachedImageDescEntry(const Gcn::Ima
     return entry;
 }
 
+bool Rasterizer::OverlapsTarget(VideoCore::ImageId image_id,
+                                const VideoCore::SubresourceRange& range) const {
+    const auto overlaps = [&](const VideoCore::SubresourceRange& target) {
+        return range.base.level < target.base.level + target.extent.levels &&
+               target.base.level < range.base.level + range.extent.levels &&
+               range.base.layer < target.base.layer + target.extent.layers &&
+               target.base.layer < range.base.layer + range.extent.layers;
+    };
+    // (Slots past this draw's targets may be stale: at worst a loop is assumed.)
+    for (const auto& [id, desc] : cb_descs) {
+        if (id == image_id && overlaps(desc.view_info.range)) {
+            return true;
+        }
+    }
+    return db_desc.first == image_id && overlaps(db_desc.second.view_info.range);
+}
+
 bool Rasterizer::TransitSampled(VideoCore::Image& image,
                                 const VideoCore::TextureCache::ImageDesc& desc,
                                 const VideoCore::Image::Binding& binding, bool is_storage) {
@@ -60,7 +77,7 @@ bool Rasterizer::TransitSampled(VideoCore::Image& image,
     // loop): the whole image in the general or feedback loop layout. Depth images are never
     // storage, and a feedback loop makes no sense for them.
     if ((binding.force_general || binding.is_target) && !image.info.props.is_depth) {
-        if (instance.IsAttachmentFeedbackLoopLayoutSupported() && image.binding.is_target) {
+        if (instance.IsAttachmentFeedbackLoopLayoutSupported() && binding.is_target) {
             return runtime.Transit(&image, vk::ImageLayout::eAttachmentFeedbackLoopOptimalEXT,
                                    vk::PipelineStageFlagBits2::eAllGraphics,
                                    vk::AccessFlagBits2::eShaderRead);
@@ -248,11 +265,13 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
                 continue;
             }
             auto& image = texture_cache.GetImage(image_id);
-            if (!image.backing || !image.backing->compressible) {
+            if (!image.backing) {
                 continue;
             }
-            if (image.binding.is_target && !pipeline_is_compute) {
-                runtime.UpgradeUsage(&image, "feedback loop");
+            if (image.binding.is_target && !pipeline_is_compute &&
+                OverlapsTarget(image_id, desc_ptr->view_info.range) &&
+                (image.backing->compressible || image.LacksFeedbackUsage())) {
+                runtime.UpgradeUsage(&image, "feedback loop", true);
             } else if (image.NeedsFullUsage(desc_ptr->view_info)) {
                 runtime.UpgradeUsage(&image, desc_ptr->view_info.is_storage ? "storage view"
                                                                            : "view format");
@@ -446,7 +465,15 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
                     continue;
                 }
             }
-            barrier |= TransitSampled(image, desc, binding, is_storage);
+            // bbport (macOS): with compressible images a target of this draw sampled at another
+            // mip or layer is no feedback loop (each range in its own layout).
+            auto transit_binding = binding;
+            if (binding.is_target && instance.IsCompressibleImages() && !pipeline_is_compute) {
+                const bool feedback = OverlapsTarget(image_id, desc.view_info.range);
+                transit_binding.is_target = feedback;
+                image.binding.feedback |= feedback;
+            }
+            barrier |= TransitSampled(image, desc, transit_binding, is_storage);
             image.usage.storage |= is_storage;
             image.usage.texture |= !is_storage;
             if (FrameCapture::Active()) {

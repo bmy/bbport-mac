@@ -491,7 +491,8 @@ SceneTargets::Entry& SceneTargets::Get(VideoCore::ImageId id, u32 level) {
 void SceneTargets::UpgradeProxy(Entry& e, const VideoCore::Image& original) {
     auto ci = e.image.image_ci;
     ci.flags |= original.full_create_flags;
-    ci.usage = original.full_usage;
+    // Never in a feedback loop (reduced passes sample the native image): kept GPU-optimized.
+    ci.usage = original.full_usage & ~vk::ImageUsageFlagBits::eAttachmentFeedbackLoopEXT;
     VideoCore::HostImage next{instance.GetDevice(), instance.GetAllocator()};
     next.Create(ci);
     auto layout = vk::ImageLayout::eUndefined;

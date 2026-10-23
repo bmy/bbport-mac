@@ -106,7 +106,9 @@ public:
     /// bbport (macOS): replaces `image`'s compressible backing (Image::NeedsFullUsage) with one
     /// of its full usage, the contents copied over; the old one and its views go once the GPU
     /// is done with them. `why` is for the log. Nothing to do for other backings.
-    void UpgradeUsage(VideoCore::Image* image, const char* why);
+    /// `feedback`: for a feedback loop, with the feedback loop usage (else without it, unless
+    /// the backing had it); also upgrades a full backing that lacks it.
+    void UpgradeUsage(VideoCore::Image* image, const char* why, bool feedback = false);
 
     /// bbport: `release` frees a replaced backing or proxy (UpgradeUsage, UpgradeProxy). The
     /// draw or dispatch being bound may still hold its views: it runs once the GPU is done

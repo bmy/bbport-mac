@@ -682,16 +682,20 @@ void Runtime::SetBackingSamples(VideoCore::Image* image, u32 num_samples, bool c
     image->usage_flags = target->image.image_ci.usage;
 }
 
-void Runtime::UpgradeUsage(VideoCore::Image* image, const char* why) {
+void Runtime::UpgradeUsage(VideoCore::Image* image, const char* why, bool feedback) {
     BeforeImageAccess();
     VideoCore::Image::BackingImage* old = image->backing;
-    if (!old || !old->compressible) {
+    if (!old || (!old->compressible && !(feedback && image->LacksFeedbackUsage()))) {
         return;
     }
     const auto& info = image->info;
     auto create_info = old->image.image_ci;
     create_info.flags |= image->full_create_flags;
     create_info.usage = image->full_usage;
+    constexpr auto FeedbackUsage = vk::ImageUsageFlagBits::eAttachmentFeedbackLoopEXT;
+    if (!feedback && !(old->image.image_ci.usage & FeedbackUsage)) {
+        create_info.usage &= ~FeedbackUsage; // keeps it GPU-optimized (KosmicKrisp)
+    }
     auto& next = image->backing_images.emplace_back();
     next.num_samples = old->num_samples;
     next.image = VideoCore::HostImage{instance.GetDevice(), instance.GetAllocator()};
@@ -767,7 +771,7 @@ void Runtime::UpgradeUsage(VideoCore::Image* image, const char* why) {
     const u64 total = bytes.fetch_add(used ? next.image.size_bytes : 0,
                                       std::memory_order_relaxed) +
                       (used ? next.image.size_bytes : 0);
-    if (count <= 32 || count % 256 == 0) {
+    if (count <= 32 || count % 256 == 0 || (used && next.image.size_bytes >= (1u << 20))) {
         std::printf("Texture usage upgrade %llu (%s): %ux%ux%u %s, %u levels, %u layers, %u "
                     "samples%s; %.1f MB copied in all\n",
                     (unsigned long long)count, why, info.size.width, info.size.height,

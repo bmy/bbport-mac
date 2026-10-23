@@ -541,7 +541,10 @@ void Rasterizer::ForceAnisotropy(Gcn::Sampler& sharp, bool is_depth) const {
         static std::atomic<u64> seen{0};
         const u32 kind = u32(sharp.xy_min_filter) * 3 * 5 + u32(sharp.mip_filter) * 5 +
                          u32(sharp.max_aniso);
-        if (kind < 64 && !(seen.fetch_or(1ull << kind) & (1ull << kind))) {
+        // bbport (macOS): a relaxed load first; the read-modify-write (for every sampler of
+        // every draw) only for a kind not printed yet.
+        if (kind < 64 && !(seen.load(std::memory_order_relaxed) & (1ull << kind)) &&
+            !(seen.fetch_or(1ull << kind, std::memory_order_relaxed) & (1ull << kind))) {
             std::printf("Sampler: game uses min filter %u, mip filter %u, anisotropy %.0fx\n",
                         u32(sharp.xy_min_filter), u32(sharp.mip_filter),
                         sharp.MaxAniso());

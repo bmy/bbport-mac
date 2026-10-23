@@ -69,7 +69,11 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
         }
     }
     // bbport: this thread joins the texture binding helper before it changes image state.
-    runtime.SetImageAccessHook(&JoinBindHelper, this);
+    // bbport (macOS): only with the helper (BB_TEXTURE_HELPER=1); without it the hook was an
+    // indirect call that did nothing on every image access.
+    if (bind_helper.Available()) {
+        runtime.SetImageAccessHook(&JoinBindHelper, this);
+    }
     scheduler.SetSubmitCallback([this](Vulkan::SubmitInfo& info) {
         runtime.FlushBarriers();
         buffer_cache.SubmitPendingArenaBinds(info);
@@ -648,37 +652,49 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     const u32 first_vertex = vertex_offset;
     const u32 first_instance = instance_offset;
     const auto* ps_info = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
-    Breadcrumbs::Crumb crumb{
-        .kind = is_indexed ? Breadcrumbs::Kind::DrawIndexed : Breadcrumbs::Kind::Draw,
-        .hash = {vs_info.pgm_hash, ps_info ? ps_info->pgm_hash : 0},
-        .program = {vs_info.ProgramBase(), ps_info ? ps_info->ProgramBase() : 0},
-        .count = {num_indices, num_instances, 0},
-    };
     // On NVIDIA by default (its hangs give no fault address): it costs the recording thread a
     // few T# and V# reads a draw. BB_BREADCRUMB_READS=1 / 0: on / off everywhere.
     static const bool crumb_reads = [&] {
         const char* env = std::getenv("BB_BREADCRUMB_READS");
         return env ? env[0] == '1' : instance.GetVendorID() == 0x10de;
     }();
-    if (crumb_reads && Breadcrumbs::Enabled()) {
-        NoteCrumbReads(crumb, pipeline, regs, is_indexed, index_offset);
-    }
-    const Scissors check_scissors =
-        DynCheck::Enabled() ? scheduler.GetDynamicState().CurrentScissors() : Scissors{};
-    const Viewports check_viewports =
-        DynCheck::Enabled() ? scheduler.GetDynamicState().CurrentViewports() : Viewports{};
-    const u64 check_vs = vs_info.pgm_hash, check_ps = ps_info ? ps_info->pgm_hash : 0;
-    scheduler.RecordCrumb(crumb, [=](vk::CommandBuffer cmdbuf) {
-        cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, handle);
-        if (DynCheck::Enabled()) {
-            DynCheck::Draw(cmdbuf, check_viewports, check_scissors, check_vs, check_ps);
+    // bbport (macOS): built only with breadcrumbs on (RecordCrumbWith).
+    const auto make_crumb = [&] {
+        Breadcrumbs::Crumb crumb{
+            .kind = is_indexed ? Breadcrumbs::Kind::DrawIndexed : Breadcrumbs::Kind::Draw,
+            .hash = {vs_info.pgm_hash, ps_info ? ps_info->pgm_hash : 0},
+            .program = {vs_info.ProgramBase(), ps_info ? ps_info->ProgramBase() : 0},
+            .count = {num_indices, num_instances, 0},
+        };
+        if (crumb_reads) {
+            NoteCrumbReads(crumb, pipeline, regs, is_indexed, index_offset);
         }
+        return crumb;
+    };
+    const auto draw = [=](vk::CommandBuffer cmdbuf) {
         if (is_indexed) {
             cmdbuf.drawIndexed(num_indices, num_instances, 0, s32(first_vertex), first_instance);
         } else {
             cmdbuf.draw(num_indices, num_instances, first_vertex, first_instance);
         }
-    });
+    };
+    if (DynCheck::Enabled()) {
+        const Scissors check_scissors = scheduler.GetDynamicState().CurrentScissors();
+        const Viewports check_viewports = scheduler.GetDynamicState().CurrentViewports();
+        const u64 check_vs = vs_info.pgm_hash, check_ps = ps_info ? ps_info->pgm_hash : 0;
+        scheduler.RecordCrumbWith(make_crumb, [=](vk::CommandBuffer cmdbuf) {
+            cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, handle);
+            DynCheck::Draw(cmdbuf, check_viewports, check_scissors, check_vs, check_ps);
+            draw(cmdbuf);
+        });
+    } else {
+        // bbport (macOS): without BB_DYNSTATE_CHECK the closure no longer carries its
+        // viewports and scissors (about 650 bytes a draw).
+        scheduler.RecordCrumbWith(make_crumb, [=](vk::CommandBuffer cmdbuf) {
+            cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, handle);
+            draw(cmdbuf);
+        });
+    }
     // BB_TRACE_SHADER with BB_GPU_PROFILE: a mark right after the traced vertex shader's draws,
     // so the profile splits their pass into the draw and what follows it unlabeled.
     if (auto* profiler = GpuProfiler::Get()) {
@@ -950,15 +966,18 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     const u64 counts_offset = count_address != 0 ? count_offset : 0;
     const auto* vs_crumb = pipeline->GetStages()[u32(Shader::SwStage::Vertex)];
     const auto* ps_crumb = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
-    const Breadcrumbs::Crumb crumb{
-        .kind = Breadcrumbs::Kind::DrawIndirect,
-        .hash = {vs_crumb ? vs_crumb->pgm_hash : 0, ps_crumb ? ps_crumb->pgm_hash : 0},
-        .program = {vs_crumb ? vs_crumb->ProgramBase() : 0,
-                    ps_crumb ? ps_crumb->ProgramBase() : 0},
-        .address = indirect.args,
-        .count = {max_count, stride, 0},
+    // bbport (macOS): built only with breadcrumbs on (RecordCrumbWith).
+    const auto make_crumb = [&] {
+        return Breadcrumbs::Crumb{
+            .kind = Breadcrumbs::Kind::DrawIndirect,
+            .hash = {vs_crumb ? vs_crumb->pgm_hash : 0, ps_crumb ? ps_crumb->pgm_hash : 0},
+            .program = {vs_crumb ? vs_crumb->ProgramBase() : 0,
+                        ps_crumb ? ps_crumb->ProgramBase() : 0},
+            .address = indirect.args,
+            .count = {max_count, stride, 0},
+        };
     };
-    scheduler.RecordCrumb(crumb, [=](vk::CommandBuffer cmdbuf) {
+    scheduler.RecordCrumbWith(make_crumb, [=](vk::CommandBuffer cmdbuf) {
         cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, handle);
         if (is_indexed) {
             if (counts) {
@@ -1108,13 +1127,16 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
     if (FrameCapture::Active()) {
         FrameCapture::Dispatch(cs.pgm_hash, dim_x, dim_y, dim_z);
     }
-    const Breadcrumbs::Crumb crumb{
-        .kind = Breadcrumbs::Kind::Dispatch,
-        .hash = {cs.pgm_hash, 0},
-        .program = {cs.ProgramBase(), 0},
-        .count = {dim_x, dim_y, dim_z},
+    // bbport (macOS): built only with breadcrumbs on (RecordCrumbWith).
+    const auto make_crumb = [&] {
+        return Breadcrumbs::Crumb{
+            .kind = Breadcrumbs::Kind::Dispatch,
+            .hash = {cs.pgm_hash, 0},
+            .program = {cs.ProgramBase(), 0},
+            .count = {dim_x, dim_y, dim_z},
+        };
     };
-    scheduler.RecordCrumb(crumb, [=](vk::CommandBuffer cmdbuf) {
+    scheduler.RecordCrumbWith(make_crumb, [=](vk::CommandBuffer cmdbuf) {
         cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, handle);
         cmdbuf.dispatch(dim_x, dim_y, dim_z);
     });
@@ -1174,15 +1196,18 @@ void Rasterizer::DispatchIndirectRecord(const ComputePipeline* pipeline, VAddr a
     const u64 raw_offset = base;
     const auto& cs_crumb = pipeline->GetStage(Shader::SwStage::Compute);
     const u32 args_slot = Breadcrumbs::ArgsSlot();
-    const Breadcrumbs::Crumb crumb{
-        .kind = Breadcrumbs::Kind::DispatchIndirect,
-        .hash = {cs_crumb.pgm_hash, 0},
-        .program = {cs_crumb.ProgramBase(), 0},
-        .address = address,
-        .count = {buffer_cache.IsInPlace(address, size) ? 1u : 0u, 0, 0},
-        .args_slot = args_slot,
+    // bbport (macOS): built only with breadcrumbs on (RecordCrumbWith).
+    const auto make_crumb = [&] {
+        return Breadcrumbs::Crumb{
+            .kind = Breadcrumbs::Kind::DispatchIndirect,
+            .hash = {cs_crumb.pgm_hash, 0},
+            .program = {cs_crumb.ProgramBase(), 0},
+            .address = address,
+            .count = {buffer_cache.IsInPlace(address, size) ? 1u : 0u, 0, 0},
+            .args_slot = args_slot,
+        };
     };
-    scheduler.RecordCrumb(crumb, [=](vk::CommandBuffer cmdbuf) {
+    scheduler.RecordCrumbWith(make_crumb, [=](vk::CommandBuffer cmdbuf) {
         Breadcrumbs::CopyArgs(cmdbuf, raw_args, raw_offset, args_slot); // what the game wrote
         cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, handle);
         cmdbuf.dispatchIndirect(args, args_offset);

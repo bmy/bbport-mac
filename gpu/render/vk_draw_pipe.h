@@ -161,20 +161,8 @@ public:
         if (consumed.load(std::memory_order_acquire) == head) {
             return;
         }
-        ++drains;
-        const u32 slot = reason < NumReasons ? reason : ReasonRasterizer;
-        ++drains_by_reason[slot];
-        const u64 start = BbCpu::Ticks();
-        for (u32 spins = 0; consumed.load(std::memory_order_acquire) != head; ++spins) {
-            if (spins < 4096) {
-                BbCpu::Pause();
-            } else {
-                std::this_thread::yield();
-            }
-        }
-        const u64 waited = BbCpu::Ticks() - start;
-        drain_cycles += waited;
-        cycles_by_reason[slot] += waited;
+        // consumed never passes head: reaching it is being equal to it.
+        WaitForStageB(consumed, head, WaitPosition, reason);
     }
 
     /// Stage A: the number the next committed packet gets (packets are numbered from 1), and
@@ -194,20 +182,7 @@ public:
         if (ReachedPacket(number)) {
             return;
         }
-        ++drains;
-        const u32 slot = reason < NumReasons ? reason : ReasonRasterizer;
-        ++drains_by_reason[slot];
-        const u64 start = BbCpu::Ticks();
-        for (u32 spins = 0; !ReachedPacket(number); ++spins) {
-            if (spins < 4096) {
-                BbCpu::Pause();
-            } else {
-                std::this_thread::yield();
-            }
-        }
-        const u64 waited = BbCpu::Ticks() - start;
-        drain_cycles += waited;
-        cycles_by_reason[slot] += waited;
+        WaitForStageB(consumed_packets, number, WaitPacket, reason);
     }
 
     /// Stage A: position after the last committed packet; Reached(position) once B ran it.
@@ -233,9 +208,115 @@ public:
     /// Statistics (stage A): packets, drains that had to wait, cycles waited, cycles stage B
     /// spent running packets.
     u64 packets = 0, drains = 0, drain_cycles = 0;
-    std::atomic<u64> busy_cycles{0};
+    [[nodiscard]] u64 BusyCycles() const noexcept {
+        return busy_cycles.load(std::memory_order_relaxed);
+    }
 
 private:
+#if defined(__APPLE__) && defined(__aarch64__)
+    // bbport (macOS): Apple Silicon's cache lines are 128 bytes; 64-byte alignment left fields
+    // of the two stages (published and consumed) on one line.
+    static constexpr std::size_t CacheLine = 128;
+#else
+    static constexpr std::size_t CacheLine = 64;
+#endif
+
+    /// What stage A sleeps on (stage_a_waiting): consumed reaching a position, or
+    /// consumed_packets reaching a packet number.
+    enum WaitKind : u64 { WaitPosition = 0, WaitPacket = 1 };
+
+    /// bbport (macOS): BB_DRAIN_SPIN_US, how long stage A spins in Drain and WaitForPacket
+    /// before it sleeps. -1: spins, then yields, until stage B is there (the original wait,
+    /// the default off macOS). On macOS 50: there the spin's Pause is the arm64 `yield` (about
+    /// nothing), the old wait ended in sched_yield calls, and the GPU command thread spent most
+    /// of a GPU-bound frame burning a core in them (a core the game, under Rosetta, wants, and
+    /// on fanless Macs power).
+    static int DrainSpinUs() {
+        static const int value = [] {
+            if (const char* env = std::getenv("BB_DRAIN_SPIN_US")) {
+                return std::max(-1, std::atoi(env));
+            }
+#ifdef __APPLE__
+            return 50;
+#else
+            return -1;
+#endif
+        }();
+        return value;
+    }
+
+    /// Stage A (Drain, WaitForPacket; one thread): waits until stage B has moved `word`
+    /// (consumed or consumed_packets, which only grow) to `target` or past it.
+    ///
+    /// Sleeping without losing the wakeup. Stage A publishes what it waits for
+    /// (stage_a_waiting) and then reads `word`; stage B moves `word` and then reads
+    /// stage_a_waiting (WakeStageA), notifying `word` when the value it stored reaches the
+    /// target. All four are seq_cst, so they fall in one total order. Take B's store X that
+    /// first reaches the target:
+    /// - X before A's store of stage_a_waiting: A's later load of `word` (seq_cst, after
+    ///   its own store) sees X or a later value, the target is reached, A does not sleep.
+    /// - X after it: B's load of stage_a_waiting (after X) sees the target (only A writes
+    ///   it, and A clears it only once it has seen the target reached), so B notifies.
+    ///   A's wait(seen) compares and blocks atomically: if X is already there it returns at
+    ///   once; if it blocked on the older value `seen` (before X in `word`'s modification
+    ///   order), the notify after X unblocks it ([atomics.wait]).
+    /// Earlier stores of B that do not reach the target need no notify: the one that does
+    /// comes later. Wakeups without the target reached (spurious, or a stale target seen by
+    /// B after A cleared it) only loop. The waits are 1:1 with stage A's single thread, so
+    /// one stage_a_waiting word serves both kinds.
+    void WaitForStageB(const std::atomic<u64>& word, u64 target, WaitKind kind, u32 reason) {
+        ++drains;
+        const u32 slot = reason < NumReasons ? reason : ReasonRasterizer;
+        ++drains_by_reason[slot];
+        const u64 start = BbCpu::Ticks();
+        if (const int spin_us = DrainSpinUs(); spin_us < 0) {
+            for (u32 spins = 0; word.load(std::memory_order_acquire) < target; ++spins) {
+                if (spins < 4096) {
+                    BbCpu::Pause();
+                } else {
+                    std::this_thread::yield();
+                }
+            }
+        } else {
+            // bbport (macOS): spin for a fixed time (the drains within a frame are short),
+            // then sleep until stage B gets there (the once-a-frame drain waits for the GPU).
+            const u64 spin_until = start + BbCpu::TicksFromUs(u64(spin_us));
+            while (word.load(std::memory_order_acquire) < target) {
+                if (BbCpu::Ticks() >= spin_until) {
+                    stage_a_waiting.store((target << 1) | kind, std::memory_order_seq_cst);
+                    for (u64 seen = word.load(std::memory_order_seq_cst); seen < target;
+                         seen = word.load(std::memory_order_seq_cst)) {
+                        word.wait(seen, std::memory_order_seq_cst);
+                    }
+                    stage_a_waiting.store(0, std::memory_order_relaxed);
+                    break;
+                }
+                BbCpu::Pause();
+            }
+        }
+        const u64 waited = BbCpu::Ticks() - start;
+        drain_cycles += waited;
+        cycles_by_reason[slot] += waited;
+    }
+
+    /// Stage B, right after it moved consumed to `at` and consumed_packets to `ran` (both
+    /// seq_cst stores): wakes stage A if it sleeps until one of them got there
+    /// (WaitForStageB). Otherwise one load.
+    void WakeStageA(u64 at, u64 ran) {
+        const u64 waiting = stage_a_waiting.load(std::memory_order_seq_cst);
+        if (waiting == 0) [[likely]] {
+            return;
+        }
+        const u64 target = waiting >> 1;
+        if ((waiting & 1) == WaitPacket) {
+            if (ran >= target) {
+                consumed_packets.notify_one();
+            }
+        } else if (at >= target) {
+            consumed.notify_one();
+        }
+    }
+
     struct Header {
         u32 size;    ///< bytes to the next packet (0: wrap to the ring start)
         u32 payload; ///< bytes written by the producer
@@ -294,7 +375,9 @@ private:
             const auto* header = reinterpret_cast<const Header*>(ring.get() + at % Capacity);
             if (header->size == 0) {
                 at += Capacity - at % Capacity;
-                consumed.store(at, std::memory_order_release);
+                // bbport (macOS): seq_cst, then WakeStageA (WaitForStageB's ordering).
+                consumed.store(at, std::memory_order_seq_cst);
+                WakeStageA(at, consumed_packets.load(std::memory_order_relaxed));
                 continue;
             }
             if (!resolvers.empty()) {
@@ -314,8 +397,10 @@ private:
             handler(context, reinterpret_cast<const u8*>(header + 1), header->payload);
             busy_cycles.fetch_add(BbCpu::Ticks() - start, std::memory_order_relaxed);
             at += header->size;
-            consumed_packets.fetch_add(1, std::memory_order_release);
-            consumed.store(at, std::memory_order_release);
+            // bbport (macOS): seq_cst (was release), then WakeStageA (WaitForStageB's ordering).
+            const u64 ran = consumed_packets.fetch_add(1, std::memory_order_seq_cst) + 1;
+            consumed.store(at, std::memory_order_seq_cst);
+            WakeStageA(at, ran);
         }
     }
 
@@ -375,9 +460,9 @@ private:
     std::unique_ptr<Slot[]> slots;
     Resolver resolver = nullptr;
     u64 resolved_prefix = 0; ///< stage A
-    alignas(64) std::atomic<u64> published_packets{0};
-    alignas(64) std::atomic<u64> next_claim{1};
-    alignas(64) std::atomic<u32> resolve_wake{0};
+    alignas(CacheLine) std::atomic<u64> published_packets{0};
+    alignas(CacheLine) std::atomic<u64> next_claim{1};
+    alignas(CacheLine) std::atomic<u32> resolve_wake{0};
     std::atomic<u32> resolvers_sleeping{0};
     std::vector<std::jthread> resolvers;
 
@@ -388,11 +473,20 @@ private:
     std::unique_ptr<u8[]> ring;
     u64 head = 0; ///< stage A's write position
     u32 pending_size = 0;
-    alignas(64) std::atomic<u64> published{0};
-    alignas(64) std::atomic<u64> consumed{0};
+    alignas(CacheLine) std::atomic<u64> published{0};
+    // Written by stage B for every packet.
+    alignas(CacheLine) std::atomic<u64> consumed{0};
     std::atomic<u64> consumed_packets{0}; ///< packets stage B has run (NextPacket numbers)
-    alignas(64) std::atomic<u32> wake{0};
+    // bbport (macOS): statistics; here (with what stage B writes anyway), it was next to stage
+    // A's own fields (false sharing).
+    std::atomic<u64> busy_cycles{0};
+    // Rarely written; read for every packet (stage_a_waiting, by stage B) or every commit
+    // (sleeping, by stage A).
+    alignas(CacheLine) std::atomic<u32> wake{0};
     std::atomic<bool> sleeping{false};
+    /// bbport (macOS): what stage A sleeps until (WaitForStageB): 0 nothing, else the target
+    /// shifted left by one, ORed with its WaitKind.
+    std::atomic<u64> stage_a_waiting{0};
     std::atomic<u32> stage_b_tid{0};
     std::jthread thread;
 };

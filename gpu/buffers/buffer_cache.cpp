@@ -50,6 +50,9 @@
 #include "core/signals.h"
 #include "remote/bb_remote.h"
 #include <vk_mem_alloc.h>
+#ifdef __APPLE__
+#include "platform/macos/memory_macos.h"
+#endif
 
 extern "C" int runtime_memory_vma_info(uintptr_t address, int* prot, int* type, uintptr_t* end);
 extern "C" int runtime_memory_direct_phys(uintptr_t address, uint64_t* phys, uintptr_t* end);
@@ -476,7 +479,20 @@ int PreuploadMode() {
         if (GuestInPlace()) {
             return 0; // the GPU reads the game's memory itself: nothing to upload
         }
-        const int value = env && (env[0] == '1' || env[0] == '2') ? env[0] - '0' : 0;
+        int value = env && (env[0] == '1' || env[0] == '2') ? env[0] - '0' : 0;
+#ifdef __APPLE__
+        // bbport (macOS): Full holds ~2.5 GB more of the Mac's RAM, which Macs with 16 GB or
+        // less do not have (they swapped): Normal there, unless BB_PREUPLOAD_FORCE=1.
+        if (value == 2 && BbMacMemory::SmallMac()) {
+            const char* force = std::getenv("BB_PREUPLOAD_FORCE");
+            if (!(force && force[0] == '1')) {
+                std::printf("Background upload of game data: full asked for, normal on a Mac with "
+                            "%llu MiB of RAM (BB_PREUPLOAD_FORCE=1: full)\n",
+                            (unsigned long long)(BbMacMemory::PhysicalBytes() >> 20));
+                value = 1;
+            }
+        }
+#endif
         static const char* const names[] = {"off", "normal", "full"};
         std::printf("Background upload of game data: %s (BB_PREUPLOAD=%d)\n", names[value], value);
         return value;
@@ -2070,12 +2086,44 @@ void BufferCache::ProcessIdleBlocks() {
         // leave VRAM (their slots take the next ones), on any card for 5 s while it is short;
         // chunks emptied so go back to the driver. Larger cards keep them (no uploads again).
         // BB_VRAM_IDLE_SECONDS set: on any card.
-        static const bool small_vram =
-            instance.GetTotalMemoryBudget() <= (8ull << 30) || std::getenv("BB_VRAM_IDLE_SECONDS");
+        static const bool small_vram = [this] {
+            bool small = instance.GetTotalMemoryBudget() <= (8ull << 30) ||
+                         std::getenv("BB_VRAM_IDLE_SECONDS");
+#ifdef __APPLE__
+            // bbport (macOS): VRAM is the Mac's RAM: on Macs with 16 GB or less copies unused
+            // for a minute leave too. BB_SMALL_VRAM=0/1: never/always.
+            const char* env = std::getenv("BB_SMALL_VRAM");
+            if (env && (env[0] == '0' || env[0] == '1')) {
+                small = env[0] == '1';
+            } else {
+                small = small || (instance.IsIntegrated() && BbMacMemory::SmallMac());
+            }
+            std::printf("Guest memory: copies unused for %u s leave VRAM: %s (BB_SMALL_VRAM=0/1)\n",
+                        VramIdleSeconds(), small ? "yes" : "no");
+#endif
+            return small;
+        }();
         if (TextureCache::VramShort()) {
             EvictIdleCopies(5, ~u64{0});
         } else if (small_vram) {
             EvictIdleCopies(VramIdleSeconds(), ~u64{0});
+#ifdef __APPLE__
+            // bbport (macOS): and past BB_GUEST_COPY_PERCENT (40) % of the memory budget, those
+            // unused for 5 s (0: no such cap).
+            static const u64 percent = [] {
+                const char* env = std::getenv("BB_GUEST_COPY_PERCENT");
+                return env && *env ? u64(std::strtoull(env, nullptr, 10)) : u64{40};
+            }();
+            const u64 allocated = BbStats::residency_alloc_bytes.load(std::memory_order_relaxed);
+            const u64 used = allocated - std::min(allocated, BbStats::residency_unused_bytes.load(
+                                                                 std::memory_order_relaxed));
+            const u64 cap = percent != 0 && instance.IsIntegrated()
+                                ? instance.GetDeviceMemoryBudgetNow() / 100 * percent
+                                : 0;
+            if (cap != 0 && used > cap) {
+                EvictIdleCopies(5, (used - cap) / block_size + 1);
+            }
+#endif
         }
         FreeEmptyChunks(now);
         return;

@@ -17,6 +17,8 @@
 #include <unistd.h>
 #ifdef __APPLE__
 #include <mach/mach.h>
+
+#include "platform/macos/memory_macos.h"
 #endif
 
 #include "bbport_heap_sites.h"
@@ -51,6 +53,9 @@ bool FrameStatsEnabled() {
 /// DRM clients, RSS) and the parts we know of. GTT holds the game's direct memory (fixed).
 static void PrintMemory() {
     u64 vram_kib = 0, gtt_kib = 0;
+    u64 rss = 0;
+#ifndef __APPLE__
+    // bbport (macOS): no /proc there (below).
     std::vector<u64> clients;
     if (DIR* dir = opendir("/proc/self/fdinfo")) {
         while (const dirent* entry = readdir(dir)) {
@@ -86,8 +91,8 @@ static void PrintMemory() {
         }
         std::fclose(statm);
     }
-    u64 rss = u64(rss_pages) * u64(sysconf(_SC_PAGESIZE));
-#ifdef __APPLE__
+    rss = u64(rss_pages) * u64(sysconf(_SC_PAGESIZE));
+#else
     // bbport (macOS): no /proc; resident size from Mach (VRAM/GTT stay 0: unified memory).
     mach_task_basic_info_data_t info{};
     mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
@@ -122,6 +127,29 @@ static void PrintMemory() {
                 (unsigned long long)(BbStats::gc_trigger_bytes.load() >> 20),
                 (unsigned long long)BbStats::gc_freed_images.exchange(0),
                 (unsigned long long)BbStats::gc_kept_images.exchange(0));
+#ifdef __APPLE__
+    // bbport (macOS): RSS leaves out graphics memory (2.8 GB of a 12 GB footprint): the
+    // footprints (what Activity Monitor shows) of this process and of the game process, and the
+    // Mac's memory as a whole.
+    u64 footprint = 0, graphics = 0;
+    BbMacMemory::OwnFootprint(footprint, graphics);
+    const u64 game = BbMacMemory::GameProcessFootprint();
+    const BbMacMemory::System system = BbMacMemory::ReadSystem();
+    std::printf("Memory (macOS): footprint%s %llu MiB (graphics %llu MiB); game process "
+                "footprint %llu MiB; Mac: RAM %llu MiB, free %llu MiB, compressor %llu MiB "
+                "(holding %llu MiB), swap used %llu of %llu MiB, pressure level %d "
+                "(1 normal, 2 warning, 4 critical), memory available %d%%\n",
+                BbRemote::BackActive() ? " (bb-gpu)" : "", (unsigned long long)(footprint >> 20),
+                (unsigned long long)(graphics >> 20),
+                (unsigned long long)(game >> 20),
+                (unsigned long long)(BbMacMemory::PhysicalBytes() >> 20),
+                (unsigned long long)(system.free >> 20),
+                (unsigned long long)(system.compressed >> 20),
+                (unsigned long long)(system.compressed_data >> 20),
+                (unsigned long long)(system.swap_used >> 20),
+                (unsigned long long)(system.swap_total >> 20), system.pressure_level,
+                system.memorystatus_level);
+#endif
 }
 
 void OnFlipStats() {

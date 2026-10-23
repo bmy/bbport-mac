@@ -141,12 +141,19 @@ enum Catalog {
         Choice(value: "0", label: "Off (more stable)"),
     ]
 
+    /// bbport (macOS): 16 GB of RAM or less. Full background upload is not offered there (the
+    /// port takes it as Normal unless BB_PREUPLOAD_FORCE=1: those Macs swapped).
+    static let smallMemoryMac = ProcessInfo.processInfo.physicalMemory <= UInt64(16) << 30
+
     /// BB_PREUPLOAD (bbport 0.3): background upload of the game's GPU memory ahead of use.
-    static let preupload: [Choice<String>] = [
-        Choice(value: "", label: "Normal (default)"),
-        Choice(value: "2", label: "Full (about 3 GB more memory)"),
-        Choice(value: "0", label: "Off"),
-    ]
+    static let preupload: [Choice<String>] = {
+        var choices = [Choice<String>(value: "", label: "Normal (default)")]
+        if !smallMemoryMac {
+            choices.append(Choice(value: "2", label: "Full (about 3 GB more memory)"))
+        }
+        choices.append(Choice(value: "0", label: "Off"))
+        return choices
+    }()
 
     static let readbacks: [Choice<String>] = [
         Choice(value: "", label: "Relaxed (default)"),

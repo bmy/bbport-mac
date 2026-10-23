@@ -451,7 +451,9 @@ struct PerformanceSection: View {
                 ForEach(Catalog.preupload) { Text($0.label).tag($0.value) }
             } label: {
                 Text("Background upload of game data")
-                Text("Full can mean fewer hitches when areas load")
+                Text(Catalog.smallMemoryMac
+                     ? "Full needs more than 16 GB of memory"
+                     : "Full can mean fewer hitches when areas load")
             }
             Picker("GPU data readbacks by the CPU", selection: $model.prefs.readbacks) {
                 ForEach(Catalog.readbacks) { Text($0.label).tag($0.value) }

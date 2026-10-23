@@ -15,6 +15,7 @@
 #include <mach/mach.h>
 
 #include "platform/macos/memory_macos.h"
+#include "remote/bb_remote.h"
 #endif
 
 #include "bbport_toggles.h"
@@ -678,7 +679,9 @@ void Instance::ComputeMemoryBudget() {
         std::printf("GPU (macOS): memory budget of the whole Mac: macOS keeps %llu MiB, the game "
                     "process its footprint (BB_MEM_BUDGET=metal: Metal's limit only)\n",
                     (unsigned long long)(BbMacMemory::OSReserveBytes() >> 20));
-        total_memory_budget = UnifiedMemoryBudget(heap_bytes, initial_usage, 5_GB);
+        // The game process (still loading) as at least 5 GB; in one process it is in ours.
+        total_memory_budget = UnifiedMemoryBudget(heap_bytes, initial_usage,
+                                                  BbRemote::BackActive() ? 5_GB : 0);
         if (VramLimit() != 0) {
             total_memory_budget = std::min(total_memory_budget, VramLimit());
         }
@@ -742,8 +745,7 @@ static u64 UnifiedMemoryBudget(u64 limit, u64 gpu_usage, u64 game_floor) {
     const u64 game = std::max(game_cached.load(std::memory_order_relaxed), game_floor);
     // bbport (macOS): at most the Mac's RAM less macOS's reserve and the game process.
     u64 cap = limit;
-    if (BbMacMemory::MachineBudget()) {
-        const u64 ram = BbMacMemory::PhysicalBytes();
+    if (const u64 ram = BbMacMemory::PhysicalBytes(); BbMacMemory::MachineBudget() && ram != 0) {
         const u64 taken = BbMacMemory::OSReserveBytes() + game;
         cap = std::min(limit, ram > taken ? ram - taken : 0);
     }

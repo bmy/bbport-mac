@@ -120,10 +120,11 @@ bool Rasterizer::TexturesBindableOnHelper(const Shader::Info& stage,
         // (FindView may first switch to another sample count's backing, which may need it.)
         if (image->compressible && image->backing &&
             ((image->backing->num_samples > 1) != (image->info.num_samples > 1) ||
-             (image->binding.is_target && image->LacksFeedbackUsage()) ||
+             (image->binding.is_target &&
+              OverlapsTarget(image_id, entry.found_desc.view_info.range) &&
+              (image->backing->compressible || image->LacksFeedbackUsage())) ||
              (image->backing->compressible &&
-              (image->binding.is_target ||
-               image->NeedsFullUsage(entry.found_desc.view_info))))) {
+              image->NeedsFullUsage(entry.found_desc.view_info)))) {
             return false;
         }
         if (image->binding.needs_rebind || !texture_cache.IsUpToDate(image_id) ||

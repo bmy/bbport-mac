@@ -19,6 +19,8 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <cstring>
 #include <memory>
 #include <cstdio>
@@ -251,15 +253,16 @@ private:
     /// Sleeping without losing the wakeup. Stage A publishes what it waits for
     /// (stage_a_waiting) and then reads `word`; stage B moves `word` and then reads
     /// stage_a_waiting (WakeStageA), notifying `word` when the value it stored reaches the
-    /// target. All four are seq_cst, so they fall in one total order. Take B's store X that
+    /// target (under wait_mutex, which A holds from its check to its wait). All four are
+    /// seq_cst, so they fall in one total order. Take B's store X that
     /// first reaches the target:
     /// - X before A's store of stage_a_waiting: A's later load of `word` (seq_cst, after
     ///   its own store) sees X or a later value, the target is reached, A does not sleep.
     /// - X after it: B's load of stage_a_waiting (after X) sees the target (only A writes
     ///   it, and A clears it only once it has seen the target reached), so B notifies.
-    ///   A's wait(seen) compares and blocks atomically: if X is already there it returns at
-    ///   once; if it blocked on the older value `seen` (before X in `word`'s modification
-    ///   order), the notify after X unblocks it ([atomics.wait]).
+    ///   A checks `word` and waits with wait_mutex held from the check into the wait, and B
+    ///   notifies after taking that mutex: either A's check sees X, or A is already waiting
+    ///   when B notifies.
     /// Earlier stores of B that do not reach the target need no notify: the one that does
     /// comes later. Wakeups without the target reached (spurious, or a stale target seen by
     /// B after A cleared it) only loop. The waits are 1:1 with stage A's single thread, so
@@ -284,9 +287,16 @@ private:
             while (word.load(std::memory_order_acquire) < target) {
                 if (BbCpu::Ticks() >= spin_until) {
                     stage_a_waiting.store((target << 1) | kind, std::memory_order_seq_cst);
-                    for (u64 seen = word.load(std::memory_order_seq_cst); seen < target;
-                         seen = word.load(std::memory_order_seq_cst)) {
-                        word.wait(seen, std::memory_order_seq_cst);
+                    {
+                        // A condition variable, not word.wait(): libc++ waits on a u64
+                        // through a shared table (its missed-notify fix of 2025 depends on
+                        // the macOS version), and a lost wakeup here would be a hang. B
+                        // notifies under the mutex, after A checked under it; the timeout
+                        // bounds whatever else could go wrong to a millisecond.
+                        std::unique_lock lock{wait_mutex};
+                        while (word.load(std::memory_order_seq_cst) < target) {
+                            wait_cv.wait_for(lock, std::chrono::milliseconds(1));
+                        }
                     }
                     stage_a_waiting.store(0, std::memory_order_relaxed);
                     break;
@@ -308,12 +318,9 @@ private:
             return;
         }
         const u64 target = waiting >> 1;
-        if ((waiting & 1) == WaitPacket) {
-            if (ran >= target) {
-                consumed_packets.notify_one();
-            }
-        } else if (at >= target) {
-            consumed.notify_one();
+        if (((waiting & 1) == WaitPacket ? ran : at) >= target) {
+            { std::scoped_lock lock{wait_mutex}; }
+            wait_cv.notify_one();
         }
     }
 
@@ -375,9 +382,14 @@ private:
             const auto* header = reinterpret_cast<const Header*>(ring.get() + at % Capacity);
             if (header->size == 0) {
                 at += Capacity - at % Capacity;
-                // bbport (macOS): seq_cst, then WakeStageA (WaitForStageB's ordering).
-                consumed.store(at, std::memory_order_seq_cst);
-                WakeStageA(at, consumed_packets.load(std::memory_order_relaxed));
+                // bbport (macOS): seq_cst, then WakeStageA (WaitForStageB's ordering), only
+                // when stage A may sleep (else release, as before).
+                if (DrainSpinUs() >= 0) {
+                    consumed.store(at, std::memory_order_seq_cst);
+                    WakeStageA(at, consumed_packets.load(std::memory_order_relaxed));
+                } else {
+                    consumed.store(at, std::memory_order_release);
+                }
                 continue;
             }
             if (!resolvers.empty()) {
@@ -397,10 +409,16 @@ private:
             handler(context, reinterpret_cast<const u8*>(header + 1), header->payload);
             busy_cycles.fetch_add(BbCpu::Ticks() - start, std::memory_order_relaxed);
             at += header->size;
-            // bbport (macOS): seq_cst (was release), then WakeStageA (WaitForStageB's ordering).
-            const u64 ran = consumed_packets.fetch_add(1, std::memory_order_seq_cst) + 1;
-            consumed.store(at, std::memory_order_seq_cst);
-            WakeStageA(at, ran);
+            // bbport (macOS): seq_cst, then WakeStageA (WaitForStageB's ordering), only when
+            // stage A may sleep (else release, as before).
+            if (DrainSpinUs() >= 0) {
+                const u64 ran = consumed_packets.fetch_add(1, std::memory_order_seq_cst) + 1;
+                consumed.store(at, std::memory_order_seq_cst);
+                WakeStageA(at, ran);
+            } else {
+                consumed_packets.fetch_add(1, std::memory_order_release);
+                consumed.store(at, std::memory_order_release);
+            }
         }
     }
 
@@ -487,6 +505,8 @@ private:
     /// bbport (macOS): what stage A sleeps until (WaitForStageB): 0 nothing, else the target
     /// shifted left by one, ORed with its WaitKind.
     std::atomic<u64> stage_a_waiting{0};
+    std::mutex wait_mutex;           ///< WaitForStageB and WakeStageA
+    std::condition_variable wait_cv; ///< stage A sleeps on it (WaitForStageB)
     std::atomic<u32> stage_b_tid{0};
     std::jthread thread;
 };

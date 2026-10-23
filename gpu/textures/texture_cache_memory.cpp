@@ -54,6 +54,16 @@ void PollMemoryPressure() {
     BbMacMemory::WatchPressure();
     const unsigned long events = BbMacMemory::TakePressure();
     if (events == 0) {
+        // macOS notifies changes only: a warning still in force when the 30 s end keeps them
+        // going (checked once then, not at every tick).
+        if (pressure_until != 0 && SteadySeconds() >= pressure_until) {
+            if (BbMacMemory::ReadSystem().pressure_level >= 2) {
+                pressure_until = SteadySeconds() + 30;
+                TextureCache::NoteVramShort();
+            } else {
+                pressure_until = 0;
+            }
+        }
         return;
     }
     const bool critical = (events & DISPATCH_MEMORYPRESSURE_CRITICAL) != 0;
@@ -300,14 +310,9 @@ void TextureCache::GarbageCollectImages() {
         return false;
     };
 
-    configure(false);
-    lru_cache.ForEachItemBelow(below_tick, evict);
-    if (total_used_memory >= critical_gc_memory) {
-        configure(true);
-        lru_cache.ForEachItemBelow(below_tick, evict);
-    }
     // bbport (macOS): over the critical mark even without any cached image (the rest of the
-    // usage: guest copies, buffers, the driver's), evicting the images in use cannot get under it:
+    // usage: guest copies, buffers, the driver's), evicting the images in use (the aggressive
+    // passes below: idle for a second, then a moment) cannot get under it:
     // they were only uploaded again, every tick. The images are taken at the larger of their
     // guest size and all Vulkan images' memory (scaled targets are larger than the guest's).
     // BB_GC_THRASH_GUARD=0: as on Linux.
@@ -331,6 +336,12 @@ void TextureCache::GarbageCollectImages() {
         }
     }
 #endif
+    configure(false);
+    lru_cache.ForEachItemBelow(below_tick, evict);
+    if (total_used_memory >= critical_gc_memory && !hopeless) {
+        configure(true);
+        lru_cache.ForEachItemBelow(below_tick, evict);
+    }
     if (total_used_memory >= critical_gc_memory && !hopeless) {
         // Still over it: what was used a moment ago goes too (out of memory otherwise).
         configure(true, true);

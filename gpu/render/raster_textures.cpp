@@ -259,6 +259,19 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
     // format's view, or a feedback loop with a target of this draw) are upgraded before any
     // binding takes a view, so that no binding of the stage holds a view of a replaced backing.
     // (The helper never gets such stages: TexturesBindableOnHelper.)
+    if (instance.IsCompressibleImages() && !pipeline_is_compute) {
+        // First which targets are in a feedback loop, over every binding: each binding of
+        // such an image takes the loop's layout (one sampled elsewhere would otherwise have
+        // its range in another layout than its descriptor says).
+        for (const auto& [image_id, desc_ptr] : image_bindings) {
+            if (image_id) {
+                auto& image = texture_cache.GetImage(image_id);
+                if (image.binding.is_target && OverlapsTarget(image_id, desc_ptr->view_info.range)) {
+                    image.binding.feedback = 1u;
+                }
+            }
+        }
+    }
     if (!on_helper && instance.IsCompressibleImages()) {
         for (const auto& [image_id, desc_ptr] : image_bindings) {
             if (!image_id) {
@@ -268,8 +281,7 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
             if (!image.backing) {
                 continue;
             }
-            if (image.binding.is_target && !pipeline_is_compute &&
-                OverlapsTarget(image_id, desc_ptr->view_info.range) &&
+            if (image.binding.feedback &&
                 (image.backing->compressible || image.LacksFeedbackUsage())) {
                 runtime.UpgradeUsage(&image, "feedback loop", true);
             } else if (image.NeedsFullUsage(desc_ptr->view_info)) {
@@ -469,9 +481,11 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
             // mip or layer is no feedback loop (each range in its own layout).
             auto transit_binding = binding;
             if (binding.is_target && instance.IsCompressibleImages() && !pipeline_is_compute) {
-                const bool feedback = OverlapsTarget(image_id, desc.view_info.range);
-                transit_binding.is_target = feedback;
-                image.binding.feedback |= feedback;
+                // (An image found again above, after a rebind, is checked here.)
+                if (OverlapsTarget(image_id, desc.view_info.range)) {
+                    image.binding.feedback = 1u;
+                }
+                transit_binding.is_target = image.binding.feedback;
             }
             barrier |= TransitSampled(image, desc, transit_binding, is_storage);
             image.usage.storage |= is_storage;

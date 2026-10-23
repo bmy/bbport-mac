@@ -61,7 +61,9 @@ u64 OSReserveBytes() {
     static const u64 reserve = [] {
         const char* env = std::getenv("BB_MEM_RESERVE_MB");
         if (env && *env) {
-            return u64(std::strtoull(env, nullptr, 10)) << 20;
+            // At most the RAM (a negative or huge value would wrap).
+            const long long mb = std::strtoll(env, nullptr, 10);
+            return std::min<u64>(u64(std::max(0LL, mb)), PhysicalBytes() >> 20) << 20;
         }
         return std::max<u64>(GiB * 5 / 2, PhysicalBytes() / 5);
     }();

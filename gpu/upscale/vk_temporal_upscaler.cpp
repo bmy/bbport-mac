@@ -25,6 +25,7 @@
 #include "bbgpu/shaders/taa_comp.h"
 #include "bbgpu/shaders/taa_sharpen_comp.h"
 #include "bbgpu/shaders/taa_sharpen_ldr_comp.h"
+#include "bbgpu/shaders/taa_sharpen_half_comp.h"
 #include "bbgpu/shaders/fsr4_decode_comp.h"
 #include "bbgpu/shaders/fsr4_encode_comp.h"
 #include "bbgpu/shaders/fsr4_reactive_comp.h"
@@ -793,6 +794,7 @@ void TemporalUpscaler::CreatePipelines() {
     storage_layout(2, taa_sharpen_desc_layout, taa_sharpen_pipeline_layout, sizeof(float));
     taa_sharpen_pipeline = compute(TAA_SHARPEN_COMP, *taa_sharpen_pipeline_layout);
     taa_sharpen_ldr_pipeline = compute(TAA_SHARPEN_LDR_COMP, *taa_sharpen_pipeline_layout);
+    taa_sharpen_half_pipeline = compute(TAA_SHARPEN_HALF_COMP, *taa_sharpen_pipeline_layout);
     storage_layout(1, fsr4_encode_desc_layout, fsr4_encode_pipeline_layout, sizeof(u32));
     fsr4_encode_pipeline = compute(FSR4_ENCODE_COMP, *fsr4_encode_pipeline_layout);
     {
@@ -973,7 +975,7 @@ void TemporalUpscaler::ExtraSharpen(vk::Image target, bool ldr, u32 w, u32 h, fl
         extra_sharpen_image = VideoCore::HostImage(device, instance.GetAllocator());
         extra_sharpen_image.Create(vk::ImageCreateInfo{
             .imageType = vk::ImageType::e2D,
-            .format = vk::Format::eR32G32B32A32Sfloat,
+            .format = vk::Format::eR16G16B16A16Sfloat,
             .extent = {w, h, 1},
             .mipLevels = 1, .arrayLayers = 1, .samples = vk::SampleCountFlagBits::e1,
             .tiling = vk::ImageTiling::eOptimal,
@@ -982,7 +984,7 @@ void TemporalUpscaler::ExtraSharpen(vk::Image target, bool ldr, u32 w, u32 h, fl
         });
         extra_sharpen_view = Check(device.createImageViewUnique({
             .image = vk::Image(extra_sharpen_image), .viewType = vk::ImageViewType::e2D,
-            .format = vk::Format::eR32G32B32A32Sfloat,
+            .format = vk::Format::eR16G16B16A16Sfloat,
             .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
         }));
         extra_sharpen_width = w;
@@ -1003,7 +1005,7 @@ void TemporalUpscaler::ExtraSharpen(vk::Image target, bool ldr, u32 w, u32 h, fl
     // bbport: the commands are recorded through the scheduler (a recording thread for FSR 3).
     scheduler.RecordCrumb({.name = "TAA extra sharpen"}, [target, copy = vk::Image(extra_sharpen_image),
                       copy_view = *extra_sharpen_view, target_view, extra, w, h,
-                      pipeline = ldr ? *taa_sharpen_ldr_pipeline : *taa_sharpen_pipeline,
+                      pipeline = ldr ? *taa_sharpen_ldr_pipeline : *taa_sharpen_half_pipeline,
                       layout = *taa_sharpen_pipeline_layout](vk::CommandBuffer cmdbuf) {
         const auto image_barrier = [&](vk::Image image, vk::ImageLayout old_layout,
                                        vk::PipelineStageFlags2 src, vk::AccessFlags2 src_access,

@@ -757,12 +757,15 @@ void Rasterizer::UiEdgeStretch(const GraphicsPipeline* pipeline) {
         return;
     }
     const auto* ps = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
-    // Experiment bit 32 (BB_TOGGLE_FILE, while the game runs): big textures stretched too.
+    // A sampled texture means a picture or a glyph sheet, not a fill: stretching it to the output's
+    // edges deforms it. The old guard only caught sheets >=2048 (a picture over the whole screen,
+    // the 2048x2048 font page); the title's legal line uses a 1024x512 page, and its last glyph
+    // vertices sit on the 16:9 screen's edge in the lower part of the screen, so the side-edge snap
+    // (subtitles' backdrop) fired on a text quad and left a white streak to the output's right edge
+    // at 21:9. Untextured fills (the menus' dimming, fades, subtitle bands) keep the snap.
+    // Experiment bit 32 (BB_TOGGLE_FILE, while the game runs): textured draws stretched as well.
     if (ps && !ps->images.empty() && !BbToggle::Experiment(32)) {
-        const auto texture = ps->images[0].GetSharp(*ps);
-        if (u32(texture.width) + 1 >= 2048 || u32(texture.height) + 1 >= 2048) {
-            return;
-        }
+        return;
     }
     push_data.motion_param = UiComposition::EdgeParam(ui_placement.edge_x, ui_placement.edge_y,
                                                        regs.viewports[0].yscale > 0.0f);

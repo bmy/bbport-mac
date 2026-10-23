@@ -152,10 +152,12 @@ inline std::array<std::atomic<std::uint64_t>, 12> t_layer{};
 /// copy command.
 inline std::atomic<std::uint64_t> layer_entries_written{0};
 inline std::atomic<std::uint64_t> layer_mprotects{0};
-/// Diagnostics are collected only with BB_FRAME_STATS=1.
+/// Diagnostics are collected only with BB_FRAME_STATS=1 (or y, t). bbport (macOS): the rule of
+/// the report itself (BbVideoOut::FrameStatsEnabled) and of every other reader of the variable,
+/// some of which took any value (even 0) for on.
 inline const bool enabled = [] {
     const char* env = std::getenv("BB_FRAME_STATS");
-    return env && env[0] == '1';
+    return env && (env[0] == '1' || env[0] == 'y' || env[0] == 't');
 }();
 struct Timer {
     std::atomic<std::uint64_t>& total;

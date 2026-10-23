@@ -80,7 +80,7 @@ void Rasterizer::DrainDrawPipe(u32 reason, u32 line, const char* function) {
     if (!draw_pipe || !OnStageA()) {
         return;
     }
-    static const bool stats = std::getenv("BB_FRAME_STATS") != nullptr;
+    const bool stats = BbStats::enabled; // bbport (macOS): was on for any value, even 0
     if (!stats) {
         draw_pipe->Drain(reason);
         return;
@@ -1024,7 +1024,7 @@ void Rasterizer::ResolvePacket(void* context, u8* data, u32, u64 number, u32 wor
 }
 
 void Rasterizer::PrintPipeStats() {
-    static const bool stats = std::getenv("BB_FRAME_STATS") != nullptr;
+    const bool stats = BbStats::enabled; // bbport (macOS): was on for any value, even 0
     if (!stats || (draw_pipe->packets & 1023) != 0) {
         return;
     }

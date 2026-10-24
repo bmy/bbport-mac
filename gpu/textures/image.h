@@ -112,6 +112,9 @@ struct Image {
     /// storage usage, mutable formats and the feedback loop usage, so that Metal can compress
     /// it, and `view_info` needs one of them (a storage view, a view in another layout).
     [[nodiscard]] bool NeedsFullUsage(const ImageViewInfo& view_info) const;
+    /// bbport (macOS): an image made again with this one's address, format and shape starts
+    /// with its full usage (Runtime::UpgradeUsage calls it).
+    void RememberFullUsage() const;
     /// bbport (macOS): a feedback loop needs the feedback loop usage, which the current backing
     /// lacks (upgraded backings get it only for a feedback loop: with it KosmicKrisp never
     /// optimizes, let alone compresses, the texture).
@@ -179,7 +182,8 @@ struct Image {
     /// What every backing had before compressible images, and gets when upgraded.
     vk::ImageUsageFlags full_usage;
     vk::ImageCreateFlags full_create_flags;
-    /// Made compressible (bbport, macOS): its proxies may start compressible too.
+    /// A kind of image made compressible (bbport, macOS; its first backing unless one at its
+    /// address needed full usage before): its proxies may start compressible too.
     bool compressible = false;
 
     struct State {

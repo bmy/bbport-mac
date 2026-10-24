@@ -752,6 +752,7 @@ void Runtime::UpgradeUsage(VideoCore::Image* image, const char* why, bool feedba
     // The old backing stays in the list (pointers to it tell memos it changed) but is never
     // found again; its image and views go once the GPU is done with this draw (Retire: an
     // earlier binding of it may already hold one of its views).
+    image->RememberFullUsage();
     old->num_samples = 0;
     old->compressible = false;
     old->image_view_infos.clear();

@@ -7,6 +7,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <fmt/format.h>
 
 #include <vk_mem_alloc.h>
@@ -100,7 +101,35 @@ bool NeedsBarrier(const Image::State& state, vk::ImageLayout layout, vk::AccessF
            bool(state.access_mask & WriteAccess);
 }
 
+/// bbport (macOS): the images (by address, format and shape) whose compressible backing had to be
+/// upgraded (Runtime::UpgradeUsage): one made there again starts with its full usage, without
+/// the copy (the game re-creates many of its compute-written post-processing images).
+std::mutex full_usage_mutex;
+std::unordered_set<u64> full_usage_images;
+
+u64 FullUsageKey(const ImageInfo& info) {
+    u64 key = info.guest_address;
+    for (const u64 v : {u64(info.pixel_format), u64(info.size.width), u64(info.size.height),
+                        u64(info.resources.levels), u64(info.resources.layers),
+                        u64(info.num_samples)}) {
+        key = (key ^ v) * 0x100000001b3ull;
+    }
+    return key;
+}
+
+bool StartsWithFullUsage(const ImageInfo& info) {
+    std::scoped_lock lock{full_usage_mutex};
+    return full_usage_images.contains(FullUsageKey(info));
+}
+
 } // namespace
+
+void Image::RememberFullUsage() const {
+    std::scoped_lock lock{full_usage_mutex};
+    if (full_usage_images.size() < 65536) {
+        full_usage_images.insert(FullUsageKey(info));
+    }
+}
 
 Common::IncrementalIdProvider<u64> Image::next_uid{};
 
@@ -227,7 +256,10 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
     compressible = instance.IsCompressibleImages() && !info.props.is_depth &&
                    !info.props.is_block && !info.props.is_volume && info.num_samples <= 1 &&
                    format == info.pixel_format;
-    if (compressible) {
+    // (One upgraded at this address before starts with its full usage; its proxies may still
+    // start compressible: `compressible` is the kind of image.)
+    const bool start_compressible = compressible && !StartsWithFullUsage(info);
+    if (start_compressible) {
         create_flags &= ~(vk::ImageCreateFlagBits::eMutableFormat |
                           vk::ImageCreateFlagBits::eExtendedUsage);
         usage_flags &= ~(vk::ImageUsageFlagBits::eStorage |
@@ -236,7 +268,7 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
 
     backing = &backing_images.emplace_back();
     backing->num_samples = info.num_samples;
-    backing->compressible = compressible;
+    backing->compressible = start_compressible;
     backing->image = HostImage{instance.GetDevice(), instance.GetAllocator()};
     backing->image.Create(vk::ImageCreateInfo{
         .flags = create_flags,

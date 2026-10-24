@@ -71,7 +71,7 @@ public:
     [[nodiscard]] bool Transient() const noexcept {
         return transient;
     }
-    /// No stalled frame is still on MetalFX's queue: a retry can start now.
+    /// No stalled or failed frame is still on MetalFX's queue: a retry can start now.
     [[nodiscard]] bool Ready() const;
 
     struct Input {
@@ -112,6 +112,10 @@ private:
     bool supported = false;
     bool fatal = false;
     bool transient = false;
+    /// A failure at run time: the next run gets a new scaler and with it a new command queue
+    /// (macOS ignores a queue's later work after one of its command buffers caused a GPU error:
+    /// "Ignored (for causing prior/excessive GPU errors)", run D, 2026-10-24).
+    bool rebuild_after_failure = false;
     std::string problem;
     void* get_metal_handle = nullptr; ///< PFN_vkGetMemoryMetalHandleEXT
     void SetUpEvents();

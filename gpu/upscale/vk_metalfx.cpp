@@ -187,7 +187,8 @@ void MetalFxUpscaler::SetUpEvents() {
         if (const char* env = std::getenv("BB_METALFX_TEST_STALL"); env && *env) {
             test_stalls_left = u32(std::max(0l, std::strtol(env, nullptr, 10)));
             std::printf("Upscaler: MetalFX test (BB_METALFX_TEST_STALL=%u): the 600th frame of "
-                        "each of the first %u MetalFX runs stalls for 10 s on the GPU\n",
+                        "each of the first %u MetalFX runs waits 10 s on the GPU (macOS may stop "
+                        "it first)\n",
                         test_stalls_left, test_stalls_left);
         }
         worker = std::jthread{[this](std::stop_token stop) { WorkerLoop(stop); }};
@@ -401,10 +402,12 @@ void MetalFxUpscaler::Fail(std::string reason, bool permanent, bool at_run_time)
     problem = std::move(reason);
     fatal |= permanent;
     transient = at_run_time;
+    rebuild_after_failure |= at_run_time;
 }
 
 bool MetalFxUpscaler::Ready() const {
-    return !stalled.load(std::memory_order_acquire) || !scaler || !scaler->Busy();
+    return !(stalled.load(std::memory_order_acquire) || rebuild_after_failure) || !scaler ||
+           !scaler->Busy();
 }
 
 bool MetalFxUpscaler::CreateStaging(Staging& s, vk::DeviceSize size) {
@@ -601,6 +604,23 @@ bool MetalFxUpscaler::Run(const Frame& frame) {
             std::printf("Upscaler: MetalFX's stalled frame ended: %s\n", ended.c_str());
         }
     }
+    if (rebuild_after_failure) {
+        // After a failure at run time: a new scaler, and with it a new command queue (macOS
+        // ignores the old queue's work once it caused a GPU error). Not while that work is still
+        // on the GPU: its buffers would go.
+        DrainWorker(); // frames queued for the old scaler are handed over first
+        if (scaler && scaler->Busy()) {
+            Fail("MetalFX's failed frame is still on the GPU", true, true);
+            return false;
+        }
+        if (scaler) {
+            std::printf("Upscaler: MetalFX gets a new scaler and command queue after its failure "
+                        "(macOS ignores a queue's work after it caused a GPU error)\n");
+            scheduler.Finish(); // the submission thread's MetalFX callbacks (SubmitThread mode)
+            scaler.reset();     // EnsureResources makes the new one
+        }
+        rebuild_after_failure = false;
+    }
     if (!EnsureResources(frame)) {
         return false;
     }
@@ -663,7 +683,7 @@ bool MetalFxUpscaler::Run(const Frame& frame) {
         scheduler.Finish();
         std::string error;
         if (!Encode(metal, error)) {
-            Fail(error, true);
+            Fail(error, true, true); // the GPU's failure (Encode waited for it)
             return false;
         }
     } else if (mode == Mode::Worker) {
@@ -723,7 +743,7 @@ bool MetalFxUpscaler::Run(const Frame& frame) {
             if (test_stalls_left && ++test_frames == 600) {
                 metal.test_stall = true;
                 --test_stalls_left;
-                std::printf("Upscaler: MetalFX test: frame %llu stalls on the GPU for 10 s "
+                std::printf("Upscaler: MetalFX test: frame %llu waits 10 s on the GPU "
                             "(BB_METALFX_TEST_STALL, %u more)\n",
                             (unsigned long long)done_value, test_stalls_left);
             }

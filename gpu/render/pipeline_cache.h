@@ -241,6 +241,10 @@ private:
     u64 frame_start_draws = 0, last_frame_draws = 0;
     u32 stats_printed = 0;
     u64 async_started = 0, async_skipped = 0, async_waited = 0; ///< statistics
+    u64 async_gave_up = 0; ///< bbport (macOS): draws that stopped waiting (SyncWaitMs)
+    /// bbport (macOS): AsyncSkippable's draw goes to a target drawn every frame (so a frame
+    /// without it is redrawn next frame): only those stop waiting for a slow pipeline.
+    bool redrawn_every_frame = false;
     std::unique_ptr<PipelineCompiler> compiler; ///< last: its threads are joined first
 };
 

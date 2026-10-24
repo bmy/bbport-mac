@@ -68,6 +68,48 @@ void AddCompileTime(std::chrono::steady_clock::time_point start) {
                                .count());
 }
 
+/// bbport (macOS): how long a draw that needs its new pipeline at once (a full-screen pass, a
+/// one-time render) waits for it, BB_SYNC_PIPELINE_WAIT_MS; past that it goes without it until
+/// the pipeline is done (compiled in the background meanwhile). Metal's compiler service
+/// sometimes takes many seconds for one pipeline (a 23 s freeze for two). -1: waits as long as
+/// it takes (the default off macOS).
+int SyncWaitMs() {
+    static const int value = [] {
+        if (const char* env = std::getenv("BB_SYNC_PIPELINE_WAIT_MS"); env && *env) {
+            return std::max(-1, std::atoi(env));
+        }
+#ifdef __APPLE__
+        return 250;
+#else
+        return -1;
+#endif
+    }();
+    return value;
+}
+
+/// bbport: a compile of 250 ms or more, named in the log (the same pipelines run after run would
+/// mean the driver's caches do not keep them).
+void NoteSlowCompile(const char* what, const GraphicsPipelineKey* key, u64 hash,
+                     std::chrono::steady_clock::time_point start) {
+    const double ms = std::chrono::duration<double, std::milli>(
+                          std::chrono::steady_clock::now() - start)
+                          .count();
+    if (ms < 250.0) {
+        return;
+    }
+    if (key) {
+        std::printf("GPU: slow pipeline compile, %.0f ms: %s %#llx (stages %#llx %#llx %#llx "
+                    "%#llx %#llx)\n",
+                    ms, what, (unsigned long long)hash,
+                    (unsigned long long)key->stage_hashes[0], (unsigned long long)key->stage_hashes[1],
+                    (unsigned long long)key->stage_hashes[2], (unsigned long long)key->stage_hashes[3],
+                    (unsigned long long)key->stage_hashes[4]);
+    } else {
+        std::printf("GPU: slow pipeline compile, %.0f ms: %s %#llx\n", ms, what,
+                    (unsigned long long)hash);
+    }
+}
+
 struct CompileTimer {
     std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
     ~CompileTimer() {
@@ -292,6 +334,9 @@ struct PipelineCache::PendingPipeline {
     std::mutex mutex;
     std::condition_variable cv;
     bool done = false;
+    /// bbport (macOS): a draw that needed it at once gave up waiting (SyncWaitMs): the draws
+    /// go without it until it is done.
+    bool gave_up = false;
     std::unique_ptr<GraphicsPipeline> pipeline;
     GraphicsPipeline::SerializationSupport sdata{};
 };
@@ -682,7 +727,7 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
         {
             std::unique_lock lk{job->mutex};
             if (!job->done) {
-                if (skippable) {
+                if (skippable || job->gave_up) {
                     ++async_skipped;
                     return nullptr; // drawn from the frame its pipeline is ready
                 }
@@ -699,6 +744,32 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
     if (skippable) {
         return CompileInBackground(sel);
     }
+    if (const int wait_ms = SyncWaitMs(); wait_ms >= 0 && redrawn_every_frame) {
+        // bbport (macOS): a full-screen or indirect draw to a target drawn every frame: compiled
+        // in the background, waited for at most wait_ms (a frame without it is drawn again next
+        // frame). One-time renders and loading screens still wait as long as it takes.
+        const auto key = sel.graphics_key;
+        CompileInBackground(sel);
+        const std::shared_ptr<PendingPipeline> job = pending_graphics.find(key)->second;
+        const auto start = std::chrono::steady_clock::now();
+        {
+            std::unique_lock lk{job->mutex};
+            if (!job->cv.wait_for(lk, std::chrono::milliseconds(wait_ms),
+                                  [&] { return job->done; })) {
+                job->gave_up = true;
+                AddCompileTime(start);
+                ++async_gave_up;
+                std::printf("GPU: pipeline %#llx needed at once not compiled after %d ms: drawn "
+                            "without it until it is (BB_SYNC_PIPELINE_WAIT_MS)\n",
+                            (unsigned long long)std::hash<GraphicsPipelineKey>{}(key), wait_ms);
+                return nullptr;
+            }
+        }
+        AddCompileTime(start);
+        ++async_waited;
+        pending_graphics.erase(key);
+        return FinishPipeline(key, *job);
+    }
 
     const auto pipeline_hash = std::hash<GraphicsPipelineKey>{}(sel.graphics_key);
     LOG_INFO(Render_Vulkan, "Compiling graphics pipeline {:#x}", pipeline_hash);
@@ -709,6 +780,7 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
                                               sel.graphics_key, *pipeline_cache, sel.infos,
                                               sel.runtime_infos, sel.fetch_shader, sel.modules,
                                               sdata, false);
+    NoteSlowCompile("graphics", &sel.graphics_key, pipeline_hash, timer.start);
     PipelineStore::SaveGraphics(sel.graphics_key, pipeline_hash, sdata);
     sel.fetch_shader.reset();
     return slot.get();
@@ -734,9 +806,12 @@ const GraphicsPipeline* PipelineCache::CompileInBackground(const PipelineSelecti
                       runtime_infos = selection.runtime_infos, fetch = selection.fetch_shader,
                       modules = selection.modules]() mutable {
         GraphicsPipeline::SerializationSupport sdata{};
+        const auto compile_start = std::chrono::steady_clock::now();
         auto pipeline = std::make_unique<GraphicsPipeline>(
             instance, scheduler, desc_heap, profile, key, *pipeline_cache, infos, runtime_infos,
             fetch, modules, sdata, false);
+        NoteSlowCompile("graphics (background)", &key, std::hash<GraphicsPipelineKey>{}(key),
+                        compile_start);
         std::scoped_lock lk{job->mutex};
         job->pipeline = std::move(pipeline);
         job->sdata = std::move(sdata);
@@ -765,6 +840,7 @@ bool PipelineCache::AsyncSkippable(const PipelineSelection& selection, bool indi
         const char* env = std::getenv("BB_ASYNC_PIPELINES");
         return !(env && env[0] == '0');
     }();
+    redrawn_every_frame = false;
     if (!enabled || !instance.IsVertexInputDynamicState() || !selection.regs) {
         return false;
     }
@@ -778,15 +854,21 @@ bool PipelineCache::AsyncSkippable(const PipelineSelection& selection, bool indi
         if (async_started != 0 && second - stats_printed >= 5) {
             stats_printed = second;
             std::printf("GPU: %llu pipelines compiled in the background, %llu draws went without "
-                        "theirs meanwhile, %llu waited for one\n",
+                        "theirs meanwhile, %llu waited for one, %llu gave up waiting\n",
                         (unsigned long long)async_started, (unsigned long long)async_skipped,
-                        (unsigned long long)async_waited);
-            async_started = async_skipped = async_waited = 0;
+                        (unsigned long long)async_waited, (unsigned long long)async_gave_up);
+            async_started = async_skipped = async_waited = async_gave_up = 0;
         }
     }
     if (last_frame_draws < 300) {
         return false;
     }
+    constexpr u32 PerFrameStreak = 8;
+    const u64 target = DrawTarget(*selection.regs);
+    const auto streak = target_streaks.find(target);
+    const bool per_frame =
+        target != 0 && streak != target_streaks.end() && streak->second.frames >= PerFrameStreak;
+    redrawn_every_frame = per_frame;
     // A full-screen pass (one triangle or quad: lighting, fog, post-processing) waits for its
     // pipeline: going without one for a frame left whole frames grey. So does an indirect draw
     // (its size unknown here). What may go without is geometry, which shows a frame later.
@@ -798,10 +880,7 @@ bool PipelineCache::AsyncSkippable(const PipelineSelection& selection, bool indi
     // scene, the output, shadow maps, half-size and depth-only passes alike). A one-time render
     // (a face baked for a character, a texture made once) goes to a target new or used now and
     // then: compiled at once.
-    constexpr u32 PerFrameStreak = 8;
-    const u64 target = DrawTarget(*selection.regs);
-    const auto streak = target_streaks.find(target);
-    return target != 0 && streak != target_streaks.end() && streak->second.frames >= PerFrameStreak;
+    return per_frame;
 }
 
 const ComputePipeline* PipelineCache::GetComputePipeline() {
@@ -817,6 +896,8 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
         it.value() = std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile,
                                                        *pipeline_cache, compute_key, *sel.infos[0],
                                                        sel.modules[0], sdata, false);
+        NoteSlowCompile("compute", nullptr, std::hash<ComputePipelineKey>{}(compute_key),
+                        timer.start);
         PipelineStore::SaveCompute(compute_key, sdata);
     }
     return it->second.get();

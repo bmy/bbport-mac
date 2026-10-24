@@ -10,6 +10,10 @@
 // BB_METALFX_EVENTS=0, or a driver without shared events: MetalFX runs on the submission thread
 // right before the copy back is submitted (it waits for the copies, then for MetalFX).
 // BB_METALFX_SYNC=1: the GPU thread finishes the frame so far and waits for MetalFX itself.
+// Worker mode's stall cutoff (BB_METALFX_STALL_MS, default 1000, 0: off): MetalFX work not done
+// that long after it was handed over is given up, the frames waiting for it go on, and FSR 3.1
+// takes over (the temporal upscaler may try MetalFX again later). BB_METALFX_TEST_STALL=N: a test
+// that makes MetalFX's GPU work stall for 10 s in each of its first N runs.
 // Elsewhere it reports itself unsupported.
 
 #pragma once
@@ -57,9 +61,18 @@ public:
     void Retry() noexcept {
         if (supported) {
             fatal = false;
+            transient = false;
             problem.clear();
+            test_frames = 0;
         }
     }
+    /// The last failure happened at run time (its GPU work failed or stalled) and need not
+    /// repeat, unlike an unsupported size or a scaler that cannot be created.
+    [[nodiscard]] bool Transient() const noexcept {
+        return transient;
+    }
+    /// No stalled frame is still on MetalFX's queue: a retry can start now.
+    [[nodiscard]] bool Ready() const;
 
     struct Input {
         vk::Image image; ///< in General layout, TransferSrc usage
@@ -92,12 +105,13 @@ private:
     bool CreateStaging(Staging& staging, vk::DeviceSize size);
     void DestroyStaging(Staging& staging);
     bool EnsureResources(const Frame& frame);
-    void Fail(std::string reason, bool permanent);
+    void Fail(std::string reason, bool permanent, bool at_run_time = false);
 
     const Instance& instance;
     Scheduler& scheduler;
     bool supported = false;
     bool fatal = false;
+    bool transient = false;
     std::string problem;
     void* get_metal_handle = nullptr; ///< PFN_vkGetMemoryMetalHandleEXT
     void SetUpEvents();
@@ -112,6 +126,7 @@ private:
         u64 value;       ///< the done value its copy back waits for
         u64 copies_tick; ///< its input copies (work timeline)
         u64 issued_ns;
+        u64 handed_ns = 0; ///< Worker: when it went to Metal (0: not yet)
     };
     void WorkerLoop(std::stop_token stop);
     /// Until the worker has handed every queued frame to MetalFX.
@@ -128,6 +143,17 @@ private:
     std::mutex pending_mutex;
     std::deque<Pending> pending; ///< frames whose copy back waits, oldest first
     std::atomic<u64> encoded_value{0}; ///< Worker: the last frame handed to Metal
+    /// The stall cutoff (BB_METALFX_STALL_MS, worker mode): a frame MetalFX has not finished that
+    /// long after the worker handed it over is given up. Its copy back, and every later frame's,
+    /// is let go from the CPU (`released_value`); the worker hands Metal nothing more, and FSR 3.1
+    /// takes over. Cleared once MetalFX's queue is empty again (Run, after a retry).
+    std::atomic<bool> stalled{false};
+    std::atomic<u64> released_value{0};
+    /// Watch thread: let go of every frame issued so far (raises `done_event`, never lowers it).
+    void ReleaseIssued();
+    /// BB_METALFX_TEST_STALL=N: the 600th frame of each of the first N MetalFX runs stalls.
+    u32 test_stalls_left = 0;
+    u32 test_frames = 0;
     Mode mode = Mode::Sync;
     std::mutex deferred_mutex;
     std::string deferred_error; ///< a submission-thread MetalFX failure, reported next frame

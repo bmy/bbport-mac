@@ -11,6 +11,7 @@
 
 #include <cstdio>
 #include <dlfcn.h>
+#include <atomic>
 #include <mutex>
 
 namespace BbMetalFx {
@@ -74,6 +75,8 @@ struct Scaler::Impl {
     struct Errors {
         std::mutex mutex;
         std::string text;
+        // Asynchronous command buffers committed and not yet completed (their handlers count down).
+        std::atomic<int> in_flight{0};
     };
     std::shared_ptr<Errors> errors = std::make_shared<Errors>();
     // The last command buffer: waited for before the scaler goes (its handler uses this state).
@@ -86,6 +89,17 @@ Scaler::~Scaler() {
     if (impl && impl->last) {
         [impl->last waitUntilCompleted];
     }
+}
+
+bool Scaler::Busy() const {
+    return impl->errors->in_flight.load(std::memory_order_acquire) > 0;
+}
+
+void Scaler::Abandon() {
+    // The command buffers keep their buffers and textures (Metal retains what they use), so only
+    // the wait goes; the Impl itself stays allocated for the handlers' sake.
+    impl->last = nil;
+    (void)impl.release();
 }
 
 std::unique_ptr<Scaler> Scaler::Create(const Config& config, const Heaps& heaps,
@@ -204,6 +218,18 @@ bool Scaler::Encode(const Frame& frame, std::string& error) {
             // The Vulkan copies of this frame's inputs (their submission's timeline value).
             [cmd encodeWaitForEvent:wait_event value:frame.wait_value];
         }
+        if (frame.test_stall) {
+            // A test of the stall cutoff (BB_METALFX_TEST_STALL): this command buffer waits for an
+            // event a timer sets 10 s later, so MetalFX's GPU work does not finish in that time.
+            id<MTLSharedEvent> stall = [m.device newSharedEvent];
+            if (stall) {
+                [cmd encodeWaitForEvent:stall value:1];
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC),
+                               dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                                 stall.signaledValue = 1;
+                               });
+            }
+        }
         const MTLOrigin zero = MTLOriginMake(0, 0, 0);
         id<MTLBlitCommandEncoder> uploads = [cmd blitCommandEncoder];
         const auto upload = [&](id<MTLBuffer> source, id<MTLTexture> target, NSUInteger bytes) {
@@ -259,8 +285,10 @@ bool Scaler::Encode(const Frame& frame, std::string& error) {
                   std::scoped_lock lock{errors->mutex};
                   errors->text = "command buffer failed: " + Describe(done.error);
               }
+              errors->in_flight.fetch_sub(1, std::memory_order_acq_rel);
             }];
             m.last = cmd;
+            errors->in_flight.fetch_add(1, std::memory_order_acq_rel);
             [cmd commit];
             return true;
         }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "upscale/vk_metalfx.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -49,6 +50,17 @@ u64 NowNs() {
     return u64(std::chrono::duration_cast<std::chrono::nanoseconds>(
                    std::chrono::steady_clock::now().time_since_epoch())
                    .count());
+}
+
+/// The stall cutoff, worker mode (BB_METALFX_STALL_MS, default 1000; 0: off, frames wait until
+/// macOS stops the command buffer, which took a minute on 2026-10-24).
+u64 StallCutoffNs() {
+    static const u64 cutoff = [] {
+        const char* env = std::getenv("BB_METALFX_STALL_MS");
+        const long ms = env && *env ? std::strtol(env, nullptr, 10) : 1000;
+        return ms > 0 ? u64(ms) * 1'000'000ull : 0ull;
+    }();
+    return cutoff;
 }
 
 } // namespace
@@ -172,10 +184,24 @@ void MetalFxUpscaler::SetUpEvents() {
     mode = worker_mode ? Mode::Worker : Mode::Events;
     watch = std::jthread{[this](std::stop_token stop) { WatchLoop(stop); }};
     if (worker_mode) {
+        if (const char* env = std::getenv("BB_METALFX_TEST_STALL"); env && *env) {
+            test_stalls_left = u32(std::max(0l, std::strtol(env, nullptr, 10)));
+            std::printf("Upscaler: MetalFX test (BB_METALFX_TEST_STALL=%u): the 600th frame of "
+                        "each of the first %u MetalFX runs stalls for 10 s on the GPU\n",
+                        test_stalls_left, test_stalls_left);
+        }
         worker = std::jthread{[this](std::stop_token stop) { WorkerLoop(stop); }};
         std::printf("Upscaler: MetalFX from a thread of its own (it waits for the input copies; "
                     "the copy back waits for MetalFX on the GPU; BB_METALFX_EVENTS=0 or 1: the "
                     "other hand-overs)\n");
+        if (const u64 cutoff = StallCutoffNs()) {
+            std::printf("Upscaler: MetalFX work not done %llu ms after the worker hands it over is "
+                        "given up, and FSR 3.1 takes over (BB_METALFX_STALL_MS; 0: wait for macOS "
+                        "to stop it)\n",
+                        (unsigned long long)(cutoff / 1'000'000));
+        } else {
+            std::printf("Upscaler: MetalFX stall cutoff off (BB_METALFX_STALL_MS=0)\n");
+        }
         return;
     }
     std::printf("Upscaler: MetalFX without CPU waits (Vulkan timelines as Metal shared events)\n");
@@ -204,13 +230,29 @@ void MetalFxUpscaler::WorkerLoop(std::stop_token stop) {
             std::fflush(stdout);
         }
         std::string error;
-        if (!Encode(job.frame, error)) {
+        if (stalled.load(std::memory_order_acquire)) {
+            // An earlier frame stalled on MetalFX's queue (the cutoff): this one would queue
+            // behind it. Its copy back goes on without it, from the CPU.
+            u64 released = released_value.load(std::memory_order_relaxed);
+            while (released < job.frame.signal_value &&
+                   !released_value.compare_exchange_weak(released, job.frame.signal_value)) {
+            }
+            BbMetalFx::SignalEvent(job.frame.signal_event, job.frame.signal_value);
+        } else if (!Encode(job.frame, error)) {
             // The copy back must not wait forever; earlier frames still on the GPU signal lower
             // values (a timeline never goes down), so they finish first.
             scaler->WaitIdle();
             BbMetalFx::SignalEvent(job.frame.signal_event, job.frame.signal_value);
             std::scoped_lock lock{deferred_mutex};
             deferred_error = error;
+        } else {
+            std::scoped_lock lock{pending_mutex};
+            for (auto it = pending.rbegin(); it != pending.rend(); ++it) {
+                if (it->value == job.frame.signal_value) {
+                    it->handed_ns = NowNs();
+                    break;
+                }
+            }
         }
         encoded_value.store(job.frame.signal_value, std::memory_order_relaxed);
         {
@@ -229,10 +271,30 @@ void MetalFxUpscaler::DrainWorker() {
     job_cv.wait(lock, [this] { return jobs.empty() && !job_running; });
 }
 
+void MetalFxUpscaler::ReleaseIssued() {
+    u64 top = released_value.load(std::memory_order_relaxed);
+    {
+        std::scoped_lock lock{pending_mutex};
+        if (!pending.empty()) {
+            top = std::max(top, pending.back().value);
+        }
+    }
+    u64 released = released_value.load(std::memory_order_relaxed);
+    while (released < top && !released_value.compare_exchange_weak(released, top)) {
+    }
+    // Raised only: the stalled command buffer, once it ends, may set a lower value (a later
+    // pass here puts it back up).
+    BbMetalFx::SignalEvent(done_event, top);
+}
+
 void MetalFxUpscaler::WatchLoop(std::stop_token stop) {
     u64 reported = 0;
     while (!stop.stop_requested()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (stalled.load(std::memory_order_acquire)) {
+            // Frames issued since (the GPU thread had not seen the failure yet) go on too.
+            ReleaseIssued();
+        }
         const u64 done = BbMetalFx::EventValue(done_event);
         Pending oldest{};
         {
@@ -245,7 +307,31 @@ void MetalFxUpscaler::WatchLoop(std::stop_token stop) {
             }
             oldest = pending.front();
         }
-        const u64 waited_ns = NowNs() - oldest.issued_ns;
+        const u64 now_ns = NowNs();
+        const u64 cutoff = mode == Mode::Worker ? StallCutoffNs() : 0;
+        if (cutoff && oldest.handed_ns && now_ns - oldest.handed_ns >= cutoff &&
+            !stalled.load(std::memory_order_acquire)) {
+            // MetalFX's own GPU work has not finished. The copy back of this frame, and of every
+            // later one, would wait for it until macOS stops the command buffer (a minute, with
+            // the game frozen, on 2026-10-24): they go on without it, and FSR 3.1 takes over.
+            stalled.store(true, std::memory_order_release);
+            ReleaseIssued();
+            char text[160];
+            std::snprintf(text, sizeof(text),
+                          "MetalFX's GPU work stalled (frame %llu not done %.0f ms after it was "
+                          "handed over)",
+                          (unsigned long long)oldest.value, (now_ns - oldest.handed_ns) / 1e6);
+            {
+                std::scoped_lock lock{deferred_mutex};
+                deferred_error = text;
+            }
+            std::printf("Upscaler: %s; the frames waiting for it go on without it "
+                        "(BB_METALFX_STALL_MS=0: wait for macOS instead)\n",
+                        text);
+            std::fflush(stdout);
+            continue;
+        }
+        const u64 waited_ns = now_ns - oldest.issued_ns;
         if (oldest.value == reported || waited_ns < 500'000'000) {
             continue;
         }
@@ -276,6 +362,19 @@ MetalFxUpscaler::~MetalFxUpscaler() {
     DrainWorker();
     worker = {};
     watch = {};
+    if (stalled.load() && scaler && scaler->Busy()) {
+        // A stalled frame is still on MetalFX's queue (the cutoff let its copy back go): waiting
+        // for it could take until macOS stops it. Its buffers stay allocated; the copy backs
+        // that waited were let go already.
+        ReleaseIssued();
+        std::printf("Upscaler: MetalFX's stalled frame is still on the GPU; its buffers are left "
+                    "allocated\n");
+        scaler->Abandon();
+        scaler.reset();
+        for (auto& s : staging) {
+            s = {};
+        }
+    }
     if (scaler || staging[0].buffer) {
         scheduler.Finish();
     }
@@ -288,12 +387,17 @@ MetalFxUpscaler::~MetalFxUpscaler() {
     }
 }
 
-void MetalFxUpscaler::Fail(std::string reason, bool permanent) {
+void MetalFxUpscaler::Fail(std::string reason, bool permanent, bool at_run_time) {
     if (problem != reason) {
         std::printf("Upscaler: MetalFX unavailable: %s\n", reason.c_str());
     }
     problem = std::move(reason);
     fatal |= permanent;
+    transient = at_run_time;
+}
+
+bool MetalFxUpscaler::Ready() const {
+    return !stalled.load(std::memory_order_acquire) || !scaler || !scaler->Busy();
 }
 
 bool MetalFxUpscaler::CreateStaging(Staging& s, vk::DeviceSize size) {
@@ -463,6 +567,28 @@ bool MetalFxUpscaler::Run(const Frame& frame) {
              true);
         return false;
     }
+    if (stalled.load(std::memory_order_acquire)) {
+        // After the cutoff: the stalled frame must leave MetalFX's queue before MetalFX runs
+        // again (or its buffers are replaced). Until then FSR 3.1 stays.
+        if (scaler && scaler->Busy()) {
+            std::string reason;
+            {
+                std::scoped_lock lock{deferred_mutex};
+                reason = std::exchange(deferred_error, {}); // the stall itself, the first time
+            }
+            Fail(reason.empty() ? "MetalFX's stalled frame is still on the GPU" : reason, true,
+                 true);
+            return false;
+        }
+        ReleaseIssued(); // whatever the stalled frame set at its end, the timeline is back up
+        if (std::string ended; scaler && scaler->TakeError(ended)) {
+            // How the stalled frame ended (macOS stopping it); already given up.
+            std::printf("Upscaler: MetalFX's stalled frame ended: %s\n", ended.c_str());
+        }
+        stalled.store(false, std::memory_order_release);
+        std::lock_guard lock{deferred_mutex};
+        deferred_error.clear(); // reported when it happened
+    }
     if (!EnsureResources(frame)) {
         return false;
     }
@@ -495,12 +621,12 @@ bool MetalFxUpscaler::Run(const Frame& frame) {
     {
         std::string error;
         if (async && scaler->TakeError(error)) {
-            Fail(error, true);
+            Fail(error, true, true);
             return false;
         }
         std::scoped_lock lock{deferred_mutex};
         if (!deferred_error.empty()) {
-            Fail(std::exchange(deferred_error, {}), true);
+            Fail(std::exchange(deferred_error, {}), true, true);
             return false;
         }
     }
@@ -582,6 +708,13 @@ bool MetalFxUpscaler::Run(const Frame& frame) {
         if (mode == Mode::Worker) {
             metal.signal_event = done_event;
             metal.signal_value = done_value;
+            if (test_stalls_left && ++test_frames == 600) {
+                metal.test_stall = true;
+                --test_stalls_left;
+                std::printf("Upscaler: MetalFX test: frame %llu stalls on the GPU for 10 s "
+                            "(BB_METALFX_TEST_STALL, %u more)\n",
+                            (unsigned long long)done_value, test_stalls_left);
+            }
             {
                 std::scoped_lock lock{job_mutex};
                 jobs.push_back(std::make_unique<Job>(Job{metal, copies_tick}));
@@ -646,6 +779,10 @@ MetalFxUpscaler::~MetalFxUpscaler() = default;
 
 bool MetalFxUpscaler::Run(const Frame&) {
     return false;
+}
+
+bool MetalFxUpscaler::Ready() const {
+    return true;
 }
 
 #endif

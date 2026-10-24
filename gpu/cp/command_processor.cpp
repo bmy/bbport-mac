@@ -52,17 +52,22 @@ std::array<u8, 48 * 1024> CommandProcessor::constant_ram;
 
 namespace {
 
-/// bbport (macOS): while every queue waits (a WAIT_REG_MEM, a label the GPU has not written yet),
-/// the command thread spins this long, then sleeps between checks: 50 us at a time until 2 ms,
-/// 200 us until 20 ms, then 1 ms. With the GPU stuck, the spin took a whole core for as long
-/// (16 s in run C, 2026-10-24), a quarter of a Mac with 4 performance cores. BB_CP_WAIT_SPIN_US
-/// (default 100 on macOS); -1 (the default elsewhere): it spins until the wait ends, as upstream.
+/// bbport (macOS, native GPU process): while every queue waits (a WAIT_REG_MEM, a label the GPU
+/// has not written yet) and none moves, the command thread spins this long, then sleeps between
+/// passes over the queues: 50 us at a time until 2 ms, 200 us until 20 ms, then 1 ms (a new
+/// submission or command ends a sleep early). With the GPU stuck, the spin took a whole core for
+/// as long (16 s in run C, 2026-10-24), a quarter of a Mac with 4 performance cores.
+/// BB_CP_WAIT_SPIN_US (default 100 on arm64 macOS); -1, or anything not a number (the default
+/// elsewhere, Rosetta too, whose tick rate the thresholds do not know): it spins until the wait
+/// ends, as upstream.
 long WaitSpinUs() {
     static const long us = [] {
         if (const char* env = std::getenv("BB_CP_WAIT_SPIN_US"); env && *env) {
-            return std::strtol(env, nullptr, 10);
+            char* end = nullptr;
+            const long value = std::strtol(env, &end, 10);
+            return end != env && *end == '\0' && value >= 0 ? value : -1L;
         }
-#ifdef __APPLE__
+#if defined(__APPLE__) && defined(__aarch64__)
         return 100L;
 #else
         return -1L;
@@ -71,24 +76,34 @@ long WaitSpinUs() {
     return us;
 }
 
-/// One more check of waiting queues: nothing before the spin time is up, then a sleep that grows
-/// with the time waited. `wait_start` (BbCpu::Ticks) is 0 at the first check of a wait.
-void WaitBackoff(u64& wait_start) {
+/// A pass over the queues in which every one with work waited and none moved: nothing until the
+/// spin time is up, then how long to sleep (it grows with the time waited). `wait_start`
+/// (BbCpu::Ticks) is 0 at the first such pass of a wait.
+std::chrono::microseconds WaitBackoff(u64& wait_start) {
+    using namespace std::chrono_literals;
     const u64 now = BbCpu::Ticks();
     if (wait_start == 0) {
         wait_start = now;
-        return;
+        return 0us;
     }
     static const u64 spin = BbCpu::TicksFromUs(u64(std::max(0L, WaitSpinUs())));
     static const u64 two_ms = BbCpu::TicksFromUs(2'000);
     static const u64 twenty_ms = BbCpu::TicksFromUs(20'000);
     const u64 waited = now - wait_start;
     if (waited < spin) {
-        return;
+        return 0us;
     }
-    using namespace std::chrono_literals;
-    std::this_thread::sleep_for(waited < two_ms ? 50us : waited < twenty_ms ? 200us : 1000us);
+    return waited < two_ms ? 50us : waited < twenty_ms ? 200us : 1000us;
 }
+
+/// Where a queue's front work waits: another one (a packet further on, other work) is a new wait.
+struct WaitPoint {
+    const void* work = nullptr;
+    const u32* packet = nullptr;
+    const u32* level_at = nullptr;
+    int level = -1;
+    bool operator==(const WaitPoint&) const = default;
+};
 
 using Vulkan::DrawPipe;
 
@@ -470,6 +485,7 @@ void CommandProcessor::Run(std::stop_token stop) {
                     WaitSpinUs());
     }
     u64 wait_start = 0; ///< BbCpu::Ticks at the first check of the current wait (0: none)
+    std::array<WaitPoint, NumTotalQueues> wait_points{}; ///< where each queue waited last
 
     while (!stop.stop_requested()) {
         WaitForWork(stop);
@@ -478,9 +494,22 @@ void CommandProcessor::Run(std::stop_token stop) {
         }
         // The queues in turn: each one's front submission runs until it is done or waits.
         current_queue = -1;
+        bool pass_waited = false; // this pass over the queues: one waited
+        bool pass_moved = false;  // one made progress, or waits somewhere new
         while (num_submits || num_commands) {
             RunCommands();
             current_queue = int((current_queue + 1) % num_mapped_queues);
+            if (wait_backoff && current_queue == 0) {
+                if (pass_moved) {
+                    wait_start = 0;
+                } else if (pass_waited) {
+                    if (const auto sleep = WaitBackoff(wait_start); sleep.count() > 0) {
+                        std::unique_lock lock{submit_mutex};
+                        submit_cv.wait_for(lock, sleep); // a submission or command wakes it
+                    }
+                }
+                pass_waited = pass_moved = false;
+            }
             Queue& queue = queues[current_queue];
             Work* work;
             {
@@ -502,11 +531,19 @@ void CommandProcessor::Run(std::stop_token stop) {
             if (status == Status::Wait) {
                 BbCpu::Pause(); // the other queues' turn
                 if (wait_backoff) {
-                    WaitBackoff(wait_start);
+                    const auto& walk = work->walk;
+                    const WaitPoint point{work, work->waiting_at,
+                                          walk.top >= 0 ? walk.levels[walk.top].at : nullptr,
+                                          walk.top};
+                    if (point != wait_points[current_queue]) {
+                        wait_points[current_queue] = point;
+                        pass_moved = true; // decoded up to another wait: that one starts afresh
+                    }
+                    pass_waited = true;
                 }
                 continue;
             }
-            wait_start = 0;
+            pass_moved = true;
             BbTimeline::Note(BbTimeline::DecodeEnd, u64(current_queue), decoded_total + 1);
             bool frame_end;
             {
@@ -524,6 +561,7 @@ void CommandProcessor::Run(std::stop_token stop) {
             }
         }
         wait_start = 0;
+        wait_points = {};
         AfterBatch();
     }
 }

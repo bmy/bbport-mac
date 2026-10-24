@@ -17,6 +17,7 @@ change they fix.
 | `10770847` | MetalFX tried again automatically after a run-time failure (30 s, 2 min, 10 min; a fourth failure keeps FSR 3.1 for the session); bbport.ini keeps MetalFX while FSR 3.1 stands in | `BB_METALFX_AUTO_RETRY=0` | Choosing any upscaler in a menu (FSR 3.1 too) ends the retries. Revert together with `27c5fd0c` or after it. For exactly the old behaviour, set both `BB_METALFX_STALL_MS=0` and `BB_METALFX_AUTO_RETRY=0`. |
 | `a96c4670` | Command thread sleeps between checks in long queue waits (spins 100 us, then 50 us / 200 us / 1 ms sleeps) | `BB_CP_WAIT_SPIN_US=-1` | arm64 macOS only (after `95407257`); elsewhere it spins as upstream. |
 | `95407257` | Review fixes for `a96c4670` (a wait that moved starts afresh, one sleep per pass, a submission ends a sleep early) | `BB_CP_WAIT_SPIN_US=-1` | Revert with `a96c4670`. |
+| `a5f6b796` | After a run-time failure, the next MetalFX run gets a new scaler and command queue (macOS ignored the old queue after its GPU timeout, run D) | `BB_METALFX_AUTO_RETRY=0` (no retries, so nothing to rebuild) | Revert with `27c5fd0c` and `10770847`. |
 | `b2cf1188` | Review fixes for `27c5fd0c` and `10770847` (choosing FSR 3.1 itself ends the retries, setting order, race after a retry, destructor, 15 s for a new scaler's first frame) | as those two | Revert with them. |
 
 ## Batch 2 (2026-10-24): hangs from slow compiles, compression follow-ups

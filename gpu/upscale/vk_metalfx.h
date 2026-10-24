@@ -149,8 +149,12 @@ private:
     /// takes over. Cleared once MetalFX's queue is empty again (Run, after a retry).
     std::atomic<bool> stalled{false};
     std::atomic<u64> released_value{0};
-    /// Watch thread: let go of every frame issued so far (raises `done_event`, never lowers it).
-    void ReleaseIssued();
+    /// Let go of every frame issued so far (raises `done_event`, never lowers it). With
+    /// `only_if_stalled`, nothing once `stalled` is clear (checked under pending_mutex, where Run
+    /// clears it), so a frame issued after a retry is never let go.
+    void ReleaseIssued(bool only_if_stalled);
+    /// The first frame of a new scaler: its cutoff is longer (MetalFX's first frame has been slow).
+    std::atomic<u64> first_value{0};
     /// BB_METALFX_TEST_STALL=N: the 600th frame of each of the first N MetalFX runs stalls.
     u32 test_stalls_left = 0;
     u32 test_frames = 0;

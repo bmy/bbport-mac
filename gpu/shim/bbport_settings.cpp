@@ -383,7 +383,9 @@ void ReloadLive() {
     auto& v = Get();
     v.output_res = fresh.output_res.load();
     if (fresh.upscaler != file_upscaler.exchange(fresh.upscaler)) {
+        v.upscaler_fallback_from = -1; // chosen in the game's menu: no stand-in to keep
         v.upscaler = fresh.upscaler.load();
+        ++v.upscaler_chosen;
     }
     v.preset = fresh.preset.load();
     v.sharpen = fresh.sharpen.load();

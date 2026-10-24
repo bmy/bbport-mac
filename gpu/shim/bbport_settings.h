@@ -106,6 +106,9 @@ struct Values {
     /// (the temporal upscaler's automatic retry). Save() keeps this upscaler, the one chosen, in
     /// bbport.ini while `upscaler` holds FSR 3.1. -1: none.
     std::atomic<int> upscaler_fallback_from{-1};
+    /// Bumped whenever an upscaler is chosen (the overlay, or another one in bbport.ini from the
+    /// game's menu), even the one already set: a stand-in's retries end there.
+    std::atomic<std::uint32_t> upscaler_chosen{0};
     std::atomic<int> preset{NativeAA};
     std::atomic<bool> sharpen{true};
     std::atomic<float> sharpness{0.3f};

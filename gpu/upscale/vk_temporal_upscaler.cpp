@@ -2571,10 +2571,10 @@ bool TemporalUpscaler::RecordMetalFx(const MetalFxUpscaler::Input& color,
         // turns the upscaler off. The menu shows MetalFX's reason.
         std::printf("Upscaler: MetalFX failed; falling back to FSR 3.1 (select MetalFX again to "
                     "retry)\n");
-        BbSettings::Get().upscaler = BbSettings::UpscalerFsr3;
         if (metalfx->Transient()) {
-            NoteMetalFxFailure();
+            NoteMetalFxFailure(); // first: a save in between keeps MetalFX in bbport.ini
         }
+        BbSettings::Get().upscaler = BbSettings::UpscalerFsr3;
         reset = true;
     }
     return ok;
@@ -2602,6 +2602,7 @@ void TemporalUpscaler::NoteMetalFxFailure() {
     auto& s = BbSettings::Get();
     ++metalfx_failures;
     metalfx_standing_in = true;
+    metalfx_chosen_seen = s.upscaler_chosen.load();
     s.upscaler_fallback_from = BbSettings::UpscalerMetalFx;
     if (metalfx_failures > MetalFxRetries) {
         metalfx_retry_at = {};
@@ -2623,16 +2624,18 @@ void TemporalUpscaler::MetalFxAutoRetry() {
     auto& s = BbSettings::Get();
     const auto now = std::chrono::steady_clock::now();
     if (!metalfx_standing_in) {
-        // MetalFX ran 30 min since its last automatic retry: later failures count from one.
-        if (metalfx_failures && s.upscaler == BbSettings::UpscalerMetalFx &&
-            now - metalfx_retried >= 30min) {
+        // MetalFX ran 30 min without a break since its last automatic retry: later failures
+        // count from one.
+        if (metalfx_failures && s.upscaler != BbSettings::UpscalerMetalFx) {
+            metalfx_retried = now; // another upscaler for now: the 30 min start again
+        } else if (metalfx_failures && now - metalfx_retried >= 30min) {
             metalfx_failures = 0;
         }
         return;
     }
-    if (s.upscaler != BbSettings::UpscalerFsr3) {
-        // An upscaler was chosen in a menu (MetalFX again too): the retries end, and the count
-        // starts over.
+    if (s.upscaler != BbSettings::UpscalerFsr3 || s.upscaler_chosen != metalfx_chosen_seen) {
+        // An upscaler was chosen in a menu (MetalFX again, or FSR 3.1 itself): the retries end,
+        // and the count starts over.
         metalfx_standing_in = false;
         metalfx_retry_at = {};
         metalfx_failures = 0;
@@ -2646,8 +2649,8 @@ void TemporalUpscaler::MetalFxAutoRetry() {
     metalfx_retry_at = {};
     metalfx_standing_in = false;
     metalfx_retried = now;
-    s.upscaler_fallback_from = -1;
     s.upscaler = BbSettings::UpscalerMetalFx; // a change of upscaler: MetalFX gets a fresh try
+    s.upscaler_fallback_from = -1;            // after: a save in between keeps MetalFX
     std::printf("Upscaler: MetalFX again (automatic retry %u of %u)\n", metalfx_failures,
                 MetalFxRetries);
 }

@@ -309,7 +309,8 @@ private:
     bool metalfx_standing_in = false; ///< the upscaler setting holds FSR 3.1 on MetalFX's behalf
     u32 metalfx_failures = 0;
     std::chrono::steady_clock::time_point metalfx_retry_at{}; ///< epoch: none due
-    std::chrono::steady_clock::time_point metalfx_retried{};  ///< the last automatic retry
+    std::chrono::steady_clock::time_point metalfx_retried{};  ///< MetalFX on since (a retry)
+    std::uint32_t metalfx_chosen_seen = 0; ///< BbSettings upscaler_chosen when the stand-in began
     bool resources_metalfx = false; ///< made for MetalFX (no FSR 3 context)
     bool dlss_failed = false;
     VideoCore::HostImage motion_image;

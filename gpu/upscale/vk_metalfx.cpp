@@ -271,13 +271,14 @@ void MetalFxUpscaler::DrainWorker() {
     job_cv.wait(lock, [this] { return jobs.empty() && !job_running; });
 }
 
-void MetalFxUpscaler::ReleaseIssued() {
+void MetalFxUpscaler::ReleaseIssued(bool only_if_stalled) {
+    std::scoped_lock lock{pending_mutex};
+    if (only_if_stalled && !stalled.load(std::memory_order_acquire)) {
+        return;
+    }
     u64 top = released_value.load(std::memory_order_relaxed);
-    {
-        std::scoped_lock lock{pending_mutex};
-        if (!pending.empty()) {
-            top = std::max(top, pending.back().value);
-        }
+    if (!pending.empty()) {
+        top = std::max(top, pending.back().value);
     }
     u64 released = released_value.load(std::memory_order_relaxed);
     while (released < top && !released_value.compare_exchange_weak(released, top)) {
@@ -291,10 +292,8 @@ void MetalFxUpscaler::WatchLoop(std::stop_token stop) {
     u64 reported = 0;
     while (!stop.stop_requested()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        if (stalled.load(std::memory_order_acquire)) {
-            // Frames issued since (the GPU thread had not seen the failure yet) go on too.
-            ReleaseIssued();
-        }
+        // Frames issued since the stall (the GPU thread had not seen it yet) go on too.
+        ReleaseIssued(true);
         const u64 done = BbMetalFx::EventValue(done_event);
         Pending oldest{};
         {
@@ -308,14 +307,17 @@ void MetalFxUpscaler::WatchLoop(std::stop_token stop) {
             oldest = pending.front();
         }
         const u64 now_ns = NowNs();
-        const u64 cutoff = mode == Mode::Worker ? StallCutoffNs() : 0;
+        u64 cutoff = mode == Mode::Worker ? StallCutoffNs() : 0;
+        if (cutoff && oldest.value == first_value.load(std::memory_order_relaxed)) {
+            cutoff = std::max<u64>(cutoff, 15'000'000'000ull); // a new scaler's first frame
+        }
         if (cutoff && oldest.handed_ns && now_ns - oldest.handed_ns >= cutoff &&
             !stalled.load(std::memory_order_acquire)) {
             // MetalFX's own GPU work has not finished. The copy back of this frame, and of every
             // later one, would wait for it until macOS stops the command buffer (a minute, with
             // the game frozen, on 2026-10-24): they go on without it, and FSR 3.1 takes over.
             stalled.store(true, std::memory_order_release);
-            ReleaseIssued();
+            ReleaseIssued(false);
             char text[160];
             std::snprintf(text, sizeof(text),
                           "MetalFX's GPU work stalled (frame %llu not done %.0f ms after it was "
@@ -362,25 +364,30 @@ MetalFxUpscaler::~MetalFxUpscaler() {
     DrainWorker();
     worker = {};
     watch = {};
-    if (stalled.load() && scaler && scaler->Busy()) {
+    const bool was_stalled = stalled.load();
+    if (was_stalled) {
+        ReleaseIssued(false); // the copy backs still queued must not wait (Finish below)
+    }
+    bool abandoned = false;
+    if (was_stalled && scaler && scaler->Busy()) {
         // A stalled frame is still on MetalFX's queue (the cutoff let its copy back go): waiting
-        // for it could take until macOS stops it. Its buffers stay allocated; the copy backs
-        // that waited were let go already.
-        ReleaseIssued();
+        // for it could take until macOS stops it. Its buffers stay allocated.
         std::printf("Upscaler: MetalFX's stalled frame is still on the GPU; its buffers are left "
                     "allocated\n");
         scaler->Abandon();
         scaler.reset();
-        for (auto& s : staging) {
-            s = {};
-        }
+        abandoned = true;
     }
-    if (scaler || staging[0].buffer) {
+    if (scaler || staging[0].buffer || abandoned) {
         scheduler.Finish();
     }
     scaler.reset();
     for (auto& s : staging) {
-        DestroyStaging(s);
+        if (abandoned) {
+            s = {}; // left allocated: the stalled command buffer may still use them
+        } else {
+            DestroyStaging(s);
+        }
     }
     if (done_semaphore) {
         instance.GetDevice().destroySemaphore(done_semaphore);
@@ -537,6 +544,7 @@ bool MetalFxUpscaler::EnsureResources(const Frame& frame) {
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
                     .count());
     first_encode.store(true, std::memory_order_relaxed);
+    first_value.store(done_value + 1, std::memory_order_relaxed);
     return true;
 }
 
@@ -568,26 +576,30 @@ bool MetalFxUpscaler::Run(const Frame& frame) {
         return false;
     }
     if (stalled.load(std::memory_order_acquire)) {
-        // After the cutoff: the stalled frame must leave MetalFX's queue before MetalFX runs
-        // again (or its buffers are replaced). Until then FSR 3.1 stays.
-        if (scaler && scaler->Busy()) {
-            std::string reason;
-            {
-                std::scoped_lock lock{deferred_mutex};
-                reason = std::exchange(deferred_error, {}); // the stall itself, the first time
-            }
+        // After the cutoff. The stall itself is reported first (FSR 3.1 takes over, even if the
+        // stalled frame ends at once); MetalFX runs again (after a retry) only once that frame
+        // has left MetalFX's queue, and its buffers are not replaced before.
+        std::string reason;
+        {
+            std::scoped_lock lock{deferred_mutex};
+            reason = std::exchange(deferred_error, {});
+        }
+        if (!reason.empty() || (scaler && scaler->Busy())) {
             Fail(reason.empty() ? "MetalFX's stalled frame is still on the GPU" : reason, true,
                  true);
             return false;
         }
-        ReleaseIssued(); // whatever the stalled frame set at its end, the timeline is back up
+        DrainWorker(); // frames queued during the stall: let go by the worker, not encoded
+        {
+            std::scoped_lock lock{pending_mutex};
+            // Whatever the stalled frame set at its end, the timeline goes back up to what was
+            // let go (nothing is in flight, so nothing lowers it after).
+            BbMetalFx::SignalEvent(done_event, released_value.load(std::memory_order_relaxed));
+            stalled.store(false, std::memory_order_release);
+        }
         if (std::string ended; scaler && scaler->TakeError(ended)) {
-            // How the stalled frame ended (macOS stopping it); already given up.
             std::printf("Upscaler: MetalFX's stalled frame ended: %s\n", ended.c_str());
         }
-        stalled.store(false, std::memory_order_release);
-        std::lock_guard lock{deferred_mutex};
-        deferred_error.clear(); // reported when it happened
     }
     if (!EnsureResources(frame)) {
         return false;

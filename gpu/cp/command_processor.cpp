@@ -52,6 +52,44 @@ std::array<u8, 48 * 1024> CommandProcessor::constant_ram;
 
 namespace {
 
+/// bbport (macOS): while every queue waits (a WAIT_REG_MEM, a label the GPU has not written yet),
+/// the command thread spins this long, then sleeps between checks: 50 us at a time until 2 ms,
+/// 200 us until 20 ms, then 1 ms. With the GPU stuck, the spin took a whole core for as long
+/// (16 s in run C, 2026-10-24), a quarter of a Mac with 4 performance cores. BB_CP_WAIT_SPIN_US
+/// (default 100 on macOS); -1 (the default elsewhere): it spins until the wait ends, as upstream.
+long WaitSpinUs() {
+    static const long us = [] {
+        if (const char* env = std::getenv("BB_CP_WAIT_SPIN_US"); env && *env) {
+            return std::strtol(env, nullptr, 10);
+        }
+#ifdef __APPLE__
+        return 100L;
+#else
+        return -1L;
+#endif
+    }();
+    return us;
+}
+
+/// One more check of waiting queues: nothing before the spin time is up, then a sleep that grows
+/// with the time waited. `wait_start` (BbCpu::Ticks) is 0 at the first check of a wait.
+void WaitBackoff(u64& wait_start) {
+    const u64 now = BbCpu::Ticks();
+    if (wait_start == 0) {
+        wait_start = now;
+        return;
+    }
+    static const u64 spin = BbCpu::TicksFromUs(u64(std::max(0L, WaitSpinUs())));
+    static const u64 two_ms = BbCpu::TicksFromUs(2'000);
+    static const u64 twenty_ms = BbCpu::TicksFromUs(20'000);
+    const u64 waited = now - wait_start;
+    if (waited < spin) {
+        return;
+    }
+    using namespace std::chrono_literals;
+    std::this_thread::sleep_for(waited < two_ms ? 50us : waited < twenty_ms ? 200us : 1000us);
+}
+
 using Vulkan::DrawPipe;
 
 constexpr u32 ComputeShOffset = 0x200; ///< COMPUTE_* in the SH bank
@@ -425,6 +463,13 @@ void CommandProcessor::Run(std::stop_token stop) {
 #endif
     thread_id = std::this_thread::get_id();
     thread_tid = u32(gettid());
+    const bool wait_backoff = WaitSpinUs() >= 0;
+    if (wait_backoff) {
+        std::printf("Command processor: while every queue waits, it spins %ld us, then sleeps "
+                    "between checks (BB_CP_WAIT_SPIN_US; -1: it spins, as upstream)\n",
+                    WaitSpinUs());
+    }
+    u64 wait_start = 0; ///< BbCpu::Ticks at the first check of the current wait (0: none)
 
     while (!stop.stop_requested()) {
         WaitForWork(stop);
@@ -456,8 +501,12 @@ void CommandProcessor::Run(std::stop_token stop) {
             }
             if (status == Status::Wait) {
                 BbCpu::Pause(); // the other queues' turn
+                if (wait_backoff) {
+                    WaitBackoff(wait_start);
+                }
                 continue;
             }
+            wait_start = 0;
             BbTimeline::Note(BbTimeline::DecodeEnd, u64(current_queue), decoded_total + 1);
             bool frame_end;
             {
@@ -474,6 +523,7 @@ void CommandProcessor::Run(std::stop_token stop) {
                 SignalDecodedFrames(); // BB_SUBMIT_LOCK=frame: a frame's last submission decoded
             }
         }
+        wait_start = 0;
         AfterBatch();
     }
 }

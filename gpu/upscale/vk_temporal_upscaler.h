@@ -300,6 +300,16 @@ private:
                               u32 oh, float frame_ms, bool frame_reset);
     bool fsr4_failed = false;
     std::unique_ptr<MetalFxUpscaler> metalfx;
+    /// bbport (macOS): after MetalFX fails at run time (a stall, a failed command buffer) FSR 3.1
+    /// stands in and MetalFX is tried again after 30 s, 2 min and 10 min; a fourth failure keeps
+    /// FSR 3.1 for the session. 30 min of MetalFX after a retry starts the count over. Choosing an
+    /// upscaler in a menu ends it. BB_METALFX_AUTO_RETRY=0: off (FSR 3.1 until chosen again).
+    void MetalFxAutoRetry();
+    void NoteMetalFxFailure();
+    bool metalfx_standing_in = false; ///< the upscaler setting holds FSR 3.1 on MetalFX's behalf
+    u32 metalfx_failures = 0;
+    std::chrono::steady_clock::time_point metalfx_retry_at{}; ///< epoch: none due
+    std::chrono::steady_clock::time_point metalfx_retried{};  ///< the last automatic retry
     bool resources_metalfx = false; ///< made for MetalFX (no FSR 3 context)
     bool dlss_failed = false;
     VideoCore::HostImage motion_image;

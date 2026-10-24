@@ -412,6 +412,7 @@ bool TemporalUpscaler::OnFrameStart() {
     if (dispatch_failed.exchange(false, std::memory_order_relaxed)) {
         failed = true;
     }
+    MetalFxAutoRetry(); // may put MetalFX back in the setting
     const bool active = Active();
     const bool jitter_on = active && settings.jitter && !BbToggle::Disabled(1u << 25);
     const int upscaler = settings.upscaler.load();
@@ -2571,9 +2572,84 @@ bool TemporalUpscaler::RecordMetalFx(const MetalFxUpscaler::Input& color,
         std::printf("Upscaler: MetalFX failed; falling back to FSR 3.1 (select MetalFX again to "
                     "retry)\n");
         BbSettings::Get().upscaler = BbSettings::UpscalerFsr3;
+        if (metalfx->Transient()) {
+            NoteMetalFxFailure();
+        }
         reset = true;
     }
     return ok;
+}
+
+namespace {
+
+constexpr u32 MetalFxRetries = 3;
+
+bool MetalFxAutoRetryOn() {
+    static const bool on = [] {
+        const char* env = std::getenv("BB_METALFX_AUTO_RETRY");
+        return !(env && env[0] == '0');
+    }();
+    return on;
+}
+
+} // namespace
+
+void TemporalUpscaler::NoteMetalFxFailure() {
+    if (!MetalFxAutoRetryOn()) {
+        return;
+    }
+    using namespace std::chrono_literals;
+    auto& s = BbSettings::Get();
+    ++metalfx_failures;
+    metalfx_standing_in = true;
+    s.upscaler_fallback_from = BbSettings::UpscalerMetalFx;
+    if (metalfx_failures > MetalFxRetries) {
+        metalfx_retry_at = {};
+        std::printf("Upscaler: MetalFX failed after %u automatic retries: FSR 3.1 for the rest of "
+                    "this session (select MetalFX to try it again)\n",
+                    MetalFxRetries);
+        return;
+    }
+    static constexpr std::array<std::chrono::seconds, MetalFxRetries> delays{30s, 120s, 600s};
+    const auto delay = delays[metalfx_failures - 1];
+    metalfx_retry_at = std::chrono::steady_clock::now() + delay;
+    std::printf("Upscaler: MetalFX will be tried again in %lld s (automatic retry %u of %u; "
+                "BB_METALFX_AUTO_RETRY=0: off)\n",
+                (long long)delay.count(), metalfx_failures, MetalFxRetries);
+}
+
+void TemporalUpscaler::MetalFxAutoRetry() {
+    using namespace std::chrono_literals;
+    auto& s = BbSettings::Get();
+    const auto now = std::chrono::steady_clock::now();
+    if (!metalfx_standing_in) {
+        // MetalFX ran 30 min since its last automatic retry: later failures count from one.
+        if (metalfx_failures && s.upscaler == BbSettings::UpscalerMetalFx &&
+            now - metalfx_retried >= 30min) {
+            metalfx_failures = 0;
+        }
+        return;
+    }
+    if (s.upscaler != BbSettings::UpscalerFsr3) {
+        // An upscaler was chosen in a menu (MetalFX again too): the retries end, and the count
+        // starts over.
+        metalfx_standing_in = false;
+        metalfx_retry_at = {};
+        metalfx_failures = 0;
+        s.upscaler_fallback_from = -1;
+        return;
+    }
+    if (metalfx_retry_at == std::chrono::steady_clock::time_point{} || now < metalfx_retry_at ||
+        !metalfx->Ready()) {
+        return; // not due, or the stalled frame is still on MetalFX's queue
+    }
+    metalfx_retry_at = {};
+    metalfx_standing_in = false;
+    metalfx_retried = now;
+    s.upscaler_fallback_from = -1;
+    s.upscaler = BbSettings::UpscalerMetalFx; // a change of upscaler: MetalFX gets a fresh try
+    std::printf("Upscaler: MetalFX again (automatic retry %u of %u)\n", metalfx_failures,
+                MetalFxRetries);
 }
 
 bool TemporalUpscaler::UseDlss() const {

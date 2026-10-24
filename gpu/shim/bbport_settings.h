@@ -102,6 +102,10 @@ struct Values {
     /// the menu merely started with keeps following the launcher's (#134).
     std::atomic<bool> menu_language_chosen{false};
     std::atomic<int> upscaler{UpscalerFsr3};
+    /// bbport (macOS): MetalFX failed at run time and FSR 3.1 stands in until it is tried again
+    /// (the temporal upscaler's automatic retry). Save() keeps this upscaler, the one chosen, in
+    /// bbport.ini while `upscaler` holds FSR 3.1. -1: none.
+    std::atomic<int> upscaler_fallback_from{-1};
     std::atomic<int> preset{NativeAA};
     std::atomic<bool> sharpen{true};
     std::atomic<float> sharpness{0.3f};

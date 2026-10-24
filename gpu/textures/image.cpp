@@ -259,6 +259,11 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
     // (One upgraded at this address before starts with its full usage; its proxies may still
     // start compressible: `compressible` is the kind of image.)
     const bool start_compressible = compressible && !StartsWithFullUsage(info);
+    if (compressible && !start_compressible) {
+        // Like an upgraded backing: without the feedback loop usage until a loop needs it
+        // (with it KosmicKrisp never optimizes the texture).
+        usage_flags &= ~vk::ImageUsageFlagBits::eAttachmentFeedbackLoopEXT;
+    }
     if (start_compressible) {
         create_flags &= ~(vk::ImageCreateFlagBits::eMutableFormat |
                           vk::ImageCreateFlagBits::eExtendedUsage);

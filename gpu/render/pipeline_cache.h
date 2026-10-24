@@ -231,7 +231,7 @@ private:
     };
     void NoteDrawTarget(const Gcn::Regs& regs);
     bool AsyncSkippable(const PipelineSelection& sel, bool indirect);
-    const GraphicsPipeline* CompileInBackground(const PipelineSelection& sel);
+    const GraphicsPipeline* CompileInBackground(const PipelineSelection& sel, bool urgent = false);
     const GraphicsPipeline* FinishPipeline(const GraphicsPipelineKey& key, PendingPipeline& job);
     tsl::robin_map<GraphicsPipelineKey, std::shared_ptr<PendingPipeline>> pending_graphics;
     std::unordered_map<u64, TargetStreak> target_streaks;

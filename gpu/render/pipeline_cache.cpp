@@ -299,10 +299,15 @@ public:
             worker.join();
         }
     }
-    void Submit(std::function<void()> job) {
+    /// `urgent`: a pipeline a draw waits for (bbport, macOS: SyncWaitMs), ahead of the queue.
+    void Submit(std::function<void()> job, bool urgent = false) {
         {
             std::scoped_lock lk{mutex};
-            jobs.push_back(std::move(job));
+            if (urgent) {
+                jobs.push_front(std::move(job));
+            } else {
+                jobs.push_back(std::move(job));
+            }
         }
         cv.notify_one();
     }
@@ -727,13 +732,27 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
         {
             std::unique_lock lk{job->mutex};
             if (!job->done) {
-                if (skippable || job->gave_up) {
+                // bbport (macOS): a draw that gave up before and is redrawn every frame goes
+                // without it; one-time renders and loading screens still wait for it.
+                const int wait_ms = SyncWaitMs();
+                const bool bounded = wait_ms >= 0 && redrawn_every_frame;
+                if (skippable || (job->gave_up && bounded)) {
                     ++async_skipped;
                     return nullptr; // drawn from the frame its pipeline is ready
                 }
                 // A pass that is not drawn every frame needs it now: the wait is compile time.
                 const auto start = std::chrono::steady_clock::now();
-                job->cv.wait(lk, [&] { return job->done; });
+                if (bounded) {
+                    if (!job->cv.wait_for(lk, std::chrono::milliseconds(wait_ms),
+                                          [&] { return job->done; })) {
+                        job->gave_up = true;
+                        AddCompileTime(start);
+                        ++async_gave_up;
+                        return nullptr;
+                    }
+                } else {
+                    job->cv.wait(lk, [&] { return job->done; });
+                }
                 AddCompileTime(start);
                 ++async_waited;
             }
@@ -749,7 +768,7 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
         // in the background, waited for at most wait_ms (a frame without it is drawn again next
         // frame). One-time renders and loading screens still wait as long as it takes.
         const auto key = sel.graphics_key;
-        CompileInBackground(sel);
+        CompileInBackground(sel, true);
         const std::shared_ptr<PendingPipeline> job = pending_graphics.find(key)->second;
         const auto start = std::chrono::steady_clock::now();
         {
@@ -786,7 +805,8 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
     return slot.get();
 }
 
-const GraphicsPipeline* PipelineCache::CompileInBackground(const PipelineSelection& selection) {
+const GraphicsPipeline* PipelineCache::CompileInBackground(const PipelineSelection& selection,
+                                                           bool urgent) {
     if (!compiler) {
         const char* env = std::getenv("BB_ASYNC_PIPELINE_THREADS");
         const u32 threads =
@@ -817,7 +837,7 @@ const GraphicsPipeline* PipelineCache::CompileInBackground(const PipelineSelecti
         job->sdata = std::move(sdata);
         job->done = true;
         job->cv.notify_all();
-    });
+    }, urgent);
     sel.fetch_shader.reset();
     return nullptr;
 }

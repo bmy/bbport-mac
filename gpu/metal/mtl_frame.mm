@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -65,6 +66,24 @@ struct Counters {
         gpu_errors{};
 };
 Counters counters;
+
+/// Where a slow submission's time went (Submit): logged when one takes 100 ms or more.
+struct SubmitTimes {
+    using Clock = std::chrono::steady_clock;
+    Clock::time_point start = Clock::now();
+    double kk_ms{}, kk_max_ms{}, empty_ms{}, empty_max_ms{}, metal_ms{}, metal_max_ms{};
+    u32 kk{}, empty{}, metal{};
+
+    static double Since(Clock::time_point t) {
+        return std::chrono::duration<double, std::milli>(Clock::now() - t).count();
+    }
+    void Add(double& sum, double& max, u32& n, double ms) {
+        sum += ms;
+        max = std::max(max, ms);
+        ++n;
+    }
+};
+std::atomic<u32> slow_submissions_logged{0};
 
 /// Why draws and dispatches went to KosmicKrisp, by reason (the report's top few).
 std::mutex reasons_mutex;
@@ -1602,6 +1621,7 @@ VkResult Submit(VkQueue vkqueue, const Batch* batches, uint32_t count, VkFence f
         std::vector<std::shared_ptr<Retire>> metal_retires;
         std::vector<std::shared_ptr<Retire>> held; ///< released when the submission is done
         VkResult result = VK_SUCCESS;
+        SubmitTimes times;
 
         const auto submit = [&](const VkSemaphoreSubmitInfo* waits, u32 wait_count,
                                 const VkSemaphoreSubmitInfo* signals, u32 signal_count,
@@ -1626,7 +1646,15 @@ VkResult Submit(VkQueue vkqueue, const Batch* batches, uint32_t count, VkFence f
                 .signalSemaphoreInfoCount = u32(all_signals.size()),
                 .pSignalSemaphoreInfos = all_signals.data(),
             };
+            const auto t = SubmitTimes::Clock::now();
             const VkResult r = driver.vkQueueSubmit2(vkqueue, 1, &info, f);
+            // Without command buffers KosmicKrisp's submission is its waits, signals and the
+            // residency of every allocation (kk_device_make_resources_resident).
+            if (kk_run.empty()) {
+                times.Add(times.empty_ms, times.empty_max_ms, times.empty, SubmitTimes::Since(t));
+            } else {
+                times.Add(times.kk_ms, times.kk_max_ms, times.kk, SubmitTimes::Since(t));
+            }
             if (r != VK_SUCCESS) {
                 result = r;
             }
@@ -1659,7 +1687,9 @@ VkResult Submit(VkQueue vkqueue, const Batch* batches, uint32_t count, VkFence f
               }
             }];
             if (queue) {
+                const auto t = SubmitTimes::Clock::now();
                 [queue commit:metal_run.data() count:metal_run.size() options:options];
+                times.Add(times.metal_ms, times.metal_max_ms, times.metal, SubmitTimes::Since(t));
             }
             counters.metal_buffers += metal_run.size();
             metal_run.clear();
@@ -1712,6 +1742,15 @@ VkResult Submit(VkQueue vkqueue, const Batch* batches, uint32_t count, VkFence f
         }
         for (auto& r : held) {
             Release(r);
+        }
+        if (const double ms = SubmitTimes::Since(times.start);
+            ms >= 100.0 && slow_submissions_logged.fetch_add(1) < 50) {
+            Print("Metal frame: a submission took %.1f ms: %u KosmicKrisp submissions with command "
+                  "buffers %.1f ms (longest %.1f), %u without (waits, signals, residency) %.1f ms "
+                  "(longest %.1f), %u Metal "
+                  "commits %.1f ms (longest %.1f)\n",
+                  ms, times.kk, times.kk_ms, times.kk_max_ms, times.empty, times.empty_ms,
+                  times.empty_max_ms, times.metal, times.metal_ms, times.metal_max_ms);
         }
         return result;
     }

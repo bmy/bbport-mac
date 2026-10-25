@@ -18,6 +18,7 @@
 // Only the C types of VK_EXT_metal_objects (as vk_metalfx.cpp): vulkan.hpp stays without the
 // Metal platform define.
 #include <vulkan/vulkan_metal.h>
+#include "metal/kk_exports.h"
 #include "metal/metal_interop.h"
 #endif
 
@@ -27,7 +28,14 @@ namespace BbMetal {
 
 namespace {
 
-constexpr uint32_t Size = 64;            // the test image: Size x Size RGBA8
+template <typename... Args>
+void Report(const char* format, Args... args) {
+    std::printf(format, args...);
+    std::fflush(stdout);
+}
+
+// The test image: Size x Size RGBA8, large enough (16 MB) that work out of order shows.
+constexpr uint32_t Size = 2048;
 constexpr uint32_t Bytes = Size * Size * 4;
 constexpr uint32_t Rounds = 32;
 
@@ -62,11 +70,21 @@ struct Test {
     VmaAllocationInfo readback_info{};
     vk::CommandPool pool{};
     vk::Fence fence{};
+    vk::ImageView view{};
+    bool submitted = false; ///< work may be on the GPU: the destructor waits for the queue
 
     explicit Test(const Vulkan::Instance& instance_)
         : instance{instance_}, device{instance_.GetDevice()} {}
 
     ~Test() {
+        if (submitted) {
+            // A failure can leave Vulkan or Metal work on the queue: nothing goes before it ends.
+            std::scoped_lock lock{Vulkan::Scheduler::submit_mutex};
+            (void)instance.GetGraphicsQueue().waitIdle();
+        }
+        if (view) {
+            device.destroyImageView(view);
+        }
         if (fence) {
             device.destroyFence(fence);
         }
@@ -154,12 +172,21 @@ struct Test {
                                        .queueFamilyIndex = instance.GetGraphicsQueueFamilyIndex()})
                    .value;
         fence = device.createFence({}).value;
-        return pool && fence;
+        view = device
+                   .createImageView({.image = image,
+                                     .viewType = vk::ImageViewType::e2D,
+                                     .format = vk::Format::eR8G8B8A8Unorm,
+                                     .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}})
+                   .value;
+        return pool && fence && view;
     }
 
     vk::CommandBuffer Begin() {
         const auto buffers = device.allocateCommandBuffers(
             {.commandPool = pool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = 1});
+        if (buffers.result != vk::Result::eSuccess || buffers.value.empty()) {
+            return {};
+        }
         const vk::CommandBuffer cmd = buffers.value[0];
         (void)cmd.begin({.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
         return cmd;
@@ -176,6 +203,10 @@ struct Test {
     }
 
     bool Submit(vk::CommandBuffer cmd, vk::Fence signal) {
+        if (!cmd) {
+            return false;
+        }
+        submitted = true;
         (void)cmd.end();
         const vk::SubmitInfo submit{.commandBufferCount = 1, .pCommandBuffers = &cmd};
         return instance.GetGraphicsQueue().submit(submit, signal) == vk::Result::eSuccess;
@@ -186,13 +217,16 @@ struct Test {
 
 void RunInteropTestIfAsked(const Vulkan::Instance& instance) {
     const char* env = std::getenv("BB_METAL_INTEROP_TEST");
-    if (!env || env[0] != '1') {
+    if (!env || (env[0] != '1' && env[0] != '2')) {
         return;
     }
+    // 2: a negative control. The Metal side has no barriers of its own; a FAIL then shows the
+    // test can catch work out of order (a PASS says only that it ran in order anyway).
+    const bool barriers = env[0] == '1';
     Test test{instance};
     std::string error;
     if (!test.Create(error)) {
-        std::printf("Metal interop test: FAIL (%s)\n", error.c_str());
+        Report("Metal interop test: FAIL (%s)\n", error.c_str());
         return;
     }
     // KosmicKrisp's queue, the image's texture and the buffer memory's heap-wide MTLBuffer
@@ -216,8 +250,18 @@ void RunInteropTestIfAsked(const Vulkan::Instance& instance) {
     void* queue = reinterpret_cast<void*>(queue_info.mtlCommandQueue);
     void* texture = reinterpret_cast<void*>(texture_info.mtlTexture);
     void* buffer = reinterpret_cast<void*>(buffer_info.mtlBuffer);
+    // This port's own exports (patch 0008): the test buffer's MTLBuffer and offset, and the test
+    // view's render and sampled textures.
+    ExportBufferObject buffer_object{.buffer = static_cast<VkBuffer>(test.metal_buffer)};
+    ExportViewTexture render_texture{.pNext = &buffer_object,
+                                     .imageView = static_cast<VkImageView>(test.view),
+                                     .use = ViewTextureRender};
+    ExportViewTexture sampled_texture{.pNext = &render_texture,
+                                      .imageView = static_cast<VkImageView>(test.view),
+                                      .use = ViewTextureSampled};
+    test.Export(reinterpret_cast<VkBaseOutStructure*>(&sampled_texture));
     if (!queue || !texture || !buffer) {
-        std::printf("Metal interop test: FAIL (the driver exported queue %p, texture %p, buffer %p: "
+        Report("Metal interop test: FAIL (the driver exported queue %p, texture %p, buffer %p: "
                     "KosmicKrisp without the port's patches 0007 and 0008?)\n",
                     queue, texture, buffer);
         return;
@@ -250,12 +294,12 @@ void RunInteropTestIfAsked(const Vulkan::Instance& instance) {
             first.clearColorImage(test.image, vk::ImageLayout::eGeneral, color, range);
             Test::Barrier(first);
             if (!test.Submit(first, {})) {
-                std::printf("Metal interop test: FAIL (round %u: the first Vulkan submission)\n", round);
+                Report("Metal interop test: FAIL (round %u: the first Vulkan submission)\n", round);
                 return;
             }
             if (!InteropRound(queue, texture, buffer, test.metal_info.offset, Size, Size, after,
-                              error)) {
-                std::printf("Metal interop test: FAIL (round %u: %s)\n", round, error.c_str());
+                              barriers, error)) {
+                Report("Metal interop test: FAIL (round %u: %s)\n", round, error.c_str());
                 return;
             }
             vk::CommandBuffer second = test.Begin();
@@ -275,12 +319,17 @@ void RunInteropTestIfAsked(const Vulkan::Instance& instance) {
             };
             second.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &to_host});
             if (!test.Submit(second, test.fence)) {
-                std::printf("Metal interop test: FAIL (round %u: the second Vulkan submission)\n", round);
+                Report("Metal interop test: FAIL (round %u: the second Vulkan submission)\n", round);
                 return;
             }
         }
         if (test.device.waitForFences(test.fence, true, 5'000'000'000ull) != vk::Result::eSuccess) {
-            std::printf("Metal interop test: FAIL (round %u: the GPU did not finish in 5 s)\n", round);
+            Report("Metal interop test: FAIL (round %u: the GPU did not finish in 5 s)\n", round);
+            return;
+        }
+        if (InteropTakeError(error)) {
+            Report("Metal interop test: FAIL (round %u: the Metal command buffer failed: %s)\n",
+                   round, error.c_str());
             return;
         }
         (void)test.device.resetFences(test.fence);
@@ -292,7 +341,7 @@ void RunInteropTestIfAsked(const Vulkan::Instance& instance) {
             const int at = image_bad >= 0 ? image_bad : buffer_bad;
             const uint8_t* px = (image_bad >= 0 ? data : data + Bytes) + at * 4;
             const float* want = image_bad >= 0 ? after : before;
-            std::printf("Metal interop test: FAIL (round %u: %s, pixel %d is %u,%u,%u,%u, expected "
+            Report("Metal interop test: FAIL (round %u: %s, pixel %d is %u,%u,%u,%u, expected "
                         "%u,%u,%u,%u)\n",
                         round,
                         image_bad >= 0 ? "Vulkan did not see Metal's clear"
@@ -303,10 +352,17 @@ void RunInteropTestIfAsked(const Vulkan::Instance& instance) {
         }
         ++passed;
     }
-    std::printf("Metal interop test: PASS (%u rounds: Metal on KosmicKrisp's queue saw each Vulkan "
-                "write before it, and Vulkan saw each Metal write after it)\n",
-                passed);
-    std::fflush(stdout);
+    const bool exports_ok = buffer_object.mtlBuffer == buffer_info.mtlBuffer &&
+                            buffer_object.offset == test.metal_info.offset &&
+                            render_texture.mtlTexture && render_texture.level == 0 &&
+                            render_texture.slice == 0 && sampled_texture.mtlTexture;
+    Report("Metal interop test: PASS (%u rounds of a %ux%u image%s: Metal on KosmicKrisp's queue "
+           "read each Vulkan write before it, and Vulkan read each Metal write after it; KosmicKrisp "
+           "orders its own work before ours itself, so the first direction does not test our "
+           "barriers). This port's exports: %s\n",
+           passed, Size, Size, barriers ? "" : ", Metal barriers off (a negative control)",
+           exports_ok ? "as expected"
+                      : "NOT as expected (buffer object, or the view's render or sampled texture)");
 }
 
 #else

@@ -62,9 +62,14 @@ one is upstream 0.6's (`gpu/render`, `gpu/textures`, `gpu/buffers`, ...), with t
 
 1. **Groundwork (now).** Patch 0008: KosmicKrisp exports the device, a memory object's MTLBuffer,
    and the MTLTexture of an image, image view or texel buffer view (0007 exported the queue). An
-   interop test, `BB_METAL_INTEROP_TEST=1`: at the renderer's start, 32 rounds of a Vulkan clear,
-   a Metal 4 copy and render-pass clear on KosmicKrisp's queue, and a Vulkan readback; the log
-   says PASS or where an ordering failed.
+   interop test, `BB_METAL_INTEROP_TEST=1`: at the renderer's start, 32 rounds of a Vulkan clear
+   (2048x2048), a Metal 4 copy and render-pass clear on KosmicKrisp's queue, and a Vulkan
+   readback; the log says PASS or where an ordering failed. KosmicKrisp's own end-of-encoder
+   barrier already orders its work before ours, so a PASS tests our producer barrier (Metal before
+   Vulkan) and queue order; `BB_METAL_INTEROP_TEST=2` runs without our barriers as a negative
+   control. Patch 0008 also has two chain entries of this port's own (`gpu/metal/kk_exports.h`):
+   an image view's texture for one use (sampled, storage, render with its level and slice, input)
+   and a VkBuffer's own MTLBuffer and offset (sparse buffers have their own).
 2. **Shaders.** Every pipeline the renderer builds is also built as a Metal pipeline state from
    the same key and SPIR-V (a shadow build); failures logged. Nothing drawn through it yet.
 3. **First pixels.** The layer forwards and counts; then the presenter's command buffer in Metal;

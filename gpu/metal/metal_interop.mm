@@ -7,11 +7,29 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 
+#include <cstdio>
+#include <mutex>
+
 namespace BbMetal {
+
+namespace {
+std::mutex error_mutex;
+std::string feedback_error; ///< a round's command buffer failed on the GPU
+} // namespace
+
+bool InteropTakeError(std::string& error) {
+    std::scoped_lock lock{error_mutex};
+    if (feedback_error.empty()) {
+        return false;
+    }
+    error = std::move(feedback_error);
+    feedback_error.clear();
+    return true;
+}
 
 bool InteropRound(void* queue_handle, void* texture_handle, void* buffer_handle,
                   uint64_t buffer_offset, uint32_t width, uint32_t height, const float clear[4],
-                  std::string& error) {
+                  bool barriers, std::string& error) {
     if (@available(macOS 26.0, *)) {
         @autoreleasepool {
             id queue_object = (__bridge id)queue_handle;
@@ -40,9 +58,11 @@ bool InteropRound(void* queue_handle, void* texture_handle, void* buffer_handle,
 
             // Read what Vulkan wrote: after the queue's earlier work (consumer barrier).
             id<MTL4ComputeCommandEncoder> copy = [cmd computeCommandEncoder];
-            [copy barrierAfterQueueStages:MTLStageAll
-                             beforeStages:MTLStageBlit
-                        visibilityOptions:visible];
+            if (barriers) {
+                [copy barrierAfterQueueStages:MTLStageAll
+                                 beforeStages:MTLStageBlit
+                            visibilityOptions:visible];
+            }
             [copy copyFromTexture:texture
                            sourceSlice:0
                            sourceLevel:0
@@ -51,10 +71,12 @@ bool InteropRound(void* queue_handle, void* texture_handle, void* buffer_handle,
                               toBuffer:buffer
                      destinationOffset:buffer_offset
                 destinationBytesPerRow:NSUInteger(width) * 4
-              destinationBytesPerImage:NSUInteger(width) * height * 4];
-            [copy barrierAfterStages:MTLStageBlit
-                   beforeQueueStages:MTLStageAll
-                   visibilityOptions:visible];
+              destinationBytesPerImage:0]; // one slice of a 2D texture
+            if (barriers) {
+                [copy barrierAfterStages:MTLStageBlit
+                       beforeQueueStages:MTLStageAll
+                       visibilityOptions:visible];
+            }
             [copy endEncoding];
 
             // Write what Vulkan reads next: before the queue's later work (producer barrier).
@@ -72,12 +94,16 @@ bool InteropRound(void* queue_handle, void* texture_handle, void* buffer_handle,
                 error = "renderCommandEncoderWithDescriptor failed";
                 return false;
             }
-            [render barrierAfterQueueStages:MTLStageAll
-                               beforeStages:MTLStageFragment
-                          visibilityOptions:visible];
-            [render barrierAfterStages:MTLStageFragment
-                     beforeQueueStages:MTLStageAll
-                     visibilityOptions:visible];
+            if (barriers) {
+                // All stages, as KosmicKrisp's own encoders: a pass without draws writes only in
+                // its load and store actions.
+                [render barrierAfterQueueStages:MTLStageAll
+                                   beforeStages:MTLStageAll
+                              visibilityOptions:visible];
+                [render barrierAfterStages:MTLStageAll
+                         beforeQueueStages:MTLStageAll
+                         visibilityOptions:visible];
+            }
             [render endEncoding];
             [cmd endCommandBuffer];
 
@@ -86,8 +112,9 @@ bool InteropRound(void* queue_handle, void* texture_handle, void* buffer_handle,
               (void)allocator; // kept until the GPU is done with the command buffer
               (void)cmd;
               if (feedback.error) {
-                  std::printf("Metal interop test: the Metal command buffer failed: %s\n",
-                              feedback.error.localizedDescription.UTF8String);
+                  const char* text = feedback.error.localizedDescription.UTF8String;
+                  std::scoped_lock lock{error_mutex};
+                  feedback_error = text ? text : "unknown error";
               }
             }];
             const id<MTL4CommandBuffer> list[1] = {cmd};

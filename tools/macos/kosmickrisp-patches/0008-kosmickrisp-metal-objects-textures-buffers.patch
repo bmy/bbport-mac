@@ -1,9 +1,10 @@
 --- a/src/kosmickrisp/vulkan/kk_sync.c
 +++ b/src/kosmickrisp/vulkan/kk_sync.c
-@@ -7,7 +7,11 @@
+@@ -7,7 +7,12 @@
  #include "kk_sync.h"
  
  #include "kk_device.h"
++#include "kk_buffer.h"
 +#include "kk_buffer_view.h"
 +#include "kk_device_memory.h"
  #include "kk_entrypoints.h"
@@ -12,7 +13,7 @@
  
  #include "vk_semaphore.h"
  #include "vulkan/vulkan_metal.h"
-@@ -112,16 +116,65 @@ const struct vk_sync_type kk_sync_type = {
+@@ -112,16 +117,146 @@ const struct vk_sync_type kk_sync_type = {
  };
  
  #ifdef VK_USE_PLATFORM_METAL_EXT
@@ -20,12 +21,51 @@
 - * KosmicKrisp semaphore is one) and a queue's Metal 4 command queue. Lets Metal work outside the
 - * driver (MetalFX) wait for and signal Vulkan timelines on the GPU, or run in the queue's own
 - * order. Other export requests are left unfilled (null). */
++/* bbport: two chain entries of this port's own for vkExportMetalObjectsEXT (the renderer has the
++ * same definitions, gpu/metal/kk_exports.h; the sType values are outside Khronos' ranges).
++ * - VkExportMetalViewTextureBBPORT: an image view's texture for one use, with the level and slice
++ *   an attachment descriptor needs for its render texture (0 when the texture already points at
++ *   them).
++ * - VkExportMetalBufferObjectBBPORT: a VkBuffer's own id<MTLBuffer> and the offset of the buffer's
++ *   start in it (sparse buffers have one of their own; others share their memory's). */
++#define VK_STRUCTURE_TYPE_EXPORT_METAL_VIEW_TEXTURE_BBPORT ((VkStructureType)0x62627601)
++#define VK_STRUCTURE_TYPE_EXPORT_METAL_BUFFER_OBJECT_BBPORT ((VkStructureType)0x62627602)
++enum {
++   BBPORT_VIEW_TEXTURE_SAMPLED = 0,
++   BBPORT_VIEW_TEXTURE_STORAGE = 1,
++   BBPORT_VIEW_TEXTURE_RENDER = 2,
++   BBPORT_VIEW_TEXTURE_INPUT = 3,
++};
++typedef struct VkExportMetalViewTextureBBPORT {
++   VkStructureType sType;
++   const void *pNext;
++   VkImageView imageView;
++   uint32_t plane;
++   uint32_t use;
++   MTLTexture_id mtlTexture;
++   uint32_t level;
++   uint32_t slice;
++} VkExportMetalViewTextureBBPORT;
++typedef struct VkExportMetalBufferObjectBBPORT {
++   VkStructureType sType;
++   const void *pNext;
++   VkBuffer buffer;
++   MTLBuffer_id mtlBuffer;
++   uint64_t offset;
++} VkExportMetalBufferObjectBBPORT;
++
 +/* bbport: VK_EXT_metal_objects: the MTLSharedEvent of a timeline semaphore (every KosmicKrisp
 + * semaphore is one), a queue's Metal 4 command queue, the device, a memory object's heap-wide
 + * MTLBuffer, and the MTLTexture of an image, image view or texel buffer view. Lets Metal work
 + * outside the driver (MetalFX, a Metal command path) run in the queue's own order on the driver's
 + * own objects. Other export requests (IOSurfaces) are left unfilled. Metal 4 does not track
-+ * hazards: the caller orders its use of these objects against the driver's work itself. */
++ * hazards: the caller orders its use of these objects against the driver's work itself. An
++ * image's texture is the image as KosmicKrisp made it: its type and pixel format may differ from
++ * the VkImage's (1D as 2D, layered or input-attachment images as 2D arrays, substitute formats
++ * whose channel order only views correct); a 3D image's 2D-array alias is not exported.
++ * Exported objects are not retained: they live as long as the Vulkan object. Memory allocated
++ * after the queue's last vkQueueSubmit is not resident yet (the device's residency set is
++ * committed there). */
  VKAPI_ATTR void VKAPI_CALL
 -kk_ExportMetalObjectsEXT(UNUSED VkDevice device,
 +kk_ExportMetalObjectsEXT(VkDevice device,
@@ -67,17 +107,59 @@
 +            if (plane < image->plane_count)
 +               info->mtlTexture = (MTLTexture_id)image->planes[plane].mtl_handle;
 +         } else if (info->imageView != VK_NULL_HANDLE) {
++            /* The view's sampled texture only (it has the view's swizzle and type; NULL for a
++             * view without one). For a view's render, storage or input-attachment texture:
++             * VkExportMetalViewTextureBBPORT. */
 +            VK_FROM_HANDLE(kk_image_view, view, info->imageView);
-+            if (plane < view->plane_count) {
-+               info->mtlTexture =
-+                  (MTLTexture_id)(view->planes[plane].mtl_handle_sampled
-+                                     ? view->planes[plane].mtl_handle_sampled
-+                                     : view->planes[plane].mtl_handle_render);
-+            }
++            if (plane < view->plane_count)
++               info->mtlTexture = (MTLTexture_id)view->planes[plane].mtl_handle_sampled;
 +         } else if (info->bufferView != VK_NULL_HANDLE) {
 +            VK_FROM_HANDLE(kk_buffer_view, view, info->bufferView);
 +            info->mtlTexture = (MTLTexture_id)view->mtl_texel_buffer_handle;
 +         }
++         continue;
++      }
++      if (ext->sType == VK_STRUCTURE_TYPE_EXPORT_METAL_VIEW_TEXTURE_BBPORT) {
++         VkExportMetalViewTextureBBPORT *info = (VkExportMetalViewTextureBBPORT *)ext;
++         info->mtlTexture = NULL;
++         info->level = 0;
++         info->slice = 0;
++         if (info->imageView == VK_NULL_HANDLE)
++            continue;
++         VK_FROM_HANDLE(kk_image_view, view, info->imageView);
++         if (info->plane >= view->plane_count)
++            continue;
++         switch (info->use) {
++         case BBPORT_VIEW_TEXTURE_SAMPLED:
++            info->mtlTexture = (MTLTexture_id)view->planes[info->plane].mtl_handle_sampled;
++            break;
++         case BBPORT_VIEW_TEXTURE_STORAGE:
++            info->mtlTexture = (MTLTexture_id)view->planes[info->plane].mtl_handle_storage;
++            break;
++         case BBPORT_VIEW_TEXTURE_INPUT:
++            info->mtlTexture = (MTLTexture_id)view->planes[info->plane].mtl_handle_input;
++            break;
++         case BBPORT_VIEW_TEXTURE_RENDER:
++            /* As kk_cmd_draw.c's attachment descriptors: a view texture already points at its
++             * level and slice; the image's own texture needs the view's. */
++            info->mtlTexture = (MTLTexture_id)view->planes[info->plane].mtl_handle_render;
++            if (!view->planes[info->plane].render_is_view) {
++               info->level = view->vk.base_mip_level;
++               info->slice = view->vk.base_array_layer;
++            }
++            break;
++         }
++         continue;
++      }
++      if (ext->sType == VK_STRUCTURE_TYPE_EXPORT_METAL_BUFFER_OBJECT_BBPORT) {
++         VkExportMetalBufferObjectBBPORT *info = (VkExportMetalBufferObjectBBPORT *)ext;
++         info->mtlBuffer = NULL;
++         info->offset = 0;
++         if (info->buffer == VK_NULL_HANDLE)
++            continue;
++         VK_FROM_HANDLE(kk_buffer, buffer, info->buffer);
++         info->mtlBuffer = (MTLBuffer_id)buffer->metal.handle;
++         info->offset = kk_buffer_mtl_offset(buffer, 0);
 +         continue;
 +      }
        if (ext->sType == VK_STRUCTURE_TYPE_EXPORT_METAL_COMMAND_QUEUE_INFO_EXT) {

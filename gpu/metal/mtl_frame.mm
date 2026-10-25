@@ -870,12 +870,16 @@ void Decode(PushWrite& w) {
         case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: {
             const VkDescriptorBufferInfo& info = w.buffer_infos[i];
             if (!info.buffer) {
-                // A null descriptor (nullDescriptor): reads give zeros. Writes are dropped in
-                // Vulkan and land in the shared zero buffer here (a later null read sees them:
-                // the guest's shaders write only buffers they were given).
-                b.address = null_buffer.gpuAddress;
-                b.size = 0;
-                b.ok = true;
+                // A null descriptor (nullDescriptor): reads give zeros. A uniform buffer is
+                // read-only and at most 64 KiB, the zero buffer's size; a storage buffer could be
+                // written (Vulkan drops that) or read past it, so it stays on KosmicKrisp.
+                if (write.descriptorType == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER) {
+                    b.address = null_buffer.gpuAddress;
+                    b.size = 0;
+                    b.ok = true;
+                } else {
+                    b.why = "a null storage buffer descriptor";
+                }
                 break;
             }
             const BufferRef ref = ResolveBuffer(info.buffer);

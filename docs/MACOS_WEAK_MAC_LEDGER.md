@@ -9,6 +9,15 @@ To turn something off for one run, put its switch in Extra variables. To drop a 
 good, revert its commit on the branch (`git revert <commit>`); review-fix commits go with the
 change they fix.
 
+## MetalFX on the driver's queue (branch `macos-native-0.6-mfxq`, 2026-10-25, a test)
+
+Not on `macos-native-0.6-weak`; a branch of its own on top of it.
+
+| Commit | Change | Off for a run | Notes |
+|---|---|---|---|
+| `65a68331` | KosmicKrisp patch 0007: `vkExportMetalObjectsEXT` returns a queue's Metal 4 queue | none needed (unused unless asked for) | A driver change: the driver is rebuilt. Revert removes the patch file. |
+| `6f0a2895`, `c05d9adb`, `6b0e306b` | MetalFX queue mode: MetalFX committed to KosmicKrisp's own queue in its order (no second queue, no event waits) | it is off unless `BB_METALFX_EVENTS=3` | No stall cutoff in this mode; a MetalFX GPU error there may lose the device. After any MetalFX failure, or without Metal 4 MetalFX, the worker hand-over takes over for the session. |
+
 ## Diagnostics (2026-10-25)
 
 | Commit | Change | Off for a run | Notes |

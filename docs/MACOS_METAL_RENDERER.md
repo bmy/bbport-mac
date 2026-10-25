@@ -140,9 +140,8 @@ function) and are logged once each, so those calls are counted too.
 What it is for: the command mix the Metal encoder has to cover first, and which code records
 around the dispatcher. Known so far: `upscale/fsr411` (FSR 4.1.1) and the FSR 4 v07 provider
 call the loader's `vkCmd*` directly, so their command buffers can never be encoded by the layer;
-those must stay
-KosmicKrisp's (the layer will own a command buffer only when everything recorded into it comes
-through it).
+those must stay KosmicKrisp's (the layer will own a command buffer only when everything recorded
+into it comes through it).
 
 Notes for 3b (the layer encoding): KosmicKrisp commits at vkQueueSubmit, waits included, so a
 submission with our command buffers in it is split: KosmicKrisp first gets the waits (no command

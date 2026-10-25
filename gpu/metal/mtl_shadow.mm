@@ -10,6 +10,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
+#include <deque>
+#include <functional>
+#include <pthread.h>
+#include <thread>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -95,10 +100,10 @@ struct State {
                     device.Name().c_str(), dir.string().c_str());
     }
 
-    const Metal::CompiledShader* Get(vk::ShaderModule module, u64 hash, const char* what,
-                                     bool rect_list = false) {
-        std::shared_ptr<ShaderEntry> shader = Lookup(module);
+    const Metal::CompiledShader* Get(const std::shared_ptr<ShaderEntry>& shader, u64 hash,
+                                     const char* what, bool rect_list = false) {
         if (!shader) {
+            ++no_spirv;
             return nullptr;
         }
         const auto& words = shader->words;
@@ -128,21 +133,21 @@ struct State {
         return shader->compiled.get();
     }
 
-    /// The module's entry, null (counted) when it was never registered.
+    /// The module's entry (at pipeline creation: the handle may stand for another module by
+    /// the time the build runs), null when it was never registered.
     std::shared_ptr<ShaderEntry> Lookup(vk::ShaderModule module) {
-        std::scoped_lock lock{mutex};
-        auto it = modules.find(u64(VkShaderModule(module)));
-        if (it == modules.end()) {
-            ++no_spirv;
+        if (!module) {
             return nullptr;
         }
-        return it->second;
+        std::scoped_lock lock{mutex};
+        auto it = modules.find(u64(VkShaderModule(module)));
+        return it == modules.end() ? nullptr : it->second;
     }
 
-    const Metal::CompiledShader* Variant(vk::ShaderModule module, u64 hash,
+    const Metal::CompiledShader* Variant(const std::shared_ptr<ShaderEntry>& entry, u64 hash,
                                          const Metal::CompileVariant& variant) {
-        std::shared_ptr<ShaderEntry> entry = Lookup(module);
         if (!entry) {
+            ++no_spirv;
             return nullptr;
         }
         const auto& words = entry->words;
@@ -157,9 +162,85 @@ struct State {
         return made.second.get();
     }
 
-    std::shared_ptr<const std::vector<u32>> Words(vk::ShaderModule module) {
-        const auto entry = Lookup(module);
+    std::shared_ptr<const std::vector<u32>> Words(const std::shared_ptr<ShaderEntry>& entry) {
+        if (!entry) {
+            ++no_spirv;
+        }
         return entry ? entry->words : nullptr;
+    }
+
+    // ---- The builds run on worker threads of their own (off the pipeline-creation path) ----
+
+    /// The build each pipeline handle is waiting for; a result is kept only while it still is.
+    std::unordered_map<VkPipeline, u64> pending;
+    u64 next_build = 0;
+
+    /// Starts a build for `pipeline` (under pipelines_mutex): what an earlier pipeline with the
+    /// handle left is dropped.
+    u64 Expect(VkPipeline pipeline) {
+        graphics.erase(pipeline);
+        compute.erase(pipeline);
+        const u64 id = ++next_build;
+        pending[pipeline] = id;
+        return id;
+    }
+    bool Current(VkPipeline pipeline, u64 id) {
+        const auto it = pending.find(pipeline);
+        if (it == pending.end() || it->second != id) {
+            return false; // destroyed (Forget) or created again since
+        }
+        pending.erase(it);
+        return true;
+    }
+    void PublishGraphics(VkPipeline pipeline, u64 id, const GraphicsEntry& entry) {
+        std::scoped_lock lock{pipelines_mutex};
+        if (Current(pipeline, id)) {
+            graphics[pipeline] = entry;
+        }
+    }
+    void PublishCompute(VkPipeline pipeline, u64 id, const Metal::ComputePipeline* p) {
+        std::scoped_lock lock{pipelines_mutex};
+        if (Current(pipeline, id)) {
+            compute[pipeline] = p;
+        }
+    }
+    void Abandon(VkPipeline pipeline, u64 id) {
+        std::scoped_lock lock{pipelines_mutex};
+        Current(pipeline, id);
+    }
+
+    std::mutex queue_mutex;
+    std::condition_variable queue_cv;
+    std::deque<std::function<void()>> queue;
+    std::vector<std::thread> workers;
+
+    void Post(std::function<void()> task) {
+        {
+            std::scoped_lock lock{queue_mutex};
+            queue.push_back(std::move(task));
+            if (workers.empty()) {
+                // Two: the Metal compiler runs its own threads; more only add memory.
+                for (int i = 0; i < 2; ++i) {
+                    workers.emplace_back([this] {
+                        pthread_setname_np("bb:MetalShadow");
+                        for (;;) {
+                            std::function<void()> next;
+                            {
+                                std::unique_lock lock{queue_mutex};
+                                queue_cv.wait(lock, [this] { return !queue.empty(); });
+                                next = std::move(queue.front());
+                                queue.pop_front();
+                            }
+                            @autoreleasepool {
+                                next();
+                            }
+                        }
+                    });
+                    workers.back().detach(); // the state is never destroyed
+                }
+            }
+        }
+        queue_cv.notify_one();
     }
 
     void Report() {
@@ -227,6 +308,7 @@ void Forget(vk::Pipeline vk_pipeline) {
     std::scoped_lock lock{s.pipelines_mutex};
     s.graphics.erase(pipeline);
     s.compute.erase(pipeline);
+    s.pending.erase(pipeline); // a build still running for it is dropped when done
 }
 
 void RegisterModule(vk::ShaderModule module, std::span<const u32> spirv) {
@@ -250,18 +332,32 @@ void RegisterModule(vk::ShaderModule module, std::span<const u32> spirv) {
     s.modules[u64(VkShaderModule(module))] = std::move(entry);
 }
 
-void Graphics(const Vulkan::GraphicsPipelineKey& key, std::span<const vk::ShaderModule> modules,
-              std::span<const bool> has_stage, std::span<const VertexInput> inputs,
-              std::span<const vk::PipelineColorBlendAttachmentState> blend, bool aux_fragment,
-              vk::Pipeline vk_pipeline) {
-    @autoreleasepool { // pipeline-creation threads drain no pool of their own
+namespace {
+using ModuleRefs = std::array<std::shared_ptr<ShaderEntry>, Vulkan::MaxShaderStages>;
+
+/// One graphics pipeline's build (a worker thread): what Graphics was given, kept.
+void BuildGraphics(const Vulkan::GraphicsPipelineKey& key, const ModuleRefs& modules,
+                   std::span<const bool> has_stage, std::span<const VertexInput> inputs,
+                   std::span<const vk::PipelineColorBlendAttachmentState> blend,
+                   bool aux_fragment, VkPipeline vk_pipeline, u64 id) {
     using Stage = ::Shader::SwStage;
     auto& s = Get();
-    {
-        // A handle the driver reused: what an earlier pipeline left must not stand for this one.
-        std::scoped_lock lock{s.pipelines_mutex};
-        s.graphics.erase(VkPipeline(vk_pipeline));
-    }
+    bool published = false;
+    const auto publish = [&](const GraphicsEntry& entry) {
+        s.PublishGraphics(vk_pipeline, id, entry);
+        published = true;
+    };
+    struct Done { // a build without a result leaves the handle waiting for nothing
+        State& s;
+        bool& published;
+        VkPipeline pipeline;
+        u64 id;
+        ~Done() {
+            if (!published) {
+                s.Abandon(pipeline, id);
+            }
+        }
+    } done{s, published, vk_pipeline, id};
     auto has = [&](Stage stage) { return has_stage[u32(stage)]; };
     if (has(Stage::TessellationControl) || has(Stage::TessellationEval)) {
         // As Huax-1839's PipelineCache::TessellationShaders: the vertex shader as a kernel per
@@ -319,8 +415,7 @@ void Graphics(const Vulkan::GraphicsPipelineKey& key, std::span<const vk::Shader
         ok = tess != nullptr;
         ++(ok ? s.tess_ok : s.tess_failed);
         if (ok) {
-            std::scoped_lock lock{s.pipelines_mutex};
-            s.graphics[VkPipeline(vk_pipeline)] = {.render = tess->render, .tess = tess};
+            publish({.render = tess->render, .tess = tess});
         }
     } else if (has(Stage::Geometry)) {
         // As Huax-1839's PipelineCache::GeometryShaders: the export shader as a kernel per index
@@ -393,8 +488,7 @@ void Graphics(const Vulkan::GraphicsPipelineKey& key, std::span<const vk::Shader
         }
         ++(geo ? s.geometry_ok : s.geometry_failed);
         if (geo) {
-            std::scoped_lock lock{s.pipelines_mutex};
-            s.graphics[VkPipeline(vk_pipeline)] = {.render = geo->render, .geometry = geo};
+            publish({.render = geo->render, .geometry = geo});
         } else {
             static std::atomic<u32> logged{0};
             if (logged++ < 10) {
@@ -427,8 +521,7 @@ void Graphics(const Vulkan::GraphicsPipelineKey& key, std::span<const vk::Shader
                 key, vs, fs, {.vertex_attributes = attributes, .blend = blend, .rect_list_triangles = rect_list});
             ok = render != nullptr;
             if (ok) {
-                std::scoped_lock lock{s.pipelines_mutex};
-                s.graphics[VkPipeline(vk_pipeline)] = {.render = render, .rect_list = rect_list};
+                publish({.render = render, .rect_list = rect_list});
             }
         }
         if (rect_list) {
@@ -438,27 +531,58 @@ void Graphics(const Vulkan::GraphicsPipelineKey& key, std::span<const vk::Shader
         }
     }
     s.Report();
+}
+} // namespace
+
+void Graphics(const Vulkan::GraphicsPipelineKey& key, std::span<const vk::ShaderModule> modules,
+              std::span<const bool> has_stage, std::span<const VertexInput> inputs,
+              std::span<const vk::PipelineColorBlendAttachmentState> blend, bool aux_fragment,
+              vk::Pipeline vk_pipeline) {
+    auto& s = Get();
+    // What the build needs, kept: the modules' entries now (a handle can stand for another
+    // module by the time it runs), the rest by value.
+    ModuleRefs refs{};
+    for (size_t i = 0; i < refs.size() && i < modules.size(); ++i) {
+        refs[i] = s.Lookup(modules[i]);
     }
+    std::array<bool, Vulkan::MaxShaderStages> stages{};
+    std::copy_n(has_stage.begin(), std::min(stages.size(), has_stage.size()), stages.begin());
+    std::vector<VertexInput> input_list(inputs.begin(), inputs.end());
+    std::vector<vk::PipelineColorBlendAttachmentState> blend_list(blend.begin(), blend.end());
+    const VkPipeline pipeline = vk_pipeline;
+    u64 id;
+    {
+        std::scoped_lock lock{s.pipelines_mutex};
+        id = s.Expect(pipeline);
+    }
+    s.Post([key, refs, stages, input_list = std::move(input_list),
+            blend_list = std::move(blend_list), aux_fragment, pipeline, id] {
+        BuildGraphics(key, refs, stages, input_list, blend_list, aux_fragment, pipeline, id);
+    });
 }
 
 void Compute(const Vulkan::ComputePipelineKey& key, vk::ShaderModule module,
              vk::Pipeline vk_pipeline) {
-    @autoreleasepool { // pipeline-creation threads drain no pool of their own
     auto& s = Get();
+    auto ref = s.Lookup(module);
+    const VkPipeline pipeline = vk_pipeline;
+    u64 id;
     {
         std::scoped_lock lock{s.pipelines_mutex};
-        s.compute.erase(VkPipeline(vk_pipeline));
+        id = s.Expect(pipeline);
     }
-    const auto* cs = s.Get(module, key.value, "compute");
-    const Metal::ComputePipeline* pipeline = cs ? s.pso.GetComputePipeline(key, cs) : nullptr;
-    const bool ok = pipeline != nullptr;
-    if (ok) {
-        std::scoped_lock lock{s.pipelines_mutex};
-        s.compute[VkPipeline(vk_pipeline)] = pipeline;
-    }
-    ++(ok ? s.compute_ok : s.compute_failed);
-    s.Report();
-    }
+    s.Post([key, ref = std::move(ref), pipeline, id] {
+        auto& s = Get();
+        const auto* cs = s.Get(ref, key.value, "compute");
+        const Metal::ComputePipeline* p = cs ? s.pso.GetComputePipeline(key, cs) : nullptr;
+        if (p) {
+            s.PublishCompute(pipeline, id, p);
+        } else {
+            s.Abandon(pipeline, id);
+        }
+        ++(p ? s.compute_ok : s.compute_failed);
+        s.Report();
+    });
 }
 
 } // namespace MetalShadow

@@ -90,8 +90,10 @@ one is upstream 0.6's (`gpu/render`, `gpu/textures`, `gpu/buffers`, ...), with t
 `BB_METAL_SHADOW=1` (native GPU process only). Each game pipeline the renderer creates is built a
 second time as a Metal pipeline state, on the same pipeline-creation thread, right after the
 Vulkan one, preloaded ones from the pipeline cache included; the log counts the results (`Metal
-shadow: N pipelines: ...` at the first and every 50th) and names the first failures. Nothing draws
-with them, but the Metal compiles add to pipeline creation (expect more stutter while it is on).
+shadow: N pipelines: ...` at the first and every 50th) and names the first failures. The builds
+run on two worker threads of their own, off the pipeline-creation path (they stalled area loads
+for seconds when they ran on it); a pipeline whose Metal build is not done yet draws through
+KosmicKrisp.
 Off, it costs one branch per pipeline and shader module.
 
 - Files, from 78b59f5's `renderer_metal/` with includes and names adapted to 0.6
@@ -203,3 +205,17 @@ no Metal copy (a size table as Wooloomooloo2's); an image copy between different
 sample counts, or of depth/stencil; a clear of a texture without render target usage or not 2D;
 a fill whose four bytes differ. `BB_METAL_TRANSFERS=0` sends them all to KosmicKrisp (for
 bisecting a broken picture). Blits and resolves still go to KosmicKrisp.
+
+## Results so far (M5 Max, 2560x1600, MetalFX native AA)
+
+- Stage 2 (2026-10-25): about 650 pipelines in a session; all but 1 render pipeline (a fragment
+  input its vertex shader does not write) and 5 tessellation pipelines (patch constant sizes)
+  build in Metal.
+- Stage 3a: in play, about 400,000 commands a second: 50,000 draws (800 a frame), 9,000 render
+  passes (150 a frame), 13,000 barriers, 8,000 buffer copies, 1,200 command buffers.
+- Stage 3b, first run: no GPU errors; only about 2% of draws in Metal, the rest to KosmicKrisp
+  with 7,000 switches a second, so slower than KosmicKrisp alone. The reasons, per second: the
+  depth bounds test (about 20,000: Metal 4 has one, now used), a descriptor without a Metal object
+  (about 25,000: now logged by kind), no Metal pipeline (3,000), clip space z from -w (2,500),
+  tessellation, strips without primitive restart. Long stalls when new areas load: the Metal
+  builds on the pipeline-creation path (now on worker threads).

@@ -401,6 +401,7 @@ struct Bound {
     id<MTLTexture> texture;
     id<MTLSamplerState> sampler;
     bool ok{}; ///< has a Metal object (a missing one makes its draws fall back)
+    const char* why{"a descriptor type the Metal path does not bind"}; ///< when not ok
 };
 
 /// A push descriptor write as recorded (for the fallback's replay) and decoded (for Metal).
@@ -869,6 +870,7 @@ void Decode(PushWrite& w) {
         case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: {
             const VkDescriptorBufferInfo& info = w.buffer_infos[i];
             const BufferRef ref = ResolveBuffer(info.buffer);
+            b.why = "a buffer descriptor without a Metal buffer";
             if (ref.buffer) {
                 const u64 start = ref.offset + info.offset;
                 b.address = ref.buffer.gpuAddress + start;
@@ -884,12 +886,15 @@ void Decode(PushWrite& w) {
         case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER: {
             const VkDescriptorImageInfo& info = w.image_infos[i];
             const bool storage = write.descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            b.why = storage ? "a storage image without a Metal texture"
+                            : "a sampled image without a Metal texture";
             b.texture = ResolveView(info.imageView, storage ? BbMetal::ViewTextureStorage
                                                             : BbMetal::ViewTextureSampled)
                             .texture;
             b.ok = b.texture != nil;
             if (storage && b.ok) {
                 // Writes to a format stored swizzled would land in the wrong channels.
+                b.why = "a storage image of a format stored swizzled";
                 std::scoped_lock lock{objects_mutex};
                 const auto f = view_formats.find(info.imageView);
                 b.ok = f != view_formats.end() &&
@@ -900,6 +905,10 @@ void Decode(PushWrite& w) {
                 std::scoped_lock lock{objects_mutex};
                 auto it = samplers.find(info.sampler);
                 b.sampler = it == samplers.end() ? nil : it->second.state;
+                if (b.ok && !b.sampler) {
+                    b.why = it == samplers.end() ? "a sampler made before the layer"
+                                                 : "a sampler Metal lacks (custom border color)";
+                }
                 b.ok = b.ok && b.sampler;
             }
             break;
@@ -909,12 +918,15 @@ void Decode(PushWrite& w) {
             auto it = samplers.find(w.image_infos[i].sampler);
             b.sampler = it == samplers.end() ? nil : it->second.state;
             b.ok = b.sampler != nil;
+            b.why = it == samplers.end() ? "a sampler made before the layer"
+                                         : "a sampler Metal lacks (custom border color)";
             break;
         }
         case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
         case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
             b.texture = ResolveBufferView(w.texel_views[i]);
             b.ok = b.texture != nil;
+            b.why = "a texel buffer without a Metal texture";
             break;
         default:
             break;
@@ -954,7 +966,7 @@ bool StageResolvable(const Owned& o, VkPipelineBindPoint point, const Metal::Com
         for (u32 e = 0; e < b.count; ++e) {
             const Bound* bound = FindBound(o, point, b.set, b.binding, e);
             if (bound && !bound->ok) {
-                why = "a descriptor without a Metal object";
+                why = bound->why;
                 return false;
             }
         }
@@ -982,7 +994,7 @@ bool BindStage(Owned& o, id<MTL4ArgumentTable> table, VkPipelineBindPoint point,
         for (u32 e = 0; e < b.count; ++e) {
             const Bound* bound = FindBound(o, point, b.set, b.binding, e);
             if (bound && !bound->ok) {
-                why = "a descriptor without a Metal object";
+                why = bound->why;
                 return false;
             }
             const u32 slot = b.msl_index + e;
@@ -1056,8 +1068,10 @@ const char* DrawBlocker(const Owned& o) {
     if (o.rasterizer_discard) {
         return "rasterizer discard";
     }
-    if (o.depth_bounds_test) {
-        return "the depth bounds test";
+    if (o.depth_bounds_test &&
+        !(o.depth_bounds[0] >= 0.0f && o.depth_bounds[0] <= o.depth_bounds[1] &&
+          o.depth_bounds[1] <= 1.0f)) {
+        return "depth bounds outside [0, 1]"; // Metal takes them inside only
     }
     if (o.feedback_loop) {
         return "an attachment feedback loop";
@@ -1188,6 +1202,12 @@ bool PrepareDraw(Owned& o, const char*& why) {
     [enc setDepthStencilState:(__bridge id<MTLDepthStencilState>)state];
     if (ds.stencil_test) {
         [enc setStencilFrontReferenceValue:o.front.reference backReferenceValue:o.back.reference];
+    }
+    // Metal 4's depth bounds test (on the stored depth, as Vulkan's); [0, 1] turns it off.
+    if (o.depth_bounds_test) {
+        [enc setDepthTestMinBound:o.depth_bounds[0] maxBound:o.depth_bounds[1]];
+    } else {
+        [enc setDepthTestMinBound:0.0f maxBound:1.0f];
     }
     if (o.depth_bias_enable) {
         [enc setDepthBias:o.depth_bias[0] slopeScale:o.depth_bias[2] clamp:o.depth_bias[1]];

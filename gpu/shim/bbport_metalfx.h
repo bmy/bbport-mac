@@ -61,6 +61,7 @@ public:
     ~Scaler();
     /// With `mtl4_queue` (KosmicKrisp's id<MTL4CommandQueue>, macOS 26), MetalFX runs on that
     /// queue in its order (EncodeOnQueue); otherwise on a command queue of its own (Encode).
+    /// Errors that only the Metal 4 path has begin with "Metal 4: ".
     static std::unique_ptr<Scaler> Create(const Config& config, const Heaps& heaps,
                                           std::string& error, void* mtl4_queue = nullptr);
     /// Copies the input buffers into textures, upscales and copies the output into its buffer.

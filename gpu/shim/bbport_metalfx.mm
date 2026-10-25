@@ -183,12 +183,12 @@ std::unique_ptr<Scaler> Scaler::Create(const Config& config, const Heaps& heaps,
             if (@available(macOS 26.0, *)) {
                 id queue = (__bridge id)mtl4_queue;
                 if (![queue respondsToSelector:@selector(commit:count:options:)]) {
-                    error = "the driver's queue is not a Metal 4 queue";
+                    error = "Metal 4: the driver's queue is not a Metal 4 queue";
                     return nullptr;
                 }
                 if (![cls respondsToSelector:@selector(supportsMetal4FX:)] ||
                     ![cls supportsMetal4FX:device]) {
-                    error = "no Metal 4 MetalFX for this GPU";
+                    error = "Metal 4: no Metal 4 MetalFX for this GPU";
                     return nullptr;
                 }
                 NSError* failure = nil;
@@ -196,13 +196,13 @@ std::unique_ptr<Scaler> Scaler::Create(const Config& config, const Heaps& heaps,
                     [device newCompilerWithDescriptor:[[MTL4CompilerDescriptor alloc] init]
                                                 error:&failure];
                 if (!compiler) {
-                    error = "newCompilerWithDescriptor failed: " + Describe(failure);
+                    error = "Metal 4: newCompilerWithDescriptor failed: " + Describe(failure);
                     return nullptr;
                 }
                 id<MTL4FXTemporalScaler> scaler4 =
                     [descriptor newTemporalScalerWithDevice:device compiler:compiler];
                 if (!scaler4) {
-                    error = "newTemporalScalerWithDevice:compiler: failed";
+                    error = "Metal 4: newTemporalScalerWithDevice:compiler: failed";
                     return nullptr;
                 }
                 impl->compiler4 = compiler;
@@ -213,7 +213,7 @@ std::unique_ptr<Scaler> Scaler::Create(const Config& config, const Heaps& heaps,
                 usages[2] = scaler4.motionTextureUsage;
                 usages[3] = scaler4.outputTextureUsage;
             } else {
-                error = "MetalFX on the driver's queue needs macOS 26";
+                error = "Metal 4: MetalFX on the driver's queue needs macOS 26";
                 return nullptr;
             }
         } else {
@@ -278,7 +278,7 @@ std::unique_ptr<Scaler> Scaler::Create(const Config& config, const Heaps& heaps,
                 impl->residency = [device newResidencySetWithDescriptor:rd error:&failure];
                 impl->fence = [device newFence];
                 if (!impl->residency || !impl->fence) {
-                    error = "MetalFX's residency set or fence: " + Describe(failure);
+                    error = "Metal 4: MetalFX's residency set or fence: " + Describe(failure);
                     return nullptr;
                 }
                 for (id<MTLTexture> t : {impl->color, impl->depth, impl->motion, impl->output}) {
@@ -525,7 +525,7 @@ bool Scaler::EncodeOnQueue(const Frame& frame, std::string& error) {
             return true;
         }
     }
-    error = "MetalFX on the driver's queue needs macOS 26";
+    error = "Metal 4: MetalFX on the driver's queue needs macOS 26";
     return false;
 }
 

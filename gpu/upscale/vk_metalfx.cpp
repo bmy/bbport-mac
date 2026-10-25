@@ -183,6 +183,13 @@ void MetalFxUpscaler::SetUpEvents() {
     }
     async = true;
     mode = worker_mode ? Mode::Worker : Mode::Events;
+    if (const char* env = std::getenv("BB_METALFX_TEST_STALL"); env && *env) {
+        test_stalls_left = u32(std::max(0l, std::strtol(env, nullptr, 10)));
+        std::printf("Upscaler: MetalFX test (BB_METALFX_TEST_STALL=%u): the 600th frame of "
+                    "each of the first %u MetalFX runs of the worker hand-over waits 10 s on the "
+                    "GPU (macOS may stop it first)\n",
+                    test_stalls_left, test_stalls_left);
+    }
     if (queue_mode) {
         VkExportMetalCommandQueueInfoEXT queue_info{
             .sType = VK_STRUCTURE_TYPE_EXPORT_METAL_COMMAND_QUEUE_INFO_EXT,
@@ -208,13 +215,6 @@ void MetalFxUpscaler::SetUpEvents() {
     }
     watch = std::jthread{[this](std::stop_token stop) { WatchLoop(stop); }};
     if (worker_mode) {
-        if (const char* env = std::getenv("BB_METALFX_TEST_STALL"); env && *env) {
-            test_stalls_left = u32(std::max(0l, std::strtol(env, nullptr, 10)));
-            std::printf("Upscaler: MetalFX test (BB_METALFX_TEST_STALL=%u): the 600th frame of "
-                        "each of the first %u MetalFX runs waits 10 s on the GPU (macOS may stop "
-                        "it first)\n",
-                        test_stalls_left, test_stalls_left);
-        }
         worker = std::jthread{[this](std::stop_token stop) { WorkerLoop(stop); }};
         std::printf("Upscaler: MetalFX from a thread of its own (it waits for the input copies; "
                     "the copy back waits for MetalFX on the GPU; BB_METALFX_EVENTS=0 or 1: the "
@@ -442,6 +442,11 @@ void MetalFxUpscaler::LeaveQueueMode(const std::string& why) {
     if (!worker.joinable()) {
         worker = std::jthread{[this](std::stop_token stop) { WorkerLoop(stop); }};
     }
+    if (const u64 cutoff = StallCutoffNs()) {
+        std::printf("Upscaler: MetalFX work not done %llu ms after the worker hands it over is "
+                    "given up, and FSR 3.1 takes over (BB_METALFX_STALL_MS)\n",
+                    (unsigned long long)(cutoff / 1'000'000));
+    }
 }
 
 bool MetalFxUpscaler::Ready() const {
@@ -578,8 +583,9 @@ bool MetalFxUpscaler::EnsureResources(const Frame& frame) {
     scaler = BbMetalFx::Scaler::Create(
         config, {staging[0].heap, staging[1].heap, staging[2].heap, staging[3].heap}, error,
         mode == Mode::Queue ? driver_queue : nullptr);
-    if (!scaler && mode == Mode::Queue) {
+    if (!scaler && mode == Mode::Queue && error.starts_with("Metal 4: ")) {
         // No Metal 4 MetalFX here (the GPU, the OS, the queue): the worker hand-over instead.
+        // Other failures (a scale out of range) would repeat there: they stay failures.
         LeaveQueueMode(error);
         error.clear();
         scaler = BbMetalFx::Scaler::Create(

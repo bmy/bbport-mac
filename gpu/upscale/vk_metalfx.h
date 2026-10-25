@@ -7,6 +7,9 @@
 // KosmicKrisp patch 0002) a thread of its own waits for the copies on the CPU, then hands
 // MetalFX the work; the copy back waits for MetalFX on the GPU. BB_METALFX_EVENTS=1: GPU-side
 // waits both ways through shared events (Metal's wait can miss Vulkan's signal: 4 s stalls).
+// BB_METALFX_EVENTS=3 (a test; patch 0007, macOS 26): MetalFX runs on KosmicKrisp's own Metal 4
+// queue, committed in submission order between the input copies and the copy back (no second
+// queue, no event waits; but a MetalFX stall then holds up the whole queue, with no cutoff).
 // BB_METALFX_EVENTS=0, or a driver without shared events: MetalFX runs on the submission thread
 // right before the copy back is submitted (it waits for the copies, then for MetalFX).
 // BB_METALFX_SYNC=1: the GPU thread finishes the frame so far and waits for MetalFX itself.
@@ -124,7 +127,10 @@ private:
     /// thread. Events (BB_METALFX_EVENTS=1): GPU-side waits through shared events. Worker
     /// (default): a thread of its own waits for the input copies on the CPU and hands MetalFX its
     /// work then; the copy back waits for MetalFX on the GPU.
-    enum class Mode { Sync, SubmitThread, Events, Worker };
+    /// Queue (BB_METALFX_EVENTS=3, needs this port's KosmicKrisp patch 0007, macOS 26): MetalFX
+    /// is committed to KosmicKrisp's own Metal 4 queue right before the copy back is submitted,
+    /// so the queue's order and barriers sequence it; no event waits, no second queue.
+    enum class Mode { Sync, SubmitThread, Events, Worker, Queue };
     struct Job; ///< a frame for the worker (vk_metalfx.cpp)
     struct Pending {
         u64 value;       ///< the done value its copy back waits for
@@ -170,6 +176,7 @@ private:
     vk::Semaphore done_semaphore{}; ///< timeline signalled by Metal (via `done_event`)
     void* done_event = nullptr;
     void* work_event = nullptr;
+    void* driver_queue = nullptr; ///< Queue mode: KosmicKrisp's id<MTL4CommandQueue>
     u64 done_value = 0;
     std::array<Staging, 4> staging{}; ///< color, depth, motion, output
     std::unique_ptr<BbMetalFx::Scaler> scaler;

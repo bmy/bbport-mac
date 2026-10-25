@@ -132,7 +132,8 @@ void MetalFxUpscaler::SetUpEvents() {
     mode = Mode::SubmitThread;
     const char* events_env = std::getenv("BB_METALFX_EVENTS");
     const char events = events_env && *events_env ? events_env[0] : '2';
-    const bool worker_mode = events == '2';
+    const bool queue_mode = events == '3';
+    const bool worker_mode = events == '2' || queue_mode; // the worker is queue mode's fallback
     if (events != '1' && !worker_mode) {
         std::printf("Upscaler: MetalFX on the submission thread (BB_METALFX_EVENTS=%s)\n",
                     events_env);
@@ -182,6 +183,28 @@ void MetalFxUpscaler::SetUpEvents() {
     }
     async = true;
     mode = worker_mode ? Mode::Worker : Mode::Events;
+    if (queue_mode) {
+        VkExportMetalCommandQueueInfoEXT queue_info{
+            .sType = VK_STRUCTURE_TYPE_EXPORT_METAL_COMMAND_QUEUE_INFO_EXT,
+            .queue = static_cast<VkQueue>(instance.GetGraphicsQueue()),
+        };
+        VkExportMetalObjectsInfoEXT info{
+            .sType = VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECTS_INFO_EXT,
+            .pNext = &queue_info,
+        };
+        export_objects(static_cast<VkDevice>(device), &info);
+        driver_queue = reinterpret_cast<void*>(queue_info.mtlCommandQueue);
+        if (driver_queue) {
+            mode = Mode::Queue;
+            watch = std::jthread{[this](std::stop_token stop) { WatchLoop(stop); }};
+            std::printf("Upscaler: MetalFX on KosmicKrisp's own queue, in its order "
+                        "(BB_METALFX_EVENTS=3; no stall cutoff: a stall there holds up the "
+                        "whole queue)\n");
+            return;
+        }
+        std::printf("Upscaler: MetalFX cannot use KosmicKrisp's queue (the driver lacks the "
+                    "port's patch 0007): the worker hand-over instead\n");
+    }
     watch = std::jthread{[this](std::stop_token stop) { WatchLoop(stop); }};
     if (worker_mode) {
         if (const char* env = std::getenv("BB_METALFX_TEST_STALL"); env && *env) {
@@ -351,7 +374,7 @@ void MetalFxUpscaler::WatchLoop(std::stop_token stop) {
                     "(%s mode). Its input copies are tick %llu; the work timeline is at %llu "
                     "(Metal sees %llu); MetalFX's timeline is at %llu%s\n",
                     (unsigned long long)oldest.value, waited_ns / 1e6,
-                    mode == Mode::Worker ? "worker" : "events",
+                    mode == Mode::Worker ? "worker" : mode == Mode::Queue ? "queue" : "events",
                     (unsigned long long)oldest.copies_tick,
                     (unsigned long long)work->KnownGpuTick(),
                     (unsigned long long)BbMetalFx::EventValue(work_event),
@@ -537,7 +560,8 @@ bool MetalFxUpscaler::EnsureResources(const Frame& frame) {
     // busy throughout): creation and the first encode are timed to tell which part it is.
     const auto start = std::chrono::steady_clock::now();
     scaler = BbMetalFx::Scaler::Create(
-        config, {staging[0].heap, staging[1].heap, staging[2].heap, staging[3].heap}, error);
+        config, {staging[0].heap, staging[1].heap, staging[2].heap, staging[3].heap}, error,
+        mode == Mode::Queue ? driver_queue : nullptr);
     if (!scaler) {
         Fail(error, true);
         return false;
@@ -686,9 +710,10 @@ bool MetalFxUpscaler::Run(const Frame& frame) {
             Fail(error, true, true); // the GPU's failure (Encode waited for it)
             return false;
         }
-    } else if (mode == Mode::Worker) {
-        // The input copies go to the queue; the worker waits for them, then hands MetalFX the
-        // work (queued below, with the copy back).
+    } else if (mode == Mode::Worker || mode == Mode::Queue) {
+        // The input copies go to the queue. Worker: the worker waits for them, then hands
+        // MetalFX the work (queued below, with the copy back). Queue: MetalFX follows them on the
+        // same queue (committed right before the copy back, below).
         scheduler.Flush();
     } else if (mode == Mode::Events) {
         scheduler.Flush();
@@ -762,6 +787,30 @@ bool MetalFxUpscaler::Run(const Frame& frame) {
         }
         SubmitInfo info{};
         info.AddWait(done_semaphore, done_value, "MetalFX");
+        scheduler.Flush(info);
+    } else if (mode == Mode::Queue) {
+        // Committed to KosmicKrisp's queue right before the copy back is submitted (under the
+        // submission lock, after the input copies' submission): the queue's order and barriers
+        // put MetalFX between them. Its timeline is signalled on that queue for the reports.
+        ++done_value;
+        metal.signal_event = done_event;
+        metal.signal_value = done_value;
+        {
+            std::scoped_lock lock{pending_mutex};
+            if (pending.size() >= 256) {
+                pending.pop_front();
+            }
+            pending.push_back({done_value, copies_tick, NowNs()});
+        }
+        SubmitInfo info{};
+        info.before_submit.push_back([this, metal] {
+            std::string error;
+            if (!scaler->EncodeOnQueue(metal, error)) {
+                BbMetalFx::SignalEvent(metal.signal_event, metal.signal_value);
+                std::scoped_lock lock{deferred_mutex};
+                deferred_error = error;
+            }
+        });
         scheduler.Flush(info);
     } else if (mode == Mode::SubmitThread) {
         // Right before the copy back goes to the queue (BB_ASYNC_SUBMIT: on a recording thread,

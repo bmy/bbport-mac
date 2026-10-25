@@ -59,11 +59,20 @@ struct Frame {
 class Scaler {
 public:
     ~Scaler();
+    /// With `mtl4_queue` (KosmicKrisp's id<MTL4CommandQueue>, macOS 26), MetalFX runs on that
+    /// queue in its order (EncodeOnQueue); otherwise on a command queue of its own (Encode).
     static std::unique_ptr<Scaler> Create(const Config& config, const Heaps& heaps,
-                                          std::string& error);
+                                          std::string& error, void* mtl4_queue = nullptr);
     /// Copies the input buffers into textures, upscales and copies the output into its buffer.
     /// Without events in `frame`, waits until the GPU is done.
     bool Encode(const Frame& frame, std::string& error);
+    /// Queue mode (created with `mtl4_queue`): copies the inputs, upscales and copies the output
+    /// back in one Metal 4 command buffer committed to that queue now, then signals
+    /// `frame.signal_event` to `frame.signal_value` there. The queue's earlier work (the input
+    /// copies) comes first and its later work (the copy back) after, through queue barriers: no
+    /// event waits. The caller serialises this with the queue's other commits (submit_mutex).
+    bool EncodeOnQueue(const Frame& frame, std::string& error);
+    [[nodiscard]] bool OnQueue() const;
     /// The failure of an earlier asynchronous frame, once.
     bool TakeError(std::string& error);
     /// Until the last frame handed to Metal is done (call from the thread that encodes).

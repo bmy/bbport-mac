@@ -906,8 +906,9 @@ void Decode(PushWrite& w) {
                 auto it = samplers.find(info.sampler);
                 b.sampler = it == samplers.end() ? nil : it->second.state;
                 if (b.ok && !b.sampler) {
-                    b.why = it == samplers.end() ? "a sampler made before the layer"
-                                                 : "a sampler Metal lacks (custom border color)";
+                    b.why = it == samplers.end()
+                                ? "an unknown or immutable sampler"
+                                : "a sampler Metal lacks (border color or extension)";
                 }
                 b.ok = b.ok && b.sampler;
             }
@@ -918,8 +919,8 @@ void Decode(PushWrite& w) {
             auto it = samplers.find(w.image_infos[i].sampler);
             b.sampler = it == samplers.end() ? nil : it->second.state;
             b.ok = b.sampler != nil;
-            b.why = it == samplers.end() ? "a sampler made before the layer"
-                                         : "a sampler Metal lacks (custom border color)";
+            b.why = it == samplers.end() ? "an unknown or immutable sampler"
+                                         : "a sampler Metal lacks (border color or extension)";
             break;
         }
         case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
@@ -1204,7 +1205,7 @@ bool PrepareDraw(Owned& o, const char*& why) {
         [enc setStencilFrontReferenceValue:o.front.reference backReferenceValue:o.back.reference];
     }
     // Metal 4's depth bounds test (on the stored depth, as Vulkan's); [0, 1] turns it off.
-    if (o.depth_bounds_test) {
+    if (o.depth_bounds_test && p.depth_pixel_format) { // Vulkan's test needs a depth attachment
         [enc setDepthTestMinBound:o.depth_bounds[0] maxBound:o.depth_bounds[1]];
     } else {
         [enc setDepthTestMinBound:0.0f maxBound:1.0f];

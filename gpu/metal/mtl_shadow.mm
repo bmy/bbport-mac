@@ -232,7 +232,11 @@ struct State {
                                 queue.pop_front();
                             }
                             @autoreleasepool {
-                                next();
+                                try {
+                                    next(); // a build that throws is abandoned (its Done)
+                                } catch (...) {
+                                    Print("Metal shadow: a build failed with an exception\n");
+                                }
                             }
                         }
                     });
@@ -245,6 +249,15 @@ struct State {
 
     void Report() {
         const u32 n = ++seen;
+        size_t waiting = 0, queued = 0;
+        {
+            std::scoped_lock lock{pipelines_mutex};
+            waiting = pending.size();
+        }
+        {
+            std::scoped_lock lock{queue_mutex};
+            queued = queue.size();
+        }
         if (n % 200 == 0) {
             pso.Flush(); // the binary archive, for the next run (the state is never destroyed)
         }
@@ -254,13 +267,13 @@ struct State {
         Print("Metal shadow: %u pipelines: render %u ok / %u failed, compute %u ok / %u "
                     "failed, geometry %u ok / %u failed / %u unsupported, rect lists %u ok / %u failed, tessellation %u ok / %u failed / %u not "
                     "possible in Metal; shaders failed %u, no SPIR-V %u; not yet: geometry %u, quad "
-                    "lists %u, clip-emulation fragment %u\n",
+                    "lists %u, clip-emulation fragment %u; builds waiting %zu (queued %zu)\n",
                     n, render_ok.load(), render_failed.load(), compute_ok.load(),
                     compute_failed.load(), geometry_ok.load(), geometry_failed.load(),
                     geometry_unsupported.load(), rect_ok.load(), rect_failed.load(), tess_ok.load(),
                     tess_failed.load(), tess_unsupported.load(), shader_failed.load(),
                     no_spirv.load(), skipped_geometry.load(),
-                    skipped_quad.load(), skipped_aux_fragment.load());
+                    skipped_quad.load(), skipped_aux_fragment.load(), waiting, queued);
     }
 };
 

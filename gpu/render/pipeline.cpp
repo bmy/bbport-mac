@@ -18,6 +18,7 @@
 #include "render/pipeline_cache.h"
 #include "vulkan/instance.h"
 #include "vulkan/shader_module.h"
+#include "metal/vk_metal_shadow.h" // bbport (macOS): no-ops elsewhere
 
 namespace Vulkan {
 
@@ -255,6 +256,9 @@ ComputePipeline::ComputePipeline(const Instance& instance, Scheduler& scheduler,
                                                                               pipeline_ci),
                              preloading, "compute");
     SetObjectName(instance.GetDevice(), *pipeline, "Compute Pipeline {}", debug_name);
+    if (MetalShadow::Enabled()) { // bbport (macOS): docs/MACOS_METAL_RENDERER.md, stage 2
+        MetalShadow::Compute(compute_key, module, *pipeline);
+    }
 }
 
 ComputePipeline::~ComputePipeline() = default;
@@ -583,6 +587,32 @@ GraphicsPipeline::GraphicsPipeline(
     pipeline = CheckPipeline(device.createGraphicsPipelineUnique(pipeline_cache, pipeline_ci),
                              preloading, "graphics");
     SetObjectName(device, *pipeline, "Graphics Pipeline {}", debug_name);
+    if (MetalShadow::Enabled()) { // bbport (macOS): docs/MACOS_METAL_RENDERER.md, stage 2
+        // The fetch shader's attributes in key.vertex_buffer_formats' order (GetVertexInputs).
+        boost::container::static_vector<MetalShadow::VertexInput, MaxVertexBufferCount> inputs;
+        if (fetch_shader) {
+            using InstanceIdType = Shader::Gcn::VertexAttribute::InstanceIdType;
+            const auto& vs = runtime_infos[u32(Shader::SwStage::Vertex)].sw.vs;
+            for (const auto& attrib : fetch_shader->attributes) {
+                const auto step_rate = attrib.GetStepRate();
+                inputs.push_back({
+                    .location = attrib.semantic,
+                    .per_instance = step_rate != InstanceIdType::None,
+                    .divisor = step_rate == InstanceIdType::OverStepRate0   ? vs.step_rate_0
+                               : step_rate == InstanceIdType::OverStepRate1 ? vs.step_rate_1
+                                                                            : 1,
+                });
+            }
+        }
+        std::array<bool, MaxShaderStages> has_stage{};
+        for (u32 i = 0; i < MaxShaderStages; ++i) {
+            has_stage[i] = infos[i] != nullptr;
+        }
+        const bool aux_fragment = !infos[u32(Shader::SwStage::Fragment)] && !sdata.fragment.empty();
+        MetalShadow::Graphics(key, modules, has_stage, inputs,
+                              std::span{attachments.data(), key.num_color_attachments},
+                              aux_fragment, *pipeline);
+    }
 }
 
 GraphicsPipeline::~GraphicsPipeline() = default;

@@ -213,6 +213,33 @@ if (APPLE)
     target_link_libraries(bbgpu PRIVATE "-framework Metal" "-framework Foundation"
                                         "-framework CoreFoundation")
 endif()
+# bbport: the Metal command path's shader translation and pipeline states (metal/mtl_*, stage 2:
+# the shadow build, BB_METAL_SHADOW=1), in the native GPU process only, with SPIRV-Cross from
+# setup_deps.sh (BB_ARCH=arm64). Without SPIRV-Cross, or in any other build, BB_METAL_BACKEND
+# stays undefined and the hooks are no-ops (metal/vk_metal_shadow.h).
+if (APPLE AND (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64" OR
+               CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$"))
+    find_package(spirv_cross_core CONFIG QUIET)
+    find_package(spirv_cross_glsl CONFIG QUIET)
+    find_package(spirv_cross_msl CONFIG QUIET)
+    find_path(SPIRV_CROSS_INCLUDE_DIR spirv_cross/spirv_msl.hpp)
+    if (spirv_cross_core_FOUND AND spirv_cross_glsl_FOUND AND spirv_cross_msl_FOUND AND
+        SPIRV_CROSS_INCLUDE_DIR)
+        set(BB_METAL_OBJCXX_SOURCES metal/mtl_device.mm metal/mtl_geometry.mm
+            metal/mtl_pso_cache.mm metal/mtl_shader.mm metal/mtl_shadow.mm
+            metal/mtl_tessellation.mm metal/vk_to_mtl.mm)
+        target_sources(bbgpu PRIVATE ${BB_METAL_OBJCXX_SOURCES} metal/mtl_spirv_geometry.cpp
+            metal/mtl_spirv_pervertex.cpp metal/mtl_spirv_rectlist.cpp)
+        set_source_files_properties(${BB_METAL_OBJCXX_SOURCES} PROPERTIES
+                                    COMPILE_OPTIONS "-fobjc-arc")
+        target_include_directories(bbgpu PRIVATE ${SPIRV_CROSS_INCLUDE_DIR})
+        target_link_libraries(bbgpu PRIVATE spirv-cross-msl spirv-cross-glsl spirv-cross-core)
+        target_compile_definitions(bbgpu PRIVATE BB_METAL_BACKEND=1)
+        message(STATUS "Metal command path: SPIRV-Cross found, the shadow build is available")
+    else()
+        message(STATUS "Metal command path: no SPIRV-Cross (BB_ARCH=arm64 setup_deps.sh), off")
+    endif()
+endif()
 # In-game settings menu: Dear ImGui (third_party/imgui, MIT) with its Vulkan backend, and an
 # embedded Cyrillic font (third_party/fonts).
 target_sources(bbgpu PRIVATE third_party/imgui/imgui.cpp third_party/imgui/imgui_draw.cpp

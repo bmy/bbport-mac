@@ -1,6 +1,6 @@
 # A Metal command path for the macOS port
 
-Branch `macos-native-0.6-metal`. Status (2026-10-25): **stage 1, groundwork**.
+Branch `macos-native-0.6-metal`. Status (2026-10-25): stage 1 passed; **stage 2, the shadow build**.
 
 ## Why
 
@@ -60,7 +60,7 @@ one is upstream 0.6's (`gpu/render`, `gpu/textures`, `gpu/buffers`, ...), with t
 
 ## Stages
 
-1. **Groundwork (now).** Patch 0008: KosmicKrisp exports the device, a memory object's MTLBuffer,
+1. **Groundwork (done).** Patch 0008: KosmicKrisp exports the device, a memory object's MTLBuffer,
    and the MTLTexture of an image, image view or texel buffer view (0007 exported the queue). An
    interop test, `BB_METAL_INTEROP_TEST=1`: at the renderer's start, 32 rounds of a Vulkan clear
    (2048x2048), a Metal 4 copy and render-pass clear on KosmicKrisp's queue, and a Vulkan
@@ -72,8 +72,8 @@ one is upstream 0.6's (`gpu/render`, `gpu/textures`, `gpu/buffers`, ...), with t
    and a VkBuffer's own MTLBuffer and offset (sparse buffers have their own; a buffer on heap
    memory has its own sub-buffer of the heap, aliasing the memory's). They need the validation
    layers off.
-2. **Shaders.** Every pipeline the renderer builds is also built as a Metal pipeline state from
-   the same key and SPIR-V (a shadow build); failures logged. Nothing drawn through it yet.
+2. **Shaders (now).** Every pipeline the renderer builds is also built as a Metal pipeline state
+   from the same key and SPIR-V (a shadow build); failures logged. Nothing drawn through it yet.
 3. **First pixels.** The layer forwards and counts; then the presenter's command buffer in Metal;
    then the whole frame. Checked against KosmicKrisp's picture.
 4. **Speed.** Ordering of guest memory without full barriers, merged render passes, rect lists as
@@ -81,4 +81,34 @@ one is upstream 0.6's (`gpu/render`, `gpu/textures`, `gpu/buffers`, ...), with t
 
 ## Stage 1 results
 
-- Patch 0008 and the interop test: written, compile-checked; waiting for the test run.
+- 2026-10-25, M5 Max, macOS 27.0.1: `Metal interop test: PASS` (32 rounds, about a second at the
+  renderer's start).
+
+## Stage 2: the shadow build
+
+`BB_METAL_SHADOW=1` (native GPU process only). Each game pipeline the renderer creates is built a
+second time as a Metal pipeline state, on the same pipeline-creation thread, right after the
+Vulkan one; the log counts the results (`Metal shadow: N pipelines: ...` at the first and every
+50th) and names the first failures. Nothing draws with them. Off, it costs one branch per
+pipeline and shader module.
+
+- Files, from 78b59f5's `renderer_metal/` with includes and names adapted to 0.6
+  (`AmdGpu` -> `Gcn`, `LiverpoolToVK` -> `GcnToVk`): `gpu/metal/mtl_shader.*` and
+  `mtl_spirv_{rectlist,pervertex,geometry}.*` (SPIR-V to MSL; the rect list, per-vertex and
+  geometry rewrites), `mtl_pso_cache.*` and `vk_to_mtl.*` (pipeline states), `mtl_tessellation.*`,
+  `mtl_geometry.*`, `mtl_shadow.*`, `vk_metal_shadow.h` (the hooks), `mtl_device.*`.
+- Left out: its MoltenVK layer (`mtl_vk_layer.mm`), frame encoding (`mtl_frame.mm`) and the
+  shadow build of the layer's own (host pass) pipelines, which came from that layer. Stage 3
+  brings a layer of its own for KosmicKrisp.
+- Changed: blend states are the Vulkan pipeline's own (our `BlendAttachment`, GCN's differences
+  emulated) instead of a second copy of that logic; vertex inputs come from the fetch shader (with
+  dynamic vertex input the Vulkan pipeline has none); the Metal device is the system default (the
+  same object as KosmicKrisp's on Apple silicon; stage 3 takes the exported one); a reused Vulkan
+  handle drops what an earlier pipeline or module left.
+- Hooks in upstream files: `vulkan/shader_module.cpp` (`CompileSPV`: the module's SPIR-V) and
+  `render/pipeline.cpp` (the compute and graphics constructors, after the Vulkan create), each a
+  guarded block that is a no-op without `BB_METAL_BACKEND`.
+- SPIRV-Cross `vulkan-sdk-1.4.363.0` (f11ba9f0), static, MSL and GLSL back ends only, from
+  `setup_deps.sh` with `BB_ARCH=arm64`. CMake builds the Metal files and defines
+  `BB_METAL_BACKEND` only on arm64 macOS with SPIRV-Cross found; every other build is unchanged.
+- MSL and pipeline caches: the user cache directory (`metal-shadow/`, and per game serial).

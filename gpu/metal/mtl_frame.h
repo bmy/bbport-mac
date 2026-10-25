@@ -53,6 +53,7 @@ VkResult Submit(VkQueue queue, const Batch* batches, uint32_t count, VkFence fen
 // Objects the encoder keeps Metal counterparts for.
 void SamplerCreated(VkSampler sampler, const VkSamplerCreateInfo* info);
 void SamplerDestroyed(VkSampler sampler);
+void ImageViewCreated(VkImageView view, const VkImageViewCreateInfo* info);
 void ImageViewDestroyed(VkImageView view);
 void BufferCreated(VkBuffer buffer, VkDeviceSize size);
 void BufferDestroyed(VkBuffer buffer);

@@ -64,8 +64,8 @@ namespace {
     X(vkCmdWriteTimestamp2) X(vkCmdWriteTimestamp2KHR) X(vkCmdWriteBufferMarkerAMD)                \
     X(vkCmdBeginQuery) X(vkCmdEndQuery) X(vkCmdResetQueryPool) X(vkCmdCopyQueryPoolResults)        \
     X(vkCmdExecuteCommands) X(vkFreeCommandBuffers) X(vkCreateSampler) X(vkDestroySampler)         \
-    X(vkDestroyImageView) X(vkCreateBuffer) X(vkDestroyBuffer) X(vkCreateImage)                    \
-    X(vkDestroyImage) X(vkGetDeviceProcAddr) X(vkGetInstanceProcAddr)
+    X(vkCreateImageView) X(vkDestroyImageView) X(vkCreateBuffer) X(vkDestroyBuffer)                \
+    X(vkCreateImage) X(vkDestroyImage) X(vkGetDeviceProcAddr) X(vkGetInstanceProcAddr)
 
 enum Id : unsigned {
 #define BB_ID(name) Id_##name,
@@ -262,7 +262,8 @@ bool SubmitOwned(VkQueue queue, uint32_t count, const Info* submits, VkFence fen
         const Info& in = submits[s];
         Storage& st = storage[s];
         if constexpr (v2) {
-            st.waits.assign(in.pWaitSemaphoreInfos, in.pWaitSemaphoreInfos + in.waitSemaphoreInfoCount);
+            st.waits.assign(in.pWaitSemaphoreInfos,
+                            in.pWaitSemaphoreInfos + in.waitSemaphoreInfoCount);
             st.signals.assign(in.pSignalSemaphoreInfos,
                               in.pSignalSemaphoreInfos + in.signalSemaphoreInfoCount);
             for (uint32_t i = 0; i < in.commandBufferInfoCount; ++i) {
@@ -282,8 +283,9 @@ bool SubmitOwned(VkQueue queue, uint32_t count, const Info* submits, VkFence fen
                     .value = values && i < values->waitSemaphoreValueCount
                                  ? values->pWaitSemaphoreValues[i]
                                  : 0,
-                    .stageMask = in.pWaitDstStageMask ? VkPipelineStageFlags2(in.pWaitDstStageMask[i])
-                                                      : VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                    .stageMask = in.pWaitDstStageMask
+                                     ? VkPipelineStageFlags2(in.pWaitDstStageMask[i])
+                                     : VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                 });
             }
             for (uint32_t i = 0; i < in.signalSemaphoreCount; ++i) {
@@ -382,7 +384,8 @@ struct Hook<I, R (*)(A...)> {
         return std::string_view{Names[I]}.starts_with("vkCmd") || I == Id_vkBeginCommandBuffer ||
                I == Id_vkEndCommandBuffer || I == Id_vkResetCommandBuffer ||
                I == Id_vkFreeCommandBuffers || I == Id_vkCreateSampler ||
-               I == Id_vkDestroySampler || I == Id_vkDestroyImageView || I == Id_vkCreateBuffer ||
+               I == Id_vkDestroySampler || I == Id_vkCreateImageView ||
+               I == Id_vkDestroyImageView || I == Id_vkCreateBuffer ||
                I == Id_vkDestroyBuffer || I == Id_vkCreateImage || I == Id_vkDestroyImage;
     }
 
@@ -422,6 +425,12 @@ struct Hook<I, R (*)(A...)> {
         } else if constexpr (I == Id_vkDestroySampler) {
             F::SamplerDestroyed(std::get<1>(t));
             return original(args...);
+        } else if constexpr (I == Id_vkCreateImageView) {
+            const R result = original(args...);
+            if (result == VK_SUCCESS) {
+                F::ImageViewCreated(*std::get<3>(t), std::get<1>(t));
+            }
+            return result;
         } else if constexpr (I == Id_vkDestroyImageView) {
             F::ImageViewDestroyed(std::get<1>(t));
             return original(args...);
@@ -512,7 +521,8 @@ struct Hook<I, R (*)(A...)> {
             F::CmdSetFlag(o, S::CullMode, std::get<1>(t));
         } else if constexpr (I == Id_vkCmdSetFrontFace || I == Id_vkCmdSetFrontFaceEXT) {
             F::CmdSetFlag(o, S::FrontFace, std::get<1>(t));
-        } else if constexpr (I == Id_vkCmdSetDepthTestEnable || I == Id_vkCmdSetDepthTestEnableEXT) {
+        } else if constexpr (I == Id_vkCmdSetDepthTestEnable ||
+                             I == Id_vkCmdSetDepthTestEnableEXT) {
             F::CmdSetFlag(o, S::DepthTest, std::get<1>(t));
         } else if constexpr (I == Id_vkCmdSetDepthWriteEnable ||
                              I == Id_vkCmdSetDepthWriteEnableEXT) {
@@ -524,7 +534,8 @@ struct Hook<I, R (*)(A...)> {
             F::CmdSetFlag(o, S::DepthBoundsTest, std::get<1>(t));
         } else if constexpr (I == Id_vkCmdSetDepthBounds) {
             F::CmdSetDepthBounds(o, std::get<1>(t), std::get<2>(t));
-        } else if constexpr (I == Id_vkCmdSetDepthBiasEnable || I == Id_vkCmdSetDepthBiasEnableEXT) {
+        } else if constexpr (I == Id_vkCmdSetDepthBiasEnable ||
+                             I == Id_vkCmdSetDepthBiasEnableEXT) {
             F::CmdSetFlag(o, S::DepthBiasEnable, std::get<1>(t));
         } else if constexpr (I == Id_vkCmdSetDepthBias) {
             F::CmdSetDepthBias(o, std::get<1>(t), std::get<2>(t), std::get<3>(t));

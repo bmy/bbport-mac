@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport (macOS): this port's own chain entries for vkExportMetalObjectsEXT, as KosmicKrisp patch
 // 0008 defines them (tools/macos/kosmickrisp-patches, kk_sync.c): the two definitions must stay
-// the same. Their sType values are outside Khronos' ranges; another driver ignores them (and
-// leaves the outputs as the caller set them).
+// the same. Their sType values decode to an unallocated extension number; another driver ignores
+// them (and leaves the outputs as the caller set them). With the Vulkan validation layers on they
+// may not reach the driver, or reach it with wrapped handles: use them without layers.
 
 #pragma once
 
@@ -23,7 +24,9 @@ enum ViewTextureUse : uint32_t {
     ViewTextureSampled = 0, ///< with the view's swizzle and type
     ViewTextureStorage = 1, ///< for shader writes (cubes as 2D arrays)
     ViewTextureRender = 2,  ///< an attachment: `level` and `slice` go in its descriptor
-    ViewTextureInput = 3,   ///< an input attachment (2D array)
+    /// An input attachment; only for views with attachment usage. When it is the image's own
+    /// texture, the view's level and layer are not in it (and not reported).
+    ViewTextureInput = 3,
 };
 
 /// An image view's texture for one use, with the level and slice an attachment descriptor needs
@@ -32,15 +35,18 @@ struct ExportViewTexture {
     VkStructureType sType = ExportViewTextureType;
     const void* pNext = nullptr;
     VkImageView imageView = VK_NULL_HANDLE;
-    uint32_t plane = 0;
+    uint32_t plane = 0; ///< a plane index (0-2), not an aspect bit as in VkExportMetalTextureInfoEXT
     uint32_t use = ViewTextureSampled;
     MTLTexture_id mtlTexture = nullptr; ///< out
     uint32_t level = 0;                 ///< out
     uint32_t slice = 0;                 ///< out
 };
 
-/// A VkBuffer's own id<MTLBuffer> and the offset of the buffer's start in it (a sparse buffer has
-/// one of its own; others share their memory's).
+/// A VkBuffer's own id<MTLBuffer> and the offset of the buffer's start in it: a sparse buffer's
+/// own (offset 0); a buffer bound to heap memory, its own sub-buffer of the heap at the bind offset
+/// (offset 0; it aliases the memory's heap-wide buffer, so barriers need resource-alias
+/// visibility); a buffer bound to host-imported memory, the memory's buffer (offset: the bind
+/// offset).
 struct ExportBufferObject {
     VkStructureType sType = ExportBufferObjectType;
     const void* pNext = nullptr;

@@ -7,6 +7,7 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 
+#include <atomic>
 #include <cstdio>
 #include <mutex>
 
@@ -15,7 +16,12 @@ namespace BbMetal {
 namespace {
 std::mutex error_mutex;
 std::string feedback_error; ///< a round's command buffer failed on the GPU
+std::atomic<uint32_t> completed{0};
 } // namespace
+
+uint32_t InteropCompleted() {
+    return completed.load(std::memory_order_acquire);
+}
 
 bool InteropTakeError(std::string& error) {
     std::scoped_lock lock{error_mutex};
@@ -58,11 +64,9 @@ bool InteropRound(void* queue_handle, void* texture_handle, void* buffer_handle,
 
             // Read what Vulkan wrote: after the queue's earlier work (consumer barrier).
             id<MTL4ComputeCommandEncoder> copy = [cmd computeCommandEncoder];
-            if (barriers) {
-                [copy barrierAfterQueueStages:MTLStageAll
-                                 beforeStages:MTLStageBlit
-                            visibilityOptions:visible];
-            }
+            [copy barrierAfterQueueStages:MTLStageAll
+                             beforeStages:MTLStageBlit
+                        visibilityOptions:visible];
             [copy copyFromTexture:texture
                            sourceSlice:0
                            sourceLevel:0
@@ -72,11 +76,11 @@ bool InteropRound(void* queue_handle, void* texture_handle, void* buffer_handle,
                      destinationOffset:buffer_offset
                 destinationBytesPerRow:NSUInteger(width) * 4
               destinationBytesPerImage:0]; // one slice of a 2D texture
-            if (barriers) {
-                [copy barrierAfterStages:MTLStageBlit
-                       beforeQueueStages:MTLStageAll
-                       visibilityOptions:visible];
-            }
+            // Also in the negative control: it orders the copy before the clear below, and the
+            // copied buffer before Vulkan's readback.
+            [copy barrierAfterStages:MTLStageBlit
+                   beforeQueueStages:MTLStageAll
+                   visibilityOptions:visible];
             [copy endEncoding];
 
             // Write what Vulkan reads next: before the queue's later work (producer barrier).
@@ -116,6 +120,7 @@ bool InteropRound(void* queue_handle, void* texture_handle, void* buffer_handle,
                   std::scoped_lock lock{error_mutex};
                   feedback_error = text ? text : "unknown error";
               }
+              completed.fetch_add(1, std::memory_order_acq_rel);
             }];
             const id<MTL4CommandBuffer> list[1] = {cmd};
             [queue commit:list count:1 options:options];

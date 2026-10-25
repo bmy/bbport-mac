@@ -3,12 +3,16 @@
 
 #include "metal/metal_interop_test.h"
 
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
+#include <chrono>
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <thread>
 
+#include "core/emulator_settings.h"
 #include "render/scheduler.h"
 #include "vulkan/instance.h"
 
@@ -28,9 +32,11 @@ namespace BbMetal {
 
 namespace {
 
-template <typename... Args>
-void Report(const char* format, Args... args) {
-    std::printf(format, args...);
+__attribute__((format(printf, 1, 2))) void Report(const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    std::vprintf(format, args);
+    va_end(args);
     std::fflush(stdout);
 }
 
@@ -77,10 +83,12 @@ struct Test {
         : instance{instance_}, device{instance_.GetDevice()} {}
 
     ~Test() {
-        if (submitted) {
-            // A failure can leave Vulkan or Metal work on the queue: nothing goes before it ends.
-            std::scoped_lock lock{Vulkan::Scheduler::submit_mutex};
-            (void)instance.GetGraphicsQueue().waitIdle();
+        if (submitted && !QueueIdle()) {
+            // Work still on the GPU after 5 s (a hang): its objects stay allocated rather than go
+            // from under it, and startup goes on.
+            Report("Metal interop test: the queue did not go idle; the test's objects are left "
+                   "allocated\n");
+            return;
         }
         if (view) {
             device.destroyImageView(view);
@@ -181,6 +189,27 @@ struct Test {
         return pool && fence && view;
     }
 
+    /// Everything submitted so far has finished: a fenced empty submission after it, waited for
+    /// at most 5 s (without holding the submission lock while waiting).
+    bool QueueIdle() {
+        const auto marker = device.createFence({});
+        if (marker.result != vk::Result::eSuccess) {
+            return false;
+        }
+        bool done = false;
+        {
+            std::scoped_lock lock{Vulkan::Scheduler::submit_mutex};
+            done = instance.GetGraphicsQueue().submit(vk::SubmitInfo{}, marker.value) ==
+                   vk::Result::eSuccess;
+        }
+        done = done && device.waitForFences(marker.value, true, 5'000'000'000ull) ==
+                           vk::Result::eSuccess;
+        if (done) {
+            device.destroyFence(marker.value);
+        }
+        return done;
+    }
+
     vk::CommandBuffer Begin() {
         const auto buffers = device.allocateCommandBuffers(
             {.commandPool = pool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = 1});
@@ -223,6 +252,11 @@ void RunInteropTestIfAsked(const Vulkan::Instance& instance) {
     // 2: a negative control. The Metal side has no barriers of its own; a FAIL then shows the
     // test can catch work out of order (a PASS says only that it ran in order anyway).
     const bool barriers = env[0] == '1';
+    if (EmulatorSettings.IsVkValidationEnabled()) {
+        // This port's own export entries (patch 0008) need the layers off (an unknown sType).
+        Report("Metal interop test: skipped (the Vulkan validation layers are on)\n");
+        return;
+    }
     Test test{instance};
     std::string error;
     if (!test.Create(error)) {
@@ -260,10 +294,25 @@ void RunInteropTestIfAsked(const Vulkan::Instance& instance) {
                                       .imageView = static_cast<VkImageView>(test.view),
                                       .use = ViewTextureSampled};
     test.Export(reinterpret_cast<VkBaseOutStructure*>(&sampled_texture));
-    if (!queue || !texture || !buffer) {
-        Report("Metal interop test: FAIL (the driver exported queue %p, texture %p, buffer %p: "
-                    "KosmicKrisp without the port's patches 0007 and 0008?)\n",
-                    queue, texture, buffer);
+    if (!queue || !texture || !buffer || !buffer_object.mtlBuffer) {
+        Report("Metal interop test: FAIL (the driver exported queue %p, texture %p, buffer %p, "
+               "buffer object %p: KosmicKrisp without the port's patches 0007 and 0008?)\n",
+               queue, texture, buffer, reinterpret_cast<void*>(buffer_object.mtlBuffer));
+        return;
+    }
+    // The exports as KosmicKrisp makes them: the heap-backed test buffer has a sub-buffer of its
+    // own at offset 0 (aliasing the memory's heap-wide buffer); a view with the image's format
+    // renders into the image's own texture at level 0, slice 0.
+    if (buffer_object.mtlBuffer == buffer_info.mtlBuffer || buffer_object.offset != 0 ||
+        render_texture.mtlTexture != texture_info.mtlTexture || render_texture.level != 0 ||
+        render_texture.slice != 0 || !sampled_texture.mtlTexture) {
+        Report("Metal interop test: FAIL (this port's exports: buffer object %p at %llu (the "
+               "memory's %p), the view's render texture %p at level %u slice %u (the image's %p), "
+               "sampled %p)\n",
+               reinterpret_cast<void*>(buffer_object.mtlBuffer),
+               (unsigned long long)buffer_object.offset, reinterpret_cast<void*>(buffer),
+               reinterpret_cast<void*>(render_texture.mtlTexture), render_texture.level,
+               render_texture.slice, texture, reinterpret_cast<void*>(sampled_texture.mtlTexture));
         return;
     }
     const auto* data = static_cast<const uint8_t*>(test.readback_info.pMappedData);
@@ -278,6 +327,10 @@ void RunInteropTestIfAsked(const Vulkan::Instance& instance) {
             // is serialised with the renderer's own.
             std::scoped_lock lock{Vulkan::Scheduler::submit_mutex};
             vk::CommandBuffer first = test.Begin();
+            if (!first) {
+                Report("Metal interop test: FAIL (round %u: no command buffer)\n", round);
+                return;
+            }
             const vk::ImageMemoryBarrier2 to_transfer{
                 .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
                 .srcAccessMask = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
@@ -297,12 +350,18 @@ void RunInteropTestIfAsked(const Vulkan::Instance& instance) {
                 Report("Metal interop test: FAIL (round %u: the first Vulkan submission)\n", round);
                 return;
             }
-            if (!InteropRound(queue, texture, buffer, test.metal_info.offset, Size, Size, after,
-                              barriers, error)) {
+            // The copy goes into the test buffer through its own MTLBuffer (this port's buffer
+            // export, patch 0008), so that export is tested by use.
+            if (!InteropRound(queue, texture, buffer_object.mtlBuffer, buffer_object.offset, Size,
+                              Size, after, barriers, error)) {
                 Report("Metal interop test: FAIL (round %u: %s)\n", round, error.c_str());
                 return;
             }
             vk::CommandBuffer second = test.Begin();
+            if (!second) {
+                Report("Metal interop test: FAIL (round %u: no command buffer)\n", round);
+                return;
+            }
             Test::Barrier(second);
             const vk::BufferImageCopy image_copy{
                 .imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
@@ -327,6 +386,17 @@ void RunInteropTestIfAsked(const Vulkan::Instance& instance) {
             Report("Metal interop test: FAIL (round %u: the GPU did not finish in 5 s)\n", round);
             return;
         }
+        // The command buffer's feedback comes on a thread of Metal's own, not with the fence:
+        // wait for this round's before reading it.
+        for (int i = 0; i < 1000 && InteropCompleted() < round + 1; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        if (InteropCompleted() < round + 1) {
+            Report("Metal interop test: FAIL (round %u: no feedback for the Metal command buffer "
+                   "1 s after the GPU finished)\n",
+                   round);
+            return;
+        }
         if (InteropTakeError(error)) {
             Report("Metal interop test: FAIL (round %u: the Metal command buffer failed: %s)\n",
                    round, error.c_str());
@@ -346,23 +416,19 @@ void RunInteropTestIfAsked(const Vulkan::Instance& instance) {
                         round,
                         image_bad >= 0 ? "Vulkan did not see Metal's clear"
                                        : "Metal did not see Vulkan's clear",
-                        at, px[0], px[1], px[2], px[3], Byte(want, 0), Byte(want, 1),
-                        Byte(want, 2), Byte(want, 3));
+                        at, unsigned(px[0]), unsigned(px[1]), unsigned(px[2]), unsigned(px[3]),
+                        unsigned(Byte(want, 0)), unsigned(Byte(want, 1)), unsigned(Byte(want, 2)),
+                        unsigned(Byte(want, 3)));
             return;
         }
         ++passed;
     }
-    const bool exports_ok = buffer_object.mtlBuffer == buffer_info.mtlBuffer &&
-                            buffer_object.offset == test.metal_info.offset &&
-                            render_texture.mtlTexture && render_texture.level == 0 &&
-                            render_texture.slice == 0 && sampled_texture.mtlTexture;
     Report("Metal interop test: PASS (%u rounds of a %ux%u image%s: Metal on KosmicKrisp's queue "
            "read each Vulkan write before it, and Vulkan read each Metal write after it; KosmicKrisp "
            "orders its own work before ours itself, so the first direction does not test our "
-           "barriers). This port's exports: %s\n",
-           passed, Size, Size, barriers ? "" : ", Metal barriers off (a negative control)",
-           exports_ok ? "as expected"
-                      : "NOT as expected (buffer object, or the view's render or sampled texture)");
+           "barriers; this port's exports as expected)\n",
+           passed, Size, Size,
+           barriers ? "" : ", the render pass's barriers off (a negative control)");
 }
 
 #else

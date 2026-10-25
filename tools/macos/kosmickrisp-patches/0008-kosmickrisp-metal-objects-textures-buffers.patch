@@ -13,7 +13,7 @@
  
  #include "vk_semaphore.h"
  #include "vulkan/vulkan_metal.h"
-@@ -112,16 +117,146 @@ const struct vk_sync_type kk_sync_type = {
+@@ -112,16 +117,154 @@ const struct vk_sync_type kk_sync_type = {
  };
  
  #ifdef VK_USE_PLATFORM_METAL_EXT
@@ -22,12 +22,20 @@
 - * driver (MetalFX) wait for and signal Vulkan timelines on the GPU, or run in the queue's own
 - * order. Other export requests are left unfilled (null). */
 +/* bbport: two chain entries of this port's own for vkExportMetalObjectsEXT (the renderer has the
-+ * same definitions, gpu/metal/kk_exports.h; the sType values are outside Khronos' ranges).
++ * same definitions, gpu/metal/kk_exports.h; their sType values decode to an unallocated
++ * extension number).
 + * - VkExportMetalViewTextureBBPORT: an image view's texture for one use, with the level and slice
 + *   an attachment descriptor needs for its render texture (0 when the texture already points at
 + *   them).
 + * - VkExportMetalBufferObjectBBPORT: a VkBuffer's own id<MTLBuffer> and the offset of the buffer's
-+ *   start in it (sparse buffers have one of their own; others share their memory's). */
++ *   start in it: a sparse buffer's own (offset 0); a buffer bound to heap memory, its own
++ *   sub-buffer of the heap at the bind offset (offset 0; it aliases the memory's heap-wide buffer);
++ *   a buffer bound to host-imported memory, the memory's buffer (offset: the bind offset).
++ * `plane` here is a plane index (0-2), not an aspect bit as in VkExportMetalTextureInfoEXT. The
++ * input texture exists only for views with attachment usage; when it is the image's own texture,
++ * the view's level and layer are not in it (as for KosmicKrisp's own descriptors), and `level` and
++ * `slice` are reported for RENDER only. With the validation layers on, these entries may not reach
++ * the driver (an unknown sType), or reach it with wrapped handles: use them without layers. */
 +#define VK_STRUCTURE_TYPE_EXPORT_METAL_VIEW_TEXTURE_BBPORT ((VkStructureType)0x62627601)
 +#define VK_STRUCTURE_TYPE_EXPORT_METAL_BUFFER_OBJECT_BBPORT ((VkStructureType)0x62627602)
 +enum {

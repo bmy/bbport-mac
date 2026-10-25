@@ -5,7 +5,9 @@
 // image, 32 rounds); the log says whether each side saw the other's writes (PASS) or where it did
 // not (FAIL). KosmicKrisp ends its own encoders with a full barrier, so Vulkan-before-Metal holds
 // whatever our barriers do; Metal-before-Vulkan rests on ours. BB_METAL_INTEROP_TEST=2: a
-// negative control without our barriers (a FAIL there shows the test can catch disorder).
+// negative control without the render pass's barriers (a FAIL there shows the test can catch
+// disorder; a PASS, only that the GPU ran it in order anyway). Skipped with the validation layers
+// on (this port's export entries need them off).
 
 #pragma once
 

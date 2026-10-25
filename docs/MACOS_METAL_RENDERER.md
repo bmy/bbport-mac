@@ -69,7 +69,9 @@ one is upstream 0.6's (`gpu/render`, `gpu/textures`, `gpu/buffers`, ...), with t
    Vulkan) and queue order; `BB_METAL_INTEROP_TEST=2` runs without our barriers as a negative
    control. Patch 0008 also has two chain entries of this port's own (`gpu/metal/kk_exports.h`):
    an image view's texture for one use (sampled, storage, render with its level and slice, input)
-   and a VkBuffer's own MTLBuffer and offset (sparse buffers have their own).
+   and a VkBuffer's own MTLBuffer and offset (sparse buffers have their own; a buffer on heap
+   memory has its own sub-buffer of the heap, aliasing the memory's). They need the validation
+   layers off.
 2. **Shaders.** Every pipeline the renderer builds is also built as a Metal pipeline state from
    the same key and SPIR-V (a shadow build); failures logged. Nothing drawn through it yet.
 3. **First pixels.** The layer forwards and counts; then the presenter's command buffer in Metal;

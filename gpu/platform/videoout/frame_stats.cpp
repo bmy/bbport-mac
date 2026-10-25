@@ -225,10 +225,12 @@ void OnFlipStats() {
                     static_cast<unsigned long long>(subs - last_subs), (user_us - last_user) / 1e3,
                     (sys_us - last_sys) / 1e3, static_cast<unsigned long long>(invol - last_invol),
                     static_cast<unsigned long long>(vol - last_vol));
-        std::printf("       %llu draws with the game's tessellation, %llu rect/quad-list draws "
-                    "(drawn as patches)\n",
-                    static_cast<unsigned long long>(tess_draws - last_tess_draws),
-                    static_cast<unsigned long long>(patch_draws - last_patch_draws));
+        if (tess_draws != last_tess_draws || patch_draws != last_patch_draws) {
+            std::printf("       %llu draws with the game's tessellation, %llu rect/quad-list "
+                        "draws (drawn as patches; counted when recorded)\n",
+                        static_cast<unsigned long long>(tess_draws - last_tess_draws),
+                        static_cast<unsigned long long>(patch_draws - last_patch_draws));
+        }
     }
     last_tess_draws = tess_draws;
     last_patch_draws = patch_draws;

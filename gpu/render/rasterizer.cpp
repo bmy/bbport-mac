@@ -297,12 +297,16 @@ bool CountTessellation(const Vulkan::GraphicsPipeline* pipeline) {
     {
         std::scoped_lock lock{seen_mutex};
         if (seen.size() < 4096 && seen.insert(pipeline).second) {
-            std::printf("GPU: a pipeline with the game's tessellation drawn (%zu so far; stages "
-                        "%#llx %#llx %#llx %#llx, %u control points)\n",
-                        seen.size(), (unsigned long long)key.stage_hashes[0],
-                        (unsigned long long)key.stage_hashes[1],
-                        (unsigned long long)key.stage_hashes[2],
-                        (unsigned long long)key.stage_hashes[3], key.patch_control_points);
+            std::printf("GPU: a pipeline with the game's tessellation drawn (%zu so far; vertex "
+                        "%#llx, hull %#llx, domain %#llx, pixel %#llx, geometry %#llx, %u control "
+                        "points)\n",
+                        seen.size(),
+                        (unsigned long long)key.stage_hashes[u32(Shader::SwStage::Vertex)],
+                        (unsigned long long)key.stage_hashes[u32(Shader::SwStage::TessellationControl)],
+                        (unsigned long long)key.stage_hashes[u32(Shader::SwStage::TessellationEval)],
+                        (unsigned long long)key.stage_hashes[u32(Shader::SwStage::Fragment)],
+                        (unsigned long long)key.stage_hashes[u32(Shader::SwStage::Geometry)],
+                        key.patch_control_points);
             std::fflush(stdout);
         }
     }
@@ -313,6 +317,8 @@ bool CountTessellation(const Vulkan::GraphicsPipeline* pipeline) {
 
 void Rasterizer::Draw(bool is_indexed, u32 index_offset, const PreparedDraw* prepared) {
     BB_SECTION(ADraw);
+    static const bool skip_note = SkipTessDraws(); // says so at the first draw of the run
+    (void)skip_note;
     BbStats::draws.fetch_add(1, std::memory_order_relaxed);
 
     // bbport: with the draw pipeline this thread only selects the pipeline and hands the draw

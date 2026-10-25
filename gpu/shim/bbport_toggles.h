@@ -102,6 +102,10 @@ inline bool Experiment(std::uint64_t bit) {
 } // namespace BbToggle
 
 namespace BbStats {
+/// Draws recorded with the game's own tessellation (hull and domain programs), and rect and quad
+/// lists, which are drawn as patches through generated tessellation shaders (KosmicKrisp emulates
+/// tessellation on Metal). Frame stats and stall reports.
+inline std::atomic<std::uint64_t> tess_draws{0}, patch_list_draws{0};
 /// Guest writes caught by page protection, and pages currently left unprotected as hot.
 inline std::atomic<std::uint64_t> tracker_faults{0};
 /// Writes the GPU side heard of from the writers (libc copies over watched pages, no write tracking).

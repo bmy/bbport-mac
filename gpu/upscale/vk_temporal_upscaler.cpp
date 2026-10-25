@@ -467,6 +467,13 @@ bool TemporalUpscaler::OnFrameStart() {
     if (changed) jitter_index = 0;
     applied_preset = preset;
     applied_output = output;
+    if (applied_upscaler != upscaler) {
+        // The overlay's upscaler name is this setting: the log says when it changed.
+        static const auto start = std::chrono::steady_clock::now();
+        std::printf("Upscaler: now %s (%.0f s after the first frame)\n",
+                    BbSettings::UpscalerName(upscaler),
+                    std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+    }
     applied_upscaler = upscaler;
     last_active = active;
     last_jitter = jitter_on;

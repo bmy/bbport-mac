@@ -192,6 +192,8 @@ void OnFlipStats() {
                           BbStats::t_image_create.load(), BbStats::t_refresh.load(),
                           BbStats::t_staging.load(), BbStats::t_host_wait.load()};
     static u64 last_draws, last_dispatches, last_subs, last_sys, last_user, last_invol, last_vol;
+    static u64 last_tess_draws, last_patch_draws;
+    const u64 tess_draws = BbStats::tess_draws.load(), patch_draws = BbStats::patch_list_draws.load();
     const u64 draws = BbStats::draws.load(), dispatches = BbStats::dispatches.load(),
               subs = BbStats::submissions.load(), sys_us = BbStats::gpu_sys_us.load(),
               user_us = BbStats::gpu_user_us.load(), invol = BbStats::gpu_invol_switches.load(),
@@ -223,7 +225,13 @@ void OnFlipStats() {
                     static_cast<unsigned long long>(subs - last_subs), (user_us - last_user) / 1e3,
                     (sys_us - last_sys) / 1e3, static_cast<unsigned long long>(invol - last_invol),
                     static_cast<unsigned long long>(vol - last_vol));
+        std::printf("       %llu draws with the game's tessellation, %llu rect/quad-list draws "
+                    "(drawn as patches)\n",
+                    static_cast<unsigned long long>(tess_draws - last_tess_draws),
+                    static_cast<unsigned long long>(patch_draws - last_patch_draws));
     }
+    last_tess_draws = tess_draws;
+    last_patch_draws = patch_draws;
     if (frame_ms > 40.0 && last_gpu_ns != 0) {
         std::printf("       ms in: resident %.1f, protect %.1f, image create %.1f, "
                     "image refresh %.1f, staging %.1f, waiting for host copies %.1f\n",
@@ -386,6 +394,18 @@ void OnFlipStats() {
                     BbStats::tick_wait_ns.exchange(0) / (window * 1e7),
                     frames ? double(BbStats::reduced_draws.exchange(0)) / frames : 0.0,
                     frames ? double(BbStats::scene_draws.exchange(0)) / frames : 0.0);
+        {
+            static u64 window_tess = 0, window_patch = 0;
+            const u64 tess = BbStats::tess_draws.load(), patch = BbStats::patch_list_draws.load();
+            if (frames && (tess != window_tess || patch != window_patch)) {
+                std::printf("Tessellation: %.1f draws/frame with the game's tessellation, %.1f "
+                            "rect/quad-list draws/frame (drawn as patches)\n",
+                            double(tess - window_tess) / frames,
+                            double(patch - window_patch) / frames);
+            }
+            window_tess = tess;
+            window_patch = patch;
+        }
         BbMem::FaultSites::Report();
         if (const u64 notes = BbStats::cpu_write_notes.exchange(0)) {
             std::printf("Write notices: %.0f/s, %.2f MB/s (libc copies over pages the GPU side "

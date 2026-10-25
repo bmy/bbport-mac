@@ -263,6 +263,54 @@ std::pair<u32, u32> GetDrawOffsets(
 }
 } // namespace
 
+namespace {
+
+/// BB_SKIP_TESS_DRAWS=1 (a test): draws with the game's own tessellation are not recorded, to
+/// tell whether they are what makes the GPU slow (they are missing from the picture meanwhile).
+bool SkipTessDraws() {
+    static const bool skip = [] {
+        const char* env = std::getenv("BB_SKIP_TESS_DRAWS");
+        const bool on = env && env[0] == '1';
+        if (on) {
+            std::printf("GPU: draws with the game's tessellation are skipped (BB_SKIP_TESS_DRAWS=1, "
+                        "a test: they are missing from the picture)\n");
+        }
+        return on;
+    }();
+    return skip;
+}
+
+/// Counts a recorded draw by kind; true when it is to be skipped (BB_SKIP_TESS_DRAWS). The first
+/// draw with each pipeline that uses the game's tessellation is logged with its stages.
+bool CountTessellation(const Vulkan::GraphicsPipeline* pipeline) {
+    const auto& key = pipeline->GetGraphicsKey();
+    if (key.stage_hashes[u32(Shader::SwStage::TessellationControl)] == 0) {
+        if (key.prim_type == Gcn::PrimitiveType::RectList ||
+            key.prim_type == Gcn::PrimitiveType::QuadList) {
+            BbStats::patch_list_draws.fetch_add(1, std::memory_order_relaxed);
+        }
+        return false;
+    }
+    BbStats::tess_draws.fetch_add(1, std::memory_order_relaxed);
+    static std::mutex seen_mutex;
+    static std::set<const Vulkan::GraphicsPipeline*> seen;
+    {
+        std::scoped_lock lock{seen_mutex};
+        if (seen.size() < 4096 && seen.insert(pipeline).second) {
+            std::printf("GPU: a pipeline with the game's tessellation drawn (%zu so far; stages "
+                        "%#llx %#llx %#llx %#llx, %u control points)\n",
+                        seen.size(), (unsigned long long)key.stage_hashes[0],
+                        (unsigned long long)key.stage_hashes[1],
+                        (unsigned long long)key.stage_hashes[2],
+                        (unsigned long long)key.stage_hashes[3], key.patch_control_points);
+            std::fflush(stdout);
+        }
+    }
+    return SkipTessDraws();
+}
+
+} // namespace
+
 void Rasterizer::Draw(bool is_indexed, u32 index_offset, const PreparedDraw* prepared) {
     BB_SECTION(ADraw);
     BbStats::draws.fetch_add(1, std::memory_order_relaxed);
@@ -347,6 +395,9 @@ static void NoteCrumbReads(Breadcrumbs::Crumb& crumb, const GraphicsPipeline* pi
 void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw* used_prepared,
                             bool is_indexed, u32 index_offset) {
     BB_SECTION(DrawRecord);
+    if (CountTessellation(pipeline)) {
+        return; // BB_SKIP_TESS_DRAWS (a test)
+    }
     buffer_cache.NewPacket();
     if (DrawPipe::OnStageB()) {
         FrameCapture::Poll();
@@ -900,6 +951,9 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
 
 void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_indexed,
                                     const IndirectDraw& indirect) {
+    if (CountTessellation(pipeline)) {
+        return; // BB_SKIP_TESS_DRAWS (a test)
+    }
     buffer_cache.NewPacket();
     if (DrawPipe::OnStageB()) {
         FrameCapture::Poll();

@@ -132,6 +132,28 @@ void CmdDrawIndirectCount(Owned& o, VkBuffer buffer, VkDeviceSize offset, VkBuff
 void CmdDispatch(Owned& o, uint32_t x, uint32_t y, uint32_t z);
 void CmdDispatchIndirect(Owned& o, VkBuffer buffer, VkDeviceSize offset);
 
+// Transfers, outside render passes: in Metal where they can be (BB_METAL_TRANSFERS=0: never),
+// else to KosmicKrisp.
+void CmdCopyBuffer(Owned& o, VkBuffer src, VkBuffer dst, uint32_t count,
+                   const VkBufferCopy* regions);
+void CmdFillBuffer(Owned& o, VkBuffer dst, VkDeviceSize offset, VkDeviceSize size, uint32_t data);
+void CmdUpdateBuffer(Owned& o, VkBuffer dst, VkDeviceSize offset, VkDeviceSize size,
+                     const void* data);
+void CmdCopyBufferToImage(Owned& o, VkBuffer src, VkImage dst, VkImageLayout layout,
+                          uint32_t count, const VkBufferImageCopy* regions);
+void CmdCopyImageToBuffer(Owned& o, VkImage src, VkImageLayout layout, VkBuffer dst,
+                          uint32_t count, const VkBufferImageCopy* regions);
+void CmdCopyImage(Owned& o, VkImage src, VkImageLayout src_layout, VkImage dst,
+                  VkImageLayout dst_layout, uint32_t count, const VkImageCopy* regions);
+void CmdClearColorImage(Owned& o, VkImage image, VkImageLayout layout,
+                        const VkClearColorValue* color, uint32_t count,
+                        const VkImageSubresourceRange* ranges);
+void CmdClearDepthStencilImage(Owned& o, VkImage image, VkImageLayout layout,
+                               const VkClearDepthStencilValue* value, uint32_t count,
+                               const VkImageSubresourceRange* ranges);
+void ImageCreated(VkImage image, const VkImageCreateInfo* info);
+void ImageDestroyed(VkImage image);
+
 /// A command the encoder does not encode in Metal and that needs no state: it goes to a
 /// KosmicKrisp segment as it is (`record` calls the driver's function on the segment's command
 /// buffer). `in_pass`: it may stand inside a render pass (vkCmdClearAttachments, timestamps,

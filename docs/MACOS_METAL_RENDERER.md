@@ -191,3 +191,15 @@ the validation layers off.
   cannot be used in frame mode (its commands would reach KosmicKrisp's copy of the command
   buffer, which is never submitted: choose MetalFX or FSR 3.1). Occlusion queries and
   tessellated draws keep their passes on KosmicKrisp.
+
+## Stage 4a: transfers in Metal
+
+In frame mode, copies (buffer, buffer to image, image to buffer, image to image), fills, updates
+and image clears are encoded in Metal (the compute encoder's copies; clears as render passes of
+their own) instead of switching to a KosmicKrisp segment for each. They go to KosmicKrisp still
+when: an occlusion query is active; the image is not one made with `vkCreateImage` (swapchain
+images) or its Metal pixel format is not exactly its Vulkan format's; the aspect or format has
+no Metal copy (a size table as Wooloomooloo2's); an image copy between different formats or
+sample counts, or of depth/stencil; a clear of a texture without render target usage or not 2D;
+a fill whose four bytes differ. `BB_METAL_TRANSFERS=0` sends them all to KosmicKrisp (for
+bisecting a broken picture). Blits and resolves still go to KosmicKrisp.

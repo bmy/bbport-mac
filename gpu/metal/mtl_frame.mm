@@ -59,7 +59,8 @@ void Note(const std::string& what) {
 }
 
 struct Counters {
-    std::atomic<unsigned long long> metal_draws{}, metal_dispatches{}, fallback_draws{},
+    std::atomic<unsigned long long> metal_draws{}, metal_dispatches{}, metal_transfers{},
+        fallback_draws{},
         fallback_dispatches{}, fallback_other{}, metal_buffers{}, kk_segments{}, switches{},
         gpu_errors{};
 };
@@ -98,7 +99,9 @@ struct Driver {
     X(vkCmdSetLineWidth) X(vkCmdSetAttachmentFeedbackLoopEnableEXT) X(vkCmdPipelineBarrier2)       \
     X(vkCmdDraw) X(vkCmdDrawIndexed) X(vkCmdDrawIndirect) X(vkCmdDrawIndexedIndirect)              \
     X(vkCmdDrawIndirectCount) X(vkCmdDrawIndexedIndirectCount) X(vkCmdDispatch)                    \
-    X(vkCmdDispatchIndirect)
+    X(vkCmdDispatchIndirect) X(vkCmdCopyBuffer) X(vkCmdFillBuffer) X(vkCmdUpdateBuffer)            \
+    X(vkCmdCopyImage) X(vkCmdCopyBufferToImage) X(vkCmdCopyImageToBuffer)                          \
+    X(vkCmdClearColorImage) X(vkCmdClearDepthStencilImage)
 #define BB_MEMBER(name) PFN_##name name{};
     BB_DRIVER_FUNCTIONS(BB_MEMBER)
 #undef BB_MEMBER
@@ -150,6 +153,12 @@ struct Sampler {
     id<MTLSamplerState> state; ///< nil: no Metal equivalent (draws with it fall back)
 };
 std::unordered_map<VkSampler, Sampler> samplers;
+/// What an image was made as (vkCreateImage): copies need the Vulkan format.
+struct ImageInfo {
+    VkFormat format{};
+    VkImageType type{};
+};
+std::unordered_map<VkImage, ImageInfo> images;
 
 void Export(VkBaseOutStructure* what) {
     VkExportMetalObjectsInfoEXT info{
@@ -817,7 +826,9 @@ id<MTL4ComputeCommandEncoder> ComputeEncoder(Owned& o) {
 }
 
 /// `size` bytes of scratch memory: their GPU address, `out` their CPU address.
-MTLGPUAddress Scratch(Owned& o, const void* data, u64 bytes) {
+/// `bytes` of `data` in scratch memory: their GPU address (`buffer`/`offset`: where they are).
+MTLGPUAddress Scratch(Owned& o, const void* data, u64 bytes, id<MTLBuffer>* buffer = nullptr,
+                      u64* offset = nullptr) {
     const u64 size = std::max<u64>((bytes + 255) & ~u64(255), 256);
     if (!o.scratch || o.scratch_used + size > ScratchChunk) {
         o.scratch = TakeScratch();
@@ -831,6 +842,10 @@ MTLGPUAddress Scratch(Owned& o, const void* data, u64 bytes) {
     const u64 at = o.scratch_used;
     o.scratch_used += size;
     std::memcpy(static_cast<u8*>(o.scratch.contents) + at, data, bytes);
+    if (buffer) {
+        *buffer = o.scratch;
+        *offset = at;
+    }
     return o.scratch.gpuAddress + at;
 }
 
@@ -2329,6 +2344,444 @@ void CmdDispatchIndirect(Owned& o, VkBuffer buffer, VkDeviceSize offset) {
     }
 }
 
+// ---- Transfers (outside render passes) ----
+
+namespace {
+
+/// BB_METAL_TRANSFERS=0: copies, fills, updates and clears go to KosmicKrisp (for bisecting).
+bool TransfersInMetal() {
+    static const bool on = [] {
+        const char* env = std::getenv("BB_METAL_TRANSFERS");
+        return !(env && env[0] == '0');
+    }();
+    return on;
+}
+
+/// A transfer for KosmicKrisp: why, counted.
+VkCommandBuffer KkTransfer(Owned& o, const char* why) {
+    Reason(why);
+    ++counters.fallback_other;
+    return Kk(o, false);
+}
+
+/// The image's texture (exported at each use: a swapchain image's changes per frame) and its
+/// Vulkan format; nil when its Metal pixel format is not exactly the Vulkan one (the bytes of a
+/// buffer copy would not line up).
+id<MTLTexture> ImageTexture(VkImage image, VkFormat& format) {
+    {
+        std::scoped_lock lock{objects_mutex};
+        const auto it = images.find(image);
+        if (it == images.end()) {
+            return nil;
+        }
+        format = it->second.format;
+    }
+    VkExportMetalTextureInfoEXT out{
+        .sType = VK_STRUCTURE_TYPE_EXPORT_METAL_TEXTURE_INFO_EXT,
+        .image = image,
+        .plane = VK_IMAGE_ASPECT_PLANE_0_BIT,
+    };
+    Export(reinterpret_cast<VkBaseOutStructure*>(&out));
+    id<MTLTexture> texture = out.mtlTexture;
+    if (!texture || Metal::VkToMtl::PixelFormat(vk::Format(format)) != u32(texture.pixelFormat)) {
+        return nil;
+    }
+    return texture;
+}
+
+/// Bytes and block size of a pixel format, for buffer <-> texture copies.
+struct Block {
+    u32 bytes{}, width{1}, height{1};
+};
+Block BlockOf(MTLPixelFormat f) {
+    switch (f) {
+    case MTLPixelFormatA8Unorm: case MTLPixelFormatR8Unorm: case MTLPixelFormatR8Snorm:
+    case MTLPixelFormatR8Uint: case MTLPixelFormatR8Sint: case MTLPixelFormatStencil8:
+        return {1};
+    case MTLPixelFormatR16Unorm: case MTLPixelFormatR16Snorm: case MTLPixelFormatR16Uint:
+    case MTLPixelFormatR16Sint: case MTLPixelFormatR16Float: case MTLPixelFormatRG8Unorm:
+    case MTLPixelFormatRG8Snorm: case MTLPixelFormatRG8Uint: case MTLPixelFormatRG8Sint:
+    case MTLPixelFormatB5G6R5Unorm: case MTLPixelFormatA1BGR5Unorm: case MTLPixelFormatABGR4Unorm:
+    case MTLPixelFormatBGR5A1Unorm: case MTLPixelFormatDepth16Unorm:
+        return {2};
+    case MTLPixelFormatR32Uint: case MTLPixelFormatR32Sint: case MTLPixelFormatR32Float:
+    case MTLPixelFormatRG16Unorm: case MTLPixelFormatRG16Snorm: case MTLPixelFormatRG16Uint:
+    case MTLPixelFormatRG16Sint: case MTLPixelFormatRG16Float: case MTLPixelFormatRGBA8Unorm:
+    case MTLPixelFormatRGBA8Unorm_sRGB: case MTLPixelFormatRGBA8Snorm: case MTLPixelFormatRGBA8Uint:
+    case MTLPixelFormatRGBA8Sint: case MTLPixelFormatBGRA8Unorm: case MTLPixelFormatBGRA8Unorm_sRGB:
+    case MTLPixelFormatRGB10A2Unorm: case MTLPixelFormatRGB10A2Uint: case MTLPixelFormatRG11B10Float:
+    case MTLPixelFormatRGB9E5Float: case MTLPixelFormatBGR10A2Unorm: case MTLPixelFormatDepth32Float:
+        return {4};
+    case MTLPixelFormatRG32Uint: case MTLPixelFormatRG32Sint: case MTLPixelFormatRG32Float:
+    case MTLPixelFormatRGBA16Unorm: case MTLPixelFormatRGBA16Snorm: case MTLPixelFormatRGBA16Uint:
+    case MTLPixelFormatRGBA16Sint: case MTLPixelFormatRGBA16Float:
+        return {8};
+    case MTLPixelFormatRGBA32Uint: case MTLPixelFormatRGBA32Sint: case MTLPixelFormatRGBA32Float:
+        return {16};
+    case MTLPixelFormatBC1_RGBA: case MTLPixelFormatBC1_RGBA_sRGB: case MTLPixelFormatBC4_RUnorm:
+    case MTLPixelFormatBC4_RSnorm:
+        return {8, 4, 4};
+    case MTLPixelFormatBC2_RGBA: case MTLPixelFormatBC2_RGBA_sRGB: case MTLPixelFormatBC3_RGBA:
+    case MTLPixelFormatBC3_RGBA_sRGB: case MTLPixelFormatBC5_RGUnorm: case MTLPixelFormatBC5_RGSnorm:
+    case MTLPixelFormatBC6H_RGBFloat: case MTLPixelFormatBC6H_RGBUfloat: case MTLPixelFormatBC7_RGBAUnorm:
+    case MTLPixelFormatBC7_RGBAUnorm_sRGB:
+        return {16, 4, 4};
+    default:
+        return {}; // Depth32Float_Stencil8 and the rest: per aspect below, or not in Metal
+    }
+}
+
+/// The format and blit option of one aspect of `texture` for a buffer copy; false if Metal has
+/// no such copy.
+bool AspectCopy(id<MTLTexture> texture, VkImageAspectFlags aspect, MTLPixelFormat& format,
+                MTLBlitOption& option) {
+    format = texture.pixelFormat;
+    option = MTLBlitOptionNone;
+    const bool combined = format == MTLPixelFormatDepth32Float_Stencil8;
+    if (aspect == VK_IMAGE_ASPECT_STENCIL_BIT) {
+        if (!combined && format != MTLPixelFormatStencil8) {
+            return false;
+        }
+        option = combined ? MTLBlitOptionStencilFromDepthStencil : MTLBlitOptionNone;
+        format = MTLPixelFormatStencil8;
+    } else if (aspect == VK_IMAGE_ASPECT_DEPTH_BIT) {
+        if (combined) {
+            option = MTLBlitOptionDepthFromDepthStencil;
+            format = MTLPixelFormatDepth32Float;
+        } else if (format != MTLPixelFormatDepth32Float && format != MTLPixelFormatDepth16Unorm) {
+            return false;
+        }
+    } else if (aspect != VK_IMAGE_ASPECT_COLOR_BIT) {
+        return false;
+    }
+    return BlockOf(format).bytes != 0;
+}
+
+/// Buffer <-> image copies in Metal; false (nothing encoded) when one region cannot be.
+bool BufferImageCopies(Owned& o, VkBuffer buffer, VkImage image, u32 count,
+                       const VkBufferImageCopy* regions, bool to_image) {
+    const BufferRef ref = ResolveBuffer(buffer);
+    VkFormat format{};
+    id<MTLTexture> texture = ImageTexture(image, format);
+    if (!ref.buffer || !texture) {
+        return false;
+    }
+    struct Plan {
+        MTLBlitOption option;
+        u64 bytes_per_row, bytes_per_image;
+    };
+    std::vector<Plan> plans(count);
+    for (u32 i = 0; i < count; ++i) {
+        const VkBufferImageCopy& r = regions[i];
+        MTLPixelFormat aspect_format;
+        if (!AspectCopy(texture, r.imageSubresource.aspectMask, aspect_format, plans[i].option)) {
+            return false;
+        }
+        const Block block = BlockOf(aspect_format);
+        const u32 row_texels = r.bufferRowLength ? r.bufferRowLength : r.imageExtent.width;
+        const u32 image_rows = r.bufferImageHeight ? r.bufferImageHeight : r.imageExtent.height;
+        plans[i].bytes_per_row = u64((row_texels + block.width - 1) / block.width) * block.bytes;
+        plans[i].bytes_per_image =
+            plans[i].bytes_per_row * ((image_rows + block.height - 1) / block.height);
+        if (texture.textureType == MTLTextureType3D && r.imageSubresource.layerCount != 1) {
+            return false;
+        }
+    }
+    id<MTL4ComputeCommandEncoder> enc = ComputeEncoder(o);
+    for (u32 i = 0; i < count; ++i) {
+        const VkBufferImageCopy& r = regions[i];
+        const MTLSize size = MTLSizeMake(r.imageExtent.width, r.imageExtent.height,
+                                         r.imageExtent.depth);
+        const MTLOrigin origin = MTLOriginMake(r.imageOffset.x, r.imageOffset.y, r.imageOffset.z);
+        for (u32 layer = 0; layer < r.imageSubresource.layerCount; ++layer) {
+            const u64 offset =
+                ref.offset + r.bufferOffset + u64(layer) * plans[i].bytes_per_image;
+            const u32 slice = r.imageSubresource.baseArrayLayer + layer;
+            // Metal wants bytesPerImage 0 for a 2D copy of one image.
+            const u64 per_image = texture.textureType == MTLTextureType3D ? plans[i].bytes_per_image
+                                                                          : 0;
+            if (to_image) {
+                [enc copyFromBuffer:ref.buffer
+                           sourceOffset:offset
+                      sourceBytesPerRow:plans[i].bytes_per_row
+                    sourceBytesPerImage:per_image
+                             sourceSize:size
+                              toTexture:texture
+                       destinationSlice:slice
+                       destinationLevel:r.imageSubresource.mipLevel
+                      destinationOrigin:origin
+                                options:plans[i].option];
+            } else {
+                [enc copyFromTexture:texture
+                                 sourceSlice:slice
+                                 sourceLevel:r.imageSubresource.mipLevel
+                                sourceOrigin:origin
+                                  sourceSize:size
+                                    toBuffer:ref.buffer
+                           destinationOffset:offset
+                      destinationBytesPerRow:plans[i].bytes_per_row
+                    destinationBytesPerImage:per_image
+                                     options:plans[i].option];
+            }
+        }
+    }
+    return true;
+}
+
+/// Each (level, layer) of the ranges, `each(aspects, level, layer)`.
+template <typename Each>
+void ForEachSubresource(id<MTLTexture> texture, u32 count, const VkImageSubresourceRange* ranges,
+                        Each&& each) {
+    for (u32 r = 0; r < count; ++r) {
+        const auto& range = ranges[r];
+        const u32 levels = range.levelCount == VK_REMAINING_MIP_LEVELS
+                               ? u32(texture.mipmapLevelCount) - range.baseMipLevel
+                               : range.levelCount;
+        const u32 slices = texture.textureType == MTLTextureTypeCube ? 6 : 1;
+        const u32 all_layers = u32(texture.arrayLength) * slices;
+        const u32 layers = range.layerCount == VK_REMAINING_ARRAY_LAYERS
+                               ? all_layers - range.baseArrayLayer
+                               : range.layerCount;
+        for (u32 level = 0; level < levels; ++level) {
+            for (u32 layer = 0; layer < layers; ++layer) {
+                each(range.aspectMask, range.baseMipLevel + level, range.baseArrayLayer + layer);
+            }
+        }
+    }
+}
+
+/// A texture a clear can render into: 2D kinds with render target usage.
+bool ClearableTexture(id<MTLTexture> t) {
+    const MTLTextureType type = t.textureType;
+    return (t.usage & MTLTextureUsageRenderTarget) &&
+           (type == MTLTextureType2D || type == MTLTextureType2DArray ||
+            type == MTLTextureTypeCube || type == MTLTextureTypeCubeArray ||
+            type == MTLTextureType2DMultisample);
+}
+
+/// A render pass of its own that only clears (ending what is open).
+void ClearPass(Owned& o, MTL4RenderPassDescriptor* rp) {
+    id<MTL4CommandBuffer> cmd = Metal(o);
+    EndEncoders(o);
+    id<MTL4RenderCommandEncoder> enc = [cmd renderCommandEncoderWithDescriptor:rp];
+    [enc barrierAfterStages:MTLStageAll beforeQueueStages:MTLStageAll visibilityOptions:Visible];
+    [enc endEncoding];
+}
+
+} // namespace
+
+void CmdCopyBuffer(Owned& o, VkBuffer src, VkBuffer dst, uint32_t count,
+                   const VkBufferCopy* regions) {
+    @autoreleasepool {
+        const BufferRef s = ResolveBuffer(src), d = ResolveBuffer(dst);
+        if (!TransfersInMetal() || o.active_queries || !s.buffer || !d.buffer) {
+            if (VkCommandBuffer cb = KkTransfer(o, "a buffer copy KosmicKrisp makes")) {
+                driver.vkCmdCopyBuffer(cb, src, dst, count, regions);
+            }
+            return;
+        }
+        id<MTL4ComputeCommandEncoder> enc = ComputeEncoder(o);
+        for (u32 i = 0; i < count; ++i) {
+            [enc copyFromBuffer:s.buffer
+                     sourceOffset:s.offset + regions[i].srcOffset
+                         toBuffer:d.buffer
+                destinationOffset:d.offset + regions[i].dstOffset
+                             size:regions[i].size];
+        }
+        ++counters.metal_transfers;
+    }
+}
+
+void CmdFillBuffer(Owned& o, VkBuffer dst, VkDeviceSize offset, VkDeviceSize size, uint32_t data) {
+    @autoreleasepool {
+        const BufferRef d = ResolveBuffer(dst);
+        const u8 byte = u8(data);
+        if (!TransfersInMetal() || o.active_queries || !d.buffer ||
+            data != u32(byte) * 0x01010101u) {
+            if (VkCommandBuffer cb = KkTransfer(o, "a fill KosmicKrisp makes")) {
+                driver.vkCmdFillBuffer(cb, dst, offset, size, data);
+            }
+            return;
+        }
+        // VK_WHOLE_SIZE: to the end of the buffer, in whole words.
+        const u64 length = size == VK_WHOLE_SIZE ? (d.size > offset ? (d.size - offset) & ~u64(3) : 0)
+                                                 : size;
+        if (length) {
+            [ComputeEncoder(o) fillBuffer:d.buffer range:NSMakeRange(d.offset + offset, length)
+                                    value:byte];
+        }
+        ++counters.metal_transfers;
+    }
+}
+
+void CmdUpdateBuffer(Owned& o, VkBuffer dst, VkDeviceSize offset, VkDeviceSize size,
+                     const void* data) {
+    @autoreleasepool {
+        const BufferRef d = ResolveBuffer(dst);
+        if (!TransfersInMetal() || o.active_queries || !d.buffer) {
+            if (VkCommandBuffer cb = KkTransfer(o, "an update KosmicKrisp makes")) {
+                driver.vkCmdUpdateBuffer(cb, dst, offset, size, data);
+            }
+            return;
+        }
+        id<MTLBuffer> staging;
+        u64 at = 0;
+        Scratch(o, data, size, &staging, &at);
+        [ComputeEncoder(o) copyFromBuffer:staging
+                             sourceOffset:at
+                                 toBuffer:d.buffer
+                        destinationOffset:d.offset + offset
+                                     size:size];
+        ++counters.metal_transfers;
+    }
+}
+
+void CmdCopyBufferToImage(Owned& o, VkBuffer src, VkImage dst, VkImageLayout layout,
+                          uint32_t count, const VkBufferImageCopy* regions) {
+    @autoreleasepool {
+        if (!TransfersInMetal() || o.active_queries ||
+            !BufferImageCopies(o, src, dst, count, regions, true)) {
+            if (VkCommandBuffer cb = KkTransfer(o, "a buffer to image copy KosmicKrisp makes")) {
+                driver.vkCmdCopyBufferToImage(cb, src, dst, layout, count, regions);
+            }
+            return;
+        }
+        ++counters.metal_transfers;
+    }
+}
+
+void CmdCopyImageToBuffer(Owned& o, VkImage src, VkImageLayout layout, VkBuffer dst,
+                          uint32_t count, const VkBufferImageCopy* regions) {
+    @autoreleasepool {
+        if (!TransfersInMetal() || o.active_queries ||
+            !BufferImageCopies(o, dst, src, count, regions, false)) {
+            if (VkCommandBuffer cb = KkTransfer(o, "an image to buffer copy KosmicKrisp makes")) {
+                driver.vkCmdCopyImageToBuffer(cb, src, layout, dst, count, regions);
+            }
+            return;
+        }
+        ++counters.metal_transfers;
+    }
+}
+
+void CmdCopyImage(Owned& o, VkImage src, VkImageLayout src_layout, VkImage dst,
+                  VkImageLayout dst_layout, uint32_t count, const VkImageCopy* regions) {
+    @autoreleasepool {
+        VkFormat src_format{}, dst_format{};
+        id<MTLTexture> s = TransfersInMetal() && !o.active_queries ? ImageTexture(src, src_format)
+                                                                   : nil;
+        id<MTLTexture> d = s ? ImageTexture(dst, dst_format) : nil;
+        bool metal = s && d && s.pixelFormat == d.pixelFormat && s.sampleCount == d.sampleCount &&
+                     BlockOf(s.pixelFormat).bytes != 0;
+        for (u32 i = 0; metal && i < count; ++i) {
+            metal = regions[i].srcSubresource.aspectMask == VK_IMAGE_ASPECT_COLOR_BIT &&
+                    (s.textureType != MTLTextureType3D || regions[i].srcSubresource.layerCount == 1);
+        }
+        if (!metal) {
+            if (VkCommandBuffer cb = KkTransfer(o, "an image copy KosmicKrisp makes")) {
+                driver.vkCmdCopyImage(cb, src, src_layout, dst, dst_layout, count, regions);
+            }
+            return;
+        }
+        id<MTL4ComputeCommandEncoder> enc = ComputeEncoder(o);
+        for (u32 i = 0; i < count; ++i) {
+            const VkImageCopy& r = regions[i];
+            for (u32 layer = 0; layer < r.srcSubresource.layerCount; ++layer) {
+                [enc copyFromTexture:s
+                          sourceSlice:r.srcSubresource.baseArrayLayer + layer
+                          sourceLevel:r.srcSubresource.mipLevel
+                         sourceOrigin:MTLOriginMake(r.srcOffset.x, r.srcOffset.y, r.srcOffset.z)
+                           sourceSize:MTLSizeMake(r.extent.width, r.extent.height, r.extent.depth)
+                            toTexture:d
+                     destinationSlice:r.dstSubresource.baseArrayLayer + layer
+                     destinationLevel:r.dstSubresource.mipLevel
+                    destinationOrigin:MTLOriginMake(r.dstOffset.x, r.dstOffset.y, r.dstOffset.z)];
+            }
+        }
+        ++counters.metal_transfers;
+    }
+}
+
+void CmdClearColorImage(Owned& o, VkImage image, VkImageLayout layout,
+                        const VkClearColorValue* color, uint32_t count,
+                        const VkImageSubresourceRange* ranges) {
+    @autoreleasepool {
+        VkFormat format{};
+        id<MTLTexture> texture =
+            TransfersInMetal() && !o.active_queries ? ImageTexture(image, format) : nil;
+        if (!texture || !ClearableTexture(texture) ||
+            Metal::VkToMtl::IsDepthPixelFormat(u32(texture.pixelFormat))) {
+            if (VkCommandBuffer cb = KkTransfer(o, "a color clear KosmicKrisp makes")) {
+                driver.vkCmdClearColorImage(cb, image, layout, color, count, ranges);
+            }
+            return;
+        }
+        ForEachSubresource(texture, count, ranges, [&](u32, u32 level, u32 layer) {
+            MTL4RenderPassDescriptor* rp = [MTL4RenderPassDescriptor new];
+            rp.colorAttachments[0].texture = texture;
+            rp.colorAttachments[0].level = level;
+            rp.colorAttachments[0].slice = layer;
+            rp.colorAttachments[0].loadAction = MTLLoadActionClear;
+            rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+            rp.colorAttachments[0].clearColor = ClearColor(*color, texture.pixelFormat);
+            ClearPass(o, rp);
+        });
+        ++counters.metal_transfers;
+    }
+}
+
+void CmdClearDepthStencilImage(Owned& o, VkImage image, VkImageLayout layout,
+                               const VkClearDepthStencilValue* value, uint32_t count,
+                               const VkImageSubresourceRange* ranges) {
+    @autoreleasepool {
+        VkFormat format{};
+        id<MTLTexture> texture =
+            TransfersInMetal() && !o.active_queries ? ImageTexture(image, format) : nil;
+        if (!texture || !ClearableTexture(texture) ||
+            !Metal::VkToMtl::IsDepthPixelFormat(u32(texture.pixelFormat))) {
+            if (VkCommandBuffer cb = KkTransfer(o, "a depth clear KosmicKrisp makes")) {
+                driver.vkCmdClearDepthStencilImage(cb, image, layout, value, count, ranges);
+            }
+            return;
+        }
+        const bool has_stencil = Metal::VkToMtl::HasStencilPixelFormat(u32(texture.pixelFormat));
+        ForEachSubresource(texture, count, ranges, [&](u32 aspects, u32 level, u32 layer) {
+            MTL4RenderPassDescriptor* rp = [MTL4RenderPassDescriptor new];
+            // The aspect not cleared is loaded and stored as it is.
+            rp.depthAttachment.texture = texture;
+            rp.depthAttachment.level = level;
+            rp.depthAttachment.slice = layer;
+            rp.depthAttachment.loadAction = (aspects & VK_IMAGE_ASPECT_DEPTH_BIT)
+                                                ? MTLLoadActionClear
+                                                : MTLLoadActionLoad;
+            rp.depthAttachment.storeAction = MTLStoreActionStore;
+            rp.depthAttachment.clearDepth = value->depth;
+            if (has_stencil) {
+                rp.stencilAttachment.texture = texture;
+                rp.stencilAttachment.level = level;
+                rp.stencilAttachment.slice = layer;
+                rp.stencilAttachment.loadAction = (aspects & VK_IMAGE_ASPECT_STENCIL_BIT)
+                                                      ? MTLLoadActionClear
+                                                      : MTLLoadActionLoad;
+                rp.stencilAttachment.storeAction = MTLStoreActionStore;
+                rp.stencilAttachment.clearStencil = value->stencil;
+            }
+            ClearPass(o, rp);
+        });
+        ++counters.metal_transfers;
+    }
+}
+
+void ImageCreated(VkImage image, const VkImageCreateInfo* info) {
+    std::scoped_lock lock{objects_mutex};
+    images[image] = {info->format, info->imageType};
+}
+
+void ImageDestroyed(VkImage image) {
+    std::scoped_lock lock{objects_mutex};
+    images.erase(image);
+}
+
 VkCommandBuffer FallbackBuffer(Owned& o, const char* name, bool in_pass) {
     @autoreleasepool {
         (void)name;
@@ -2370,10 +2823,12 @@ void Report(double seconds) {
             top += item;
         }
     }
-    Print("Metal frame: per second %.0f draws and %.0f dispatches in Metal, %.0f draws and %.0f "
-          "dispatches and %.0f other commands to KosmicKrisp (%.0f segments, %.0f switches); "
-          "%.0f Metal command buffers; GPU errors so far %llu; to KosmicKrisp because: %s\n",
+    Print("Metal frame: per second %.0f draws, %.0f dispatches and %.0f transfers in Metal, %.0f "
+          "draws and %.0f dispatches and %.0f other commands to KosmicKrisp (%.0f segments, %.0f "
+          "switches); %.0f Metal command buffers; GPU errors so far %llu; to KosmicKrisp "
+          "because: %s\n",
           take(counters.metal_draws), take(counters.metal_dispatches),
+          take(counters.metal_transfers),
           take(counters.fallback_draws), take(counters.fallback_dispatches),
           take(counters.fallback_other), take(counters.kk_segments), take(counters.switches),
           take(counters.metal_buffers), counters.gpu_errors.load(), top.empty() ? "-" : top.c_str());

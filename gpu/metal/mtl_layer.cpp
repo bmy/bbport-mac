@@ -64,8 +64,8 @@ namespace {
     X(vkCmdWriteTimestamp2) X(vkCmdWriteTimestamp2KHR) X(vkCmdWriteBufferMarkerAMD)                \
     X(vkCmdBeginQuery) X(vkCmdEndQuery) X(vkCmdResetQueryPool) X(vkCmdCopyQueryPoolResults)        \
     X(vkCmdExecuteCommands) X(vkFreeCommandBuffers) X(vkCreateSampler) X(vkDestroySampler)         \
-    X(vkDestroyImageView) X(vkCreateBuffer) X(vkDestroyBuffer) X(vkGetDeviceProcAddr)             \
-    X(vkGetInstanceProcAddr)
+    X(vkDestroyImageView) X(vkCreateBuffer) X(vkDestroyBuffer) X(vkCreateImage)                    \
+    X(vkDestroyImage) X(vkGetDeviceProcAddr) X(vkGetInstanceProcAddr)
 
 enum Id : unsigned {
 #define BB_ID(name) Id_##name,
@@ -383,7 +383,7 @@ struct Hook<I, R (*)(A...)> {
                I == Id_vkEndCommandBuffer || I == Id_vkResetCommandBuffer ||
                I == Id_vkFreeCommandBuffers || I == Id_vkCreateSampler ||
                I == Id_vkDestroySampler || I == Id_vkDestroyImageView || I == Id_vkCreateBuffer ||
-               I == Id_vkDestroyBuffer;
+               I == Id_vkDestroyBuffer || I == Id_vkCreateImage || I == Id_vkDestroyImage;
     }
 
     static R Frame(A... args) {
@@ -431,6 +431,15 @@ struct Hook<I, R (*)(A...)> {
                 F::BufferCreated(*std::get<3>(t), std::get<1>(t)->size);
             }
             return result;
+        } else if constexpr (I == Id_vkCreateImage) {
+            const R result = original(args...);
+            if (result == VK_SUCCESS) {
+                F::ImageCreated(*std::get<3>(t), std::get<1>(t));
+            }
+            return result;
+        } else if constexpr (I == Id_vkDestroyImage) {
+            F::ImageDestroyed(std::get<1>(t));
+            return original(args...);
         } else if constexpr (I == Id_vkDestroyBuffer) {
             F::BufferDestroyed(std::get<1>(t));
             return original(args...);
@@ -564,6 +573,23 @@ struct Hook<I, R (*)(A...)> {
             F::CmdDispatch(o, std::get<1>(t), std::get<2>(t), std::get<3>(t));
         } else if constexpr (I == Id_vkCmdDispatchIndirect) {
             F::CmdDispatchIndirect(o, std::get<1>(t), std::get<2>(t));
+        } else if constexpr (I == Id_vkCmdCopyBuffer) {
+            std::apply([&](VkCommandBuffer, auto... a) { F::CmdCopyBuffer(o, a...); }, t);
+        } else if constexpr (I == Id_vkCmdFillBuffer) {
+            std::apply([&](VkCommandBuffer, auto... a) { F::CmdFillBuffer(o, a...); }, t);
+        } else if constexpr (I == Id_vkCmdUpdateBuffer) {
+            std::apply([&](VkCommandBuffer, auto... a) { F::CmdUpdateBuffer(o, a...); }, t);
+        } else if constexpr (I == Id_vkCmdCopyBufferToImage) {
+            std::apply([&](VkCommandBuffer, auto... a) { F::CmdCopyBufferToImage(o, a...); }, t);
+        } else if constexpr (I == Id_vkCmdCopyImageToBuffer) {
+            std::apply([&](VkCommandBuffer, auto... a) { F::CmdCopyImageToBuffer(o, a...); }, t);
+        } else if constexpr (I == Id_vkCmdCopyImage) {
+            std::apply([&](VkCommandBuffer, auto... a) { F::CmdCopyImage(o, a...); }, t);
+        } else if constexpr (I == Id_vkCmdClearColorImage) {
+            std::apply([&](VkCommandBuffer, auto... a) { F::CmdClearColorImage(o, a...); }, t);
+        } else if constexpr (I == Id_vkCmdClearDepthStencilImage) {
+            std::apply([&](VkCommandBuffer, auto... a) { F::CmdClearDepthStencilImage(o, a...); },
+                       t);
         } else if constexpr (I == Id_vkCmdBeginDebugUtilsLabelEXT ||
                              I == Id_vkCmdEndDebugUtilsLabelEXT ||
                              I == Id_vkCmdInsertDebugUtilsLabelEXT) {

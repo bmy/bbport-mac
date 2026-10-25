@@ -37,6 +37,27 @@ KosmicKrisp's command encoding, the shape that port's own design took first
 
 Upstream merges then touch the layer only where upstream changes the commands it records.
 
+## Where the code comes from
+
+Wooloomooloo2/bloodborne_mac_port at **78b59f5** (2026-10-16 04:42), the last commit with the
+command layer, before that port removed it and rewrote its renderer the same day: about 11,000
+lines in `gpu/shadps4/video_core/renderer_metal/` (the layer `mtl_vk_layer.mm`, frame encoding
+`mtl_frame.mm`, shader translation `mtl_shader.mm` and `mtl_spirv_*`, pipeline states
+`mtl_pso_cache.mm` and `vk_to_mtl.mm`, geometry and tessellation `mtl_geometry.mm`,
+`mtl_tessellation.mm`, the shadow build `mtl_shadow.mm`).
+
+At that commit its Metal path ran level with MoltenVK (96.4 vs 94.5 FPS, 1080p native, M4 Max).
+Its later speed came from what followed: its own ordering of untracked guest buffers, a pipeline
+archive, fewer passes, deferred copies. Most of that can live in the layer too; whatever needs the
+renderer itself is a decision for stage 4.
+
+Differences to work through here: that layer ran on MoltenVK, whose resources Metal tracks, with
+the classic Metal API on MoltenVK's queue. KosmicKrisp's queue is a Metal 4 queue and its resources
+are untracked: the encoders become Metal 4 ones (argument tables, residency sets, barriers from
+the renderer's own Vulkan barriers). Its tree is upstream's older layout (`gpu/shadps4/...`); this
+one is upstream 0.6's (`gpu/render`, `gpu/textures`, `gpu/buffers`, ...), with the same
+`GraphicsPipelineKey` and shader recompiler.
+
 ## Stages
 
 1. **Groundwork (now).** Patch 0008: KosmicKrisp exports the device, a memory object's MTLBuffer,

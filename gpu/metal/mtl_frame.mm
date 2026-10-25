@@ -1908,15 +1908,42 @@ void CmdBindDescriptorSets(Owned& o, VkPipelineBindPoint point, VkPipelineLayout
     for (u32 i = 0; i < count; ++i) {
         o.push_sets.erase((u32(point) << 16) | (first + i));
     }
+    // What is left of a partly covered bind stays (without dynamic offsets: they cannot be
+    // told apart per set; such a bind is dropped whole).
+    std::vector<std::pair<u32, BoundSets>> kept;
     std::erase_if(o.bound_sets, [&](const auto& entry) {
         const auto& [key, b] = entry;
-        if ((key >> 16) != u32(point)) {
-            return false;
+        if ((key >> 16) != u32(point) || b.sets.empty()) {
+            return (key >> 16) == u32(point) && (key & 0xffff) >= first &&
+                   (key & 0xffff) < first + count; // markers inside the new range
         }
         const u32 begin = key & 0xffff;
-        const u32 end = begin + std::max<u32>(1, u32(b.sets.size()));
-        return begin < first + count && first < end;
+        const u32 end = begin + u32(b.sets.size());
+        if (!(begin < first + count && first < end)) {
+            return false;
+        }
+        if (b.dynamic_offsets.empty()) {
+            if (begin < first) {
+                kept.push_back({(u32(point) << 16) | begin,
+                                {b.layout, begin,
+                                 std::vector<VkDescriptorSet>(b.sets.begin(),
+                                                              b.sets.begin() + (first - begin)),
+                                 {}}});
+            }
+            if (end > first + count) {
+                const u32 from = first + count;
+                kept.push_back({(u32(point) << 16) | from,
+                                {b.layout, from,
+                                 std::vector<VkDescriptorSet>(b.sets.begin() + (from - begin),
+                                                              b.sets.end()),
+                                 {}}});
+            }
+        }
+        return true;
     });
+    for (auto& [key, b] : kept) {
+        o.bound_sets[key] = std::move(b);
+    }
     BoundSets b{layout, first, std::vector<VkDescriptorSet>(sets, sets + count),
                 std::vector<u32>(dynamic_offsets, dynamic_offsets + dynamic_count)};
     o.bound_sets[(u32(point) << 16) | first] = std::move(b);

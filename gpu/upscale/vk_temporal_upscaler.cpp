@@ -2500,7 +2500,9 @@ bool TemporalUpscaler::UseFsr4() const {
     const bool supported = selected == BbSettings::UpscalerFsr411
                                ? instance.IsFsr411Supported()
                                : instance.IsFsr4Int8Supported();
-    return BbSettings::IsFsr4(selected) && supported && !fsr4_failed;
+    // bbport (macOS): not in the Metal command path's frame mode (it records around the layer).
+    return BbSettings::IsFsr4(selected) && supported && !fsr4_failed &&
+           !MetalLayer::FrameActive();
 }
 
 bool TemporalUpscaler::RecordFsr4(vk::CommandBuffer cmdbuf, Fsr4Upscaler::Image color,

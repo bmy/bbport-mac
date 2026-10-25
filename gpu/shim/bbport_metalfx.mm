@@ -130,14 +130,11 @@ bool Scaler::Busy() const {
 }
 
 void Scaler::Abandon() {
-    // The command buffers keep their buffers and textures (Metal retains what they use), so only
-    // the wait goes; the Impl itself stays allocated for the handlers' sake.
+    // Legacy command buffers keep their buffers and textures (Metal retains what they use), so
+    // only the wait goes; the Impl itself stays allocated for the handlers' sake. (Worker mode
+    // only: Metal 4 command buffers retain nothing.)
     impl->last = nil;
     (void)impl.release();
-}
-
-bool Scaler::OnQueue() const {
-    return impl->queue4 != nil;
 }
 
 std::unique_ptr<Scaler> Scaler::Create(const Config& config, const Heaps& heaps,
@@ -184,6 +181,16 @@ std::unique_ptr<Scaler> Scaler::Create(const Config& config, const Heaps& heaps,
         MTLTextureUsage usages[4]{};
         if (mtl4_queue) {
             if (@available(macOS 26.0, *)) {
+                id queue = (__bridge id)mtl4_queue;
+                if (![queue respondsToSelector:@selector(commit:count:options:)]) {
+                    error = "the driver's queue is not a Metal 4 queue";
+                    return nullptr;
+                }
+                if (![cls respondsToSelector:@selector(supportsMetal4FX:)] ||
+                    ![cls supportsMetal4FX:device]) {
+                    error = "no Metal 4 MetalFX for this GPU";
+                    return nullptr;
+                }
                 NSError* failure = nil;
                 id<MTL4Compiler> compiler =
                     [device newCompilerWithDescriptor:[[MTL4CompilerDescriptor alloc] init]
@@ -415,10 +422,16 @@ bool Scaler::EncodeOnQueue(const Frame& frame, std::string& error) {
             }
             // A new allocator and command buffer per frame: the feedback handler keeps both until
             // the GPU is done with them (an allocator must not be reset or freed before).
+            id<MTLSharedEvent> signal_event = (__bridge id<MTLSharedEvent>)frame.signal_event;
+            const uint64_t value = frame.signal_value;
             id<MTL4CommandAllocator> allocator = [m.device newCommandAllocator];
             id<MTL4CommandBuffer> cmd = [m.device newCommandBuffer];
             if (!allocator || !cmd) {
                 error = "newCommandAllocator / newCommandBuffer failed";
+                if (signal_event) {
+                    // In queue order, so the timeline never steps back past a later frame.
+                    [queue signalEvent:signal_event value:value];
+                }
                 return false;
             }
             [cmd beginCommandBufferWithAllocator:allocator];
@@ -491,8 +504,6 @@ bool Scaler::EncodeOnQueue(const Frame& frame, std::string& error) {
 
             MTL4CommitOptions* options = [[MTL4CommitOptions alloc] init];
             std::shared_ptr<Impl::Errors> errors = m.errors;
-            id<MTLSharedEvent> signal_event = (__bridge id<MTLSharedEvent>)frame.signal_event;
-            const uint64_t value = frame.signal_value;
             [options addFeedbackHandler:^(id<MTL4CommitFeedback> feedback) {
               (void)allocator; // kept until the GPU is done with the command buffer
               (void)cmd;

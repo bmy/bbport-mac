@@ -168,7 +168,10 @@ private:
     /// BB_METALFX_TEST_STALL=N: the 600th frame of each of the first N MetalFX runs stalls.
     u32 test_stalls_left = 0;
     u32 test_frames = 0;
-    Mode mode = Mode::Sync;
+    std::atomic<Mode> mode{Mode::Sync}; ///< set on the GPU thread; read by the watch thread too
+    /// Queue mode ends for the session (creation failed, or MetalFX's work failed on the
+    /// driver's queue): the worker hand-over takes over. GPU thread.
+    void LeaveQueueMode(const std::string& why);
     std::mutex deferred_mutex;
     std::string deferred_error; ///< a submission-thread MetalFX failure, reported next frame
     /// Events: the scheduler's timeline and MetalFX's own, as id<MTLSharedEvent>.

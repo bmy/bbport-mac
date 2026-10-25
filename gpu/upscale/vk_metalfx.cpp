@@ -198,8 +198,9 @@ void MetalFxUpscaler::SetUpEvents() {
             mode = Mode::Queue;
             watch = std::jthread{[this](std::stop_token stop) { WatchLoop(stop); }};
             std::printf("Upscaler: MetalFX on KosmicKrisp's own queue, in its order "
-                        "(BB_METALFX_EVENTS=3; no stall cutoff: a stall there holds up the "
-                        "whole queue)\n");
+                        "(BB_METALFX_EVENTS=3, a test; no stall cutoff: a stall there holds up "
+                        "the whole queue, and a MetalFX GPU error there may lose the device; "
+                        "after any failure the worker hand-over takes over)\n");
             return;
         }
         std::printf("Upscaler: MetalFX cannot use KosmicKrisp's queue (the driver lacks the "
@@ -370,10 +371,12 @@ void MetalFxUpscaler::WatchLoop(std::stop_token stop) {
                           "; the worker handed Metal frames up to %llu",
                           (unsigned long long)encoded_value.load(std::memory_order_relaxed));
         }
-        std::printf("Upscaler: MetalFX frame %llu: its copy back still waits after %.0f ms "
+        std::printf("Upscaler: MetalFX frame %llu: %s after %.0f ms "
                     "(%s mode). Its input copies are tick %llu; the work timeline is at %llu "
                     "(Metal sees %llu); MetalFX's timeline is at %llu%s\n",
-                    (unsigned long long)oldest.value, waited_ns / 1e6,
+                    (unsigned long long)oldest.value,
+                    mode == Mode::Queue ? "not done" : "its copy back still waits",
+                    waited_ns / 1e6,
                     mode == Mode::Worker ? "worker" : mode == Mode::Queue ? "queue" : "events",
                     (unsigned long long)oldest.copies_tick,
                     (unsigned long long)work->KnownGpuTick(),
@@ -426,6 +429,19 @@ void MetalFxUpscaler::Fail(std::string reason, bool permanent, bool at_run_time)
     fatal |= permanent;
     transient = at_run_time;
     rebuild_after_failure |= at_run_time;
+}
+
+void MetalFxUpscaler::LeaveQueueMode(const std::string& why) {
+    if (mode != Mode::Queue) {
+        return;
+    }
+    std::printf("Upscaler: MetalFX leaves KosmicKrisp's queue for the session (%s): the worker "
+                "hand-over instead\n",
+                why.c_str());
+    mode = Mode::Worker;
+    if (!worker.joinable()) {
+        worker = std::jthread{[this](std::stop_token stop) { WorkerLoop(stop); }};
+    }
 }
 
 bool MetalFxUpscaler::Ready() const {
@@ -562,6 +578,13 @@ bool MetalFxUpscaler::EnsureResources(const Frame& frame) {
     scaler = BbMetalFx::Scaler::Create(
         config, {staging[0].heap, staging[1].heap, staging[2].heap, staging[3].heap}, error,
         mode == Mode::Queue ? driver_queue : nullptr);
+    if (!scaler && mode == Mode::Queue) {
+        // No Metal 4 MetalFX here (the GPU, the OS, the queue): the worker hand-over instead.
+        LeaveQueueMode(error);
+        error.clear();
+        scaler = BbMetalFx::Scaler::Create(
+            config, {staging[0].heap, staging[1].heap, staging[2].heap, staging[3].heap}, error);
+    }
     if (!scaler) {
         Fail(error, true);
         return false;
@@ -636,6 +659,11 @@ bool MetalFxUpscaler::Run(const Frame& frame) {
         if (scaler && scaler->Busy()) {
             Fail("MetalFX's failed frame is still on the GPU", true, true);
             return false;
+        }
+        if (mode == Mode::Queue) {
+            // Its own queue is the driver's here: a new scaler would not get a new one. The
+            // worker hand-over (a queue of its own) from now on, if the device lives on.
+            LeaveQueueMode("its work failed on the driver's queue");
         }
         if (scaler) {
             std::printf("Upscaler: MetalFX gets a new scaler and command queue after its failure "
@@ -804,11 +832,22 @@ bool MetalFxUpscaler::Run(const Frame& frame) {
         }
         SubmitInfo info{};
         info.before_submit.push_back([this, metal] {
+            // Under the submission lock: a slow first encode (pipelines MetalFX builds) holds up
+            // every submission meanwhile, so the log times it.
+            const bool first = first_encode.exchange(false, std::memory_order_relaxed);
+            const auto start = std::chrono::steady_clock::now();
             std::string error;
-            if (!scaler->EncodeOnQueue(metal, error)) {
-                BbMetalFx::SignalEvent(metal.signal_event, metal.signal_value);
+            if (!scaler->EncodeOnQueue(metal, error)) { // it still signals, on the queue
                 std::scoped_lock lock{deferred_mutex};
                 deferred_error = error;
+            }
+            if (first) {
+                std::printf("Upscaler: MetalFX's first frame encoded in %.0f ms (on the driver's "
+                            "queue, under the submission lock)\n",
+                            std::chrono::duration<double, std::milli>(
+                                std::chrono::steady_clock::now() - start)
+                                .count());
+                std::fflush(stdout);
             }
         });
         scheduler.Flush(info);

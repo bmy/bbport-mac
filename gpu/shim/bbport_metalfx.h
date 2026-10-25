@@ -72,7 +72,6 @@ public:
     /// copies) comes first and its later work (the copy back) after, through queue barriers: no
     /// event waits. The caller serialises this with the queue's other commits (submit_mutex).
     bool EncodeOnQueue(const Frame& frame, std::string& error);
-    [[nodiscard]] bool OnQueue() const;
     /// The failure of an earlier asynchronous frame, once.
     bool TakeError(std::string& error);
     /// Until the last frame handed to Metal is done (call from the thread that encodes).

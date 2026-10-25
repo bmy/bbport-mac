@@ -1,0 +1,85 @@
+--- a/src/kosmickrisp/vulkan/kk_sync.c
++++ b/src/kosmickrisp/vulkan/kk_sync.c
+@@ -7,7 +7,11 @@
+ #include "kk_sync.h"
+ 
+ #include "kk_device.h"
++#include "kk_buffer_view.h"
++#include "kk_device_memory.h"
+ #include "kk_entrypoints.h"
++#include "kk_image.h"
++#include "kk_image_view.h"
+ 
+ #include "vk_semaphore.h"
+ #include "vulkan/vulkan_metal.h"
+@@ -112,16 +116,65 @@ const struct vk_sync_type kk_sync_type = {
+ };
+ 
+ #ifdef VK_USE_PLATFORM_METAL_EXT
+-/* bbport: VK_EXT_metal_objects, limited to the MTLSharedEvent of a timeline semaphore (every
+- * KosmicKrisp semaphore is one) and a queue's Metal 4 command queue. Lets Metal work outside the
+- * driver (MetalFX) wait for and signal Vulkan timelines on the GPU, or run in the queue's own
+- * order. Other export requests are left unfilled (null). */
++/* bbport: VK_EXT_metal_objects: the MTLSharedEvent of a timeline semaphore (every KosmicKrisp
++ * semaphore is one), a queue's Metal 4 command queue, the device, a memory object's heap-wide
++ * MTLBuffer, and the MTLTexture of an image, image view or texel buffer view. Lets Metal work
++ * outside the driver (MetalFX, a Metal command path) run in the queue's own order on the driver's
++ * own objects. Other export requests (IOSurfaces) are left unfilled. Metal 4 does not track
++ * hazards: the caller orders its use of these objects against the driver's work itself. */
+ VKAPI_ATTR void VKAPI_CALL
+-kk_ExportMetalObjectsEXT(UNUSED VkDevice device,
++kk_ExportMetalObjectsEXT(VkDevice device,
+                          VkExportMetalObjectsInfoEXT *pMetalObjectsInfo)
+ {
+    for (VkBaseOutStructure *ext = (VkBaseOutStructure *)pMetalObjectsInfo->pNext;
+         ext != NULL; ext = ext->pNext) {
++      if (ext->sType == VK_STRUCTURE_TYPE_EXPORT_METAL_DEVICE_INFO_EXT) {
++         /* bbport: the device's id<MTLDevice>. */
++         VkExportMetalDeviceInfoEXT *info = (VkExportMetalDeviceInfoEXT *)ext;
++         info->mtlDevice = (MTLDevice_id)kk_device_from_handle(device)->mtl_handle;
++         continue;
++      }
++      if (ext->sType == VK_STRUCTURE_TYPE_EXPORT_METAL_BUFFER_INFO_EXT) {
++         /* bbport: the id<MTLBuffer> spanning a memory object's whole MTLHeap (offset 0 is the
++          * memory's offset 0). NULL for memory without one. */
++         VkExportMetalBufferInfoEXT *info = (VkExportMetalBufferInfoEXT *)ext;
++         info->mtlBuffer = NULL;
++         if (info->memory == VK_NULL_HANDLE)
++            continue;
++         VK_FROM_HANDLE(kk_device_memory, mem, info->memory);
++         if (mem->bo != NULL)
++            info->mtlBuffer = (MTLBuffer_id)mem->bo->map;
++         continue;
++      }
++      if (ext->sType == VK_STRUCTURE_TYPE_EXPORT_METAL_TEXTURE_INFO_EXT) {
++         /* bbport: the id<MTLTexture> of an image's plane (as created, before any view), of an
++          * image view (its sampled texture), or of a texel buffer view. Exactly one of image,
++          * imageView and bufferView is set. NULL where KosmicKrisp has none (an image without
++          * memory bound yet). */
++         VkExportMetalTextureInfoEXT *info = (VkExportMetalTextureInfoEXT *)ext;
++         info->mtlTexture = NULL;
++         const uint32_t plane =
++            info->plane == VK_IMAGE_ASPECT_PLANE_1_BIT   ? 1
++            : info->plane == VK_IMAGE_ASPECT_PLANE_2_BIT ? 2
++                                                         : 0;
++         if (info->image != VK_NULL_HANDLE) {
++            VK_FROM_HANDLE(kk_image, image, info->image);
++            if (plane < image->plane_count)
++               info->mtlTexture = (MTLTexture_id)image->planes[plane].mtl_handle;
++         } else if (info->imageView != VK_NULL_HANDLE) {
++            VK_FROM_HANDLE(kk_image_view, view, info->imageView);
++            if (plane < view->plane_count) {
++               info->mtlTexture =
++                  (MTLTexture_id)(view->planes[plane].mtl_handle_sampled
++                                     ? view->planes[plane].mtl_handle_sampled
++                                     : view->planes[plane].mtl_handle_render);
++            }
++         } else if (info->bufferView != VK_NULL_HANDLE) {
++            VK_FROM_HANDLE(kk_buffer_view, view, info->bufferView);
++            info->mtlTexture = (MTLTexture_id)view->mtl_texel_buffer_handle;
++         }
++         continue;
++      }
+       if (ext->sType == VK_STRUCTURE_TYPE_EXPORT_METAL_COMMAND_QUEUE_INFO_EXT) {
+          /* bbport: the queue's id<MTL4CommandQueue> (not an id<MTLCommandQueue>, whatever the
+           * field's type says), so Metal work outside the driver (MetalFX) can be committed to

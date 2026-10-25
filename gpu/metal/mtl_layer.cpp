@@ -64,7 +64,8 @@ namespace {
     X(vkCmdWriteTimestamp2) X(vkCmdWriteTimestamp2KHR) X(vkCmdWriteBufferMarkerAMD)                \
     X(vkCmdBeginQuery) X(vkCmdEndQuery) X(vkCmdResetQueryPool) X(vkCmdCopyQueryPoolResults)        \
     X(vkCmdExecuteCommands) X(vkFreeCommandBuffers) X(vkCreateSampler) X(vkDestroySampler)         \
-    X(vkDestroyImageView) X(vkDestroyBuffer) X(vkGetDeviceProcAddr) X(vkGetInstanceProcAddr)
+    X(vkDestroyImageView) X(vkCreateBuffer) X(vkDestroyBuffer) X(vkGetDeviceProcAddr)             \
+    X(vkGetInstanceProcAddr)
 
 enum Id : unsigned {
 #define BB_ID(name) Id_##name,
@@ -381,7 +382,8 @@ struct Hook<I, R (*)(A...)> {
         return std::string_view{Names[I]}.starts_with("vkCmd") || I == Id_vkBeginCommandBuffer ||
                I == Id_vkEndCommandBuffer || I == Id_vkResetCommandBuffer ||
                I == Id_vkFreeCommandBuffers || I == Id_vkCreateSampler ||
-               I == Id_vkDestroySampler || I == Id_vkDestroyImageView || I == Id_vkDestroyBuffer;
+               I == Id_vkDestroySampler || I == Id_vkDestroyImageView || I == Id_vkCreateBuffer ||
+               I == Id_vkDestroyBuffer;
     }
 
     static R Frame(A... args) {
@@ -392,6 +394,9 @@ struct Hook<I, R (*)(A...)> {
             const VkCommandBufferBeginInfo* info = std::get<1>(t);
             if (result == VK_SUCCESS && !info->pInheritanceInfo) { // secondaries stay the driver's
                 Own(std::get<0>(t));
+            } else {
+                // A handle that was owned before (its pool reset or destroyed): no longer.
+                MetalFrame::Discard(TakeOwned(std::get<0>(t)));
             }
             return result;
         } else if constexpr (I == Id_vkEndCommandBuffer) {
@@ -420,6 +425,12 @@ struct Hook<I, R (*)(A...)> {
         } else if constexpr (I == Id_vkDestroyImageView) {
             F::ImageViewDestroyed(std::get<1>(t));
             return original(args...);
+        } else if constexpr (I == Id_vkCreateBuffer) {
+            const R result = original(args...);
+            if (result == VK_SUCCESS) {
+                F::BufferCreated(*std::get<3>(t), std::get<1>(t)->size);
+            }
+            return result;
         } else if constexpr (I == Id_vkDestroyBuffer) {
             F::BufferDestroyed(std::get<1>(t));
             return original(args...);
@@ -590,6 +601,10 @@ struct Hook<I, R (*)(A...)> {
 };
 
 } // namespace
+
+bool FrameActive() {
+    return frame;
+}
 
 void InstallIfAsked(VkDevice device) {
     const char* trace_env = std::getenv("BB_METAL_TRACE");

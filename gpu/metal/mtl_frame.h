@@ -54,6 +54,7 @@ VkResult Submit(VkQueue queue, const Batch* batches, uint32_t count, VkFence fen
 void SamplerCreated(VkSampler sampler, const VkSamplerCreateInfo* info);
 void SamplerDestroyed(VkSampler sampler);
 void ImageViewDestroyed(VkImageView view);
+void BufferCreated(VkBuffer buffer, VkDeviceSize size);
 void BufferDestroyed(VkBuffer buffer);
 
 // Commands (the layer's names without vk).

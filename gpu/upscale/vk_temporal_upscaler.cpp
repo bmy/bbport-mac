@@ -36,6 +36,7 @@
 #include "vulkan/instance.h"
 #include "render/runtime.h"
 #include "render/scheduler.h"
+#include "metal/mtl_layer.h"
 #include "textures/texture_cache.h"
 
 namespace Vulkan {
@@ -227,8 +228,10 @@ TemporalUpscaler::TemporalUpscaler(const Instance& instance_, Scheduler& schedul
       runtime{runtime_}, camera_motion{camera_motion_}, scene_targets{scene_targets_} {
     // Reject unsupported shaders before allocating resources or recording a frame.
     metalfx = std::make_unique<MetalFxUpscaler>(instance, scheduler);
-    BbSettings::ConfigureUpscalerSupport(instance.IsFsr4Int8Supported(),
-                                         instance.IsFsr411Supported(), metalfx->Supported());
+    // bbport (macOS): no FSR 4 in the Metal command path's frame mode (MetalLayer).
+    const bool fsr4_ok = instance.IsFsr4Int8Supported() && !MetalLayer::FrameActive();
+    BbSettings::ConfigureUpscalerSupport(fsr4_ok, instance.IsFsr411Supported(),
+                                         metalfx->Supported());
 #ifdef __APPLE__
     PublishMetalFxProblem(metalfx->Problem());
 #endif

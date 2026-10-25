@@ -87,7 +87,8 @@ struct Driver {
     X(vkGetSemaphoreCounterValue) X(vkCmdBeginRendering) X(vkCmdEndRendering)                      \
     X(vkCmdBindPipeline) X(vkCmdPushDescriptorSetKHR) X(vkCmdBindDescriptorSets)                   \
     X(vkCmdPushConstants) X(vkCmdBindVertexBuffers2) X(vkCmdBindIndexBuffer)                       \
-    X(vkCmdSetViewportWithCount) X(vkCmdSetScissorWithCount) X(vkCmdSetCullMode)                  \
+    X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCmdSetViewportWithCount)                           \
+    X(vkCmdSetScissorWithCount) X(vkCmdSetCullMode) X(vkCmdPipelineBarrier)                        \
     X(vkCmdSetFrontFace) X(vkCmdSetDepthTestEnable) X(vkCmdSetDepthWriteEnable)                    \
     X(vkCmdSetDepthCompareOp) X(vkCmdSetDepthBoundsTestEnable) X(vkCmdSetDepthBounds)              \
     X(vkCmdSetDepthBiasEnable) X(vkCmdSetDepthBias) X(vkCmdSetStencilTestEnable)                   \
@@ -124,10 +125,12 @@ void MakeResident(id<MTLAllocation> allocation) {
 struct BufferRef {
     id<MTLBuffer> buffer;
     u64 offset{}; ///< where the VkBuffer starts in `buffer`
+    u64 size{};   ///< the VkBuffer's own size (its MTLBuffer can be bigger)
 };
 
 std::mutex objects_mutex;
 std::unordered_map<VkBuffer, BufferRef> buffers;
+std::unordered_map<VkBuffer, u64> buffer_sizes; ///< from vkCreateBuffer
 struct ViewKey {
     VkImageView view;
     u32 use;
@@ -173,6 +176,8 @@ BufferRef ResolveBuffer(VkBuffer buffer) {
     BufferRef ref{out.mtlBuffer, out.offset};
     if (ref.buffer) {
         std::scoped_lock lock{objects_mutex};
+        const auto size = buffer_sizes.find(buffer);
+        ref.size = size != buffer_sizes.end() ? size->second : ref.buffer.length - ref.offset;
         buffers[buffer] = ref;
     }
     return ref;
@@ -260,49 +265,54 @@ struct KkBuffer {
     std::atomic<u64> done_at{0}; ///< the timeline value its submission signals; 0: in use
 };
 
-/// One command pool per recording thread (pools are externally synchronized, recording too).
-struct KkPool {
-    VkCommandPool pool{};
-    std::deque<std::unique_ptr<KkBuffer>> buffers;
+/// Each command buffer has a command pool of its own: pools are externally synchronized, and a
+/// segment is recorded by whichever thread records its owner (that can change between commands),
+/// so no two segments ever share one. Never freed (segments may still be on the GPU at exit).
+std::mutex kk_mutex;
+std::vector<KkBuffer*> kk_buffers;
 
-    KkBuffer* Take() {
-        if (!pool) {
-            const VkCommandPoolCreateInfo info{
-                .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-                .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-                .queueFamilyIndex = 0,
-            };
-            if (driver.vkCreateCommandPool(vk_device, &info, nullptr, &pool) != VK_SUCCESS) {
-                return nullptr;
-            }
-        }
-        u64 completed = 0;
-        driver.vkGetSemaphoreCounterValue(vk_device, kk_timeline, &completed);
-        for (auto& b : buffers) {
+KkBuffer* TakeKk() {
+    u64 completed = 0;
+    driver.vkGetSemaphoreCounterValue(vk_device, kk_timeline, &completed);
+    {
+        std::scoped_lock lock{kk_mutex};
+        for (KkBuffer* b : kk_buffers) {
             const u64 done = b->done_at.load(std::memory_order_acquire);
             if (done && done <= completed) {
+                b->done_at.store(0, std::memory_order_release); // ours now
                 driver.vkResetCommandBuffer(b->cb, 0);
-                b->done_at.store(0, std::memory_order_release);
-                return b.get();
+                return b;
             }
         }
-        auto b = std::make_unique<KkBuffer>();
-        const VkCommandBufferAllocateInfo info{
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-            .commandPool = pool,
-            .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-            .commandBufferCount = 1,
-        };
-        if (driver.vkAllocateCommandBuffers(vk_device, &info, &b->cb) != VK_SUCCESS) {
-            return nullptr;
-        }
-        // Called only through the driver's own entry points (never the loader), which ignore the
-        // loader's word in a dispatchable handle.
-        buffers.push_back(std::move(b));
-        return buffers.back().get();
     }
-};
-thread_local KkPool kk_pool;
+    auto* b = new KkBuffer;
+    VkCommandPool pool{};
+    const VkCommandPoolCreateInfo pool_info{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+        .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+        .queueFamilyIndex = 0,
+    };
+    const VkCommandBufferAllocateInfo info{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .commandBufferCount = 1,
+    };
+    // Called only through the driver's own entry points (never the loader), which ignore the
+    // loader's word in a dispatchable handle.
+    if (driver.vkCreateCommandPool(vk_device, &pool_info, nullptr, &pool) != VK_SUCCESS) {
+        delete b;
+        return nullptr;
+    }
+    VkCommandBufferAllocateInfo alloc = info;
+    alloc.commandPool = pool;
+    alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    if (driver.vkAllocateCommandBuffers(vk_device, &alloc, &b->cb) != VK_SUCCESS) {
+        delete b;
+        return nullptr;
+    }
+    std::scoped_lock lock{kk_mutex};
+    kk_buffers.push_back(b);
+    return b;
+}
 
 // ---- Metal command buffers ----
 
@@ -417,6 +427,7 @@ struct Owned {
     id<MTL4CommandBuffer> cmd;
     KkBuffer* kk{};
     bool kk_in_pass{}; ///< the KosmicKrisp segment has the render pass begun
+    bool kk_graphics{}, kk_compute{}; ///< it has the graphics / compute state (replayed)
 
     std::shared_ptr<Retire> retire;
     id<MTL4RenderCommandEncoder> render;
@@ -431,7 +442,8 @@ struct Owned {
     const Metal::ComputePipeline* compute_metal{};
     std::unordered_map<u32, PushSet> push_sets; ///< by bind point << 16 | set
     std::unordered_map<u32, BoundSets> bound_sets; ///< by bind point << 16 | set
-    std::array<u8, 256> push{};
+    /// Push constants per bind point, as KosmicKrisp keeps them (graphics, compute).
+    std::array<std::array<u8, 256>, 2> push{};
     std::vector<PushCall> push_calls;
     struct VertexBuffer {
         VkBuffer buffer{};
@@ -446,6 +458,7 @@ struct Owned {
     std::array<bool, size_t(State::Count)> state_set{};
     std::vector<VkViewport> viewports;
     std::vector<VkRect2D> scissors;
+    bool viewport_with_count{}, scissor_with_count{}; ///< which call set them (the replay's)
     VkCullModeFlags cull_mode{};
     VkFrontFace front_face{VK_FRONT_FACE_COUNTER_CLOCKWISE};
     bool depth_test{}, depth_write{}, depth_bounds_test{}, depth_bias_enable{}, stencil_test{},
@@ -562,10 +575,18 @@ void ReplayPass(Owned& o, VkCommandBuffer cb) {
 void ReplayState(Owned& o, VkCommandBuffer cb) {
     const auto set = [&](State s) { return o.state_set[size_t(s)]; };
     if (set(State::Viewport) && !o.viewports.empty()) {
-        driver.vkCmdSetViewportWithCount(cb, u32(o.viewports.size()), o.viewports.data());
+        if (o.viewport_with_count) {
+            driver.vkCmdSetViewportWithCount(cb, u32(o.viewports.size()), o.viewports.data());
+        } else {
+            driver.vkCmdSetViewport(cb, 0, u32(o.viewports.size()), o.viewports.data());
+        }
     }
     if (set(State::Scissor) && !o.scissors.empty()) {
-        driver.vkCmdSetScissorWithCount(cb, u32(o.scissors.size()), o.scissors.data());
+        if (o.scissor_with_count) {
+            driver.vkCmdSetScissorWithCount(cb, u32(o.scissors.size()), o.scissors.data());
+        } else {
+            driver.vkCmdSetScissor(cb, 0, u32(o.scissors.size()), o.scissors.data());
+        }
     }
     if (set(State::CullMode)) {
         driver.vkCmdSetCullMode(cb, o.cull_mode);
@@ -636,9 +657,15 @@ void ReplayState(Owned& o, VkCommandBuffer cb) {
 }
 
 void ReplayBindings(Owned& o, VkCommandBuffer cb, VkPipelineBindPoint point) {
+    std::vector<u32> keys;
     for (const auto& [key, s] : o.bound_sets) {
-        if ((key >> 16) != u32(point)) {
-            continue;
+        keys.push_back(key);
+    }
+    std::sort(keys.begin(), keys.end());
+    for (const u32 key : keys) {
+        const BoundSets& s = o.bound_sets[key];
+        if ((key >> 16) != u32(point) || s.sets.empty()) {
+            continue; // a marker for a set bound with the one before (CmdBindDescriptorSets)
         }
         driver.vkCmdBindDescriptorSets(cb, point, s.layout, s.first, u32(s.sets.size()),
                                        s.sets.data(), u32(s.dynamic_offsets.size()),
@@ -660,9 +687,12 @@ void ReplayBindings(Owned& o, VkCommandBuffer cb, VkPipelineBindPoint point) {
         driver.vkCmdPushDescriptorSetKHR(cb, point, s.layout, key & 0xffff, u32(writes.size()),
                                          writes.data());
     }
+    const bool compute = point == VK_PIPELINE_BIND_POINT_COMPUTE;
     for (const PushCall& p : o.push_calls) {
-        driver.vkCmdPushConstants(cb, p.layout, p.stages, p.offset, p.size,
-                                  o.push.data() + p.offset);
+        if (bool(p.stages & VK_SHADER_STAGE_COMPUTE_BIT) == compute) {
+            driver.vkCmdPushConstants(cb, p.layout, p.stages, p.offset, p.size,
+                                      o.push[compute].data() + p.offset);
+        }
     }
 }
 
@@ -674,7 +704,7 @@ VkCommandBuffer Kk(Owned& o, bool in_pass) {
             EndMetal(o);
             ++counters.switches;
         }
-        o.kk = kk_pool.Take();
+        o.kk = TakeKk();
         if (!o.kk) {
             Note("no command buffer for a KosmicKrisp segment: commands are lost");
             return VK_NULL_HANDLE;
@@ -684,6 +714,7 @@ VkCommandBuffer Kk(Owned& o, bool in_pass) {
             .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
         };
         driver.vkBeginCommandBuffer(o.kk->cb, &begin);
+        o.kk_graphics = o.kk_compute = false;
         ++counters.kk_segments;
     }
     if (in_pass && o.in_pass && !o.kk_in_pass) {
@@ -699,35 +730,36 @@ VkCommandBuffer Kk(Owned& o, bool in_pass) {
 /// A KosmicKrisp segment ready for a draw or dispatch with the whole state.
 VkCommandBuffer KkWithState(Owned& o, VkPipelineBindPoint point) {
     const bool graphics = point == VK_PIPELINE_BIND_POINT_GRAPHICS;
-    const bool fresh = !o.kk; // an open segment has the state already (Mirror; passes keep it)
     VkCommandBuffer cb = Kk(o, graphics);
     if (!cb) {
         return cb;
     }
-    // A fresh segment has none of the state: all of it again. Within one segment the state
+    // A segment gets the bind point's whole state once (whoever opened it); after that the state
     // commands go to it as they come (Mirror), and dynamic state outlives render passes.
-    if (fresh) {
-        if (graphics) {
-            ReplayState(o, cb);
-            for (u32 i = 0; i < o.vertex_buffers.size(); ++i) {
-                const auto& vb = o.vertex_buffers[i];
-                if (vb.set) {
-                    driver.vkCmdBindVertexBuffers2(cb, i, 1, &vb.buffer, &vb.offset, &vb.size,
-                                                   vb.stride ? &vb.stride : nullptr);
-                }
+    if (graphics && !o.kk_graphics) {
+        ReplayState(o, cb);
+        for (u32 i = 0; i < o.vertex_buffers.size(); ++i) {
+            const auto& vb = o.vertex_buffers[i];
+            if (vb.set) {
+                driver.vkCmdBindVertexBuffers2(cb, i, 1, &vb.buffer, &vb.offset, &vb.size,
+                                               vb.stride ? &vb.stride : nullptr);
             }
-            if (o.index_buffer) {
-                driver.vkCmdBindIndexBuffer(cb, o.index_buffer, o.index_offset, o.index_type);
-            }
+        }
+        if (o.index_buffer) {
+            driver.vkCmdBindIndexBuffer(cb, o.index_buffer, o.index_offset, o.index_type);
         }
         if (o.graphics_pipeline) {
             driver.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, o.graphics_pipeline);
         }
+        ReplayBindings(o, cb, VK_PIPELINE_BIND_POINT_GRAPHICS);
+        o.kk_graphics = true;
+    }
+    if (!graphics && !o.kk_compute) {
         if (o.compute_pipeline) {
             driver.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, o.compute_pipeline);
         }
-        ReplayBindings(o, cb, VK_PIPELINE_BIND_POINT_GRAPHICS);
         ReplayBindings(o, cb, VK_PIPELINE_BIND_POINT_COMPUTE);
+        o.kk_compute = true;
     }
     return cb;
 }
@@ -785,8 +817,8 @@ id<MTL4ComputeCommandEncoder> ComputeEncoder(Owned& o) {
 }
 
 /// `size` bytes of scratch memory: their GPU address, `out` their CPU address.
-MTLGPUAddress Scratch(Owned& o, const void* data, u64 size) {
-    size = std::max<u64>((size + 255) & ~u64(255), 256);
+MTLGPUAddress Scratch(Owned& o, const void* data, u64 bytes) {
+    const u64 size = std::max<u64>((bytes + 255) & ~u64(255), 256);
     if (!o.scratch || o.scratch_used + size > ScratchChunk) {
         o.scratch = TakeScratch();
         o.scratch_used = 0;
@@ -798,7 +830,7 @@ MTLGPUAddress Scratch(Owned& o, const void* data, u64 size) {
     }
     const u64 at = o.scratch_used;
     o.scratch_used += size;
-    std::memcpy(static_cast<u8*>(o.scratch.contents) + at, data, size);
+    std::memcpy(static_cast<u8*>(o.scratch.contents) + at, data, bytes);
     return o.scratch.gpuAddress + at;
 }
 
@@ -817,7 +849,9 @@ void Decode(PushWrite& w) {
             if (ref.buffer) {
                 const u64 start = ref.offset + info.offset;
                 b.address = ref.buffer.gpuAddress + start;
-                b.size = info.range == VK_WHOLE_SIZE ? ref.buffer.length - start : info.range;
+                b.size = info.range == VK_WHOLE_SIZE
+                             ? (info.offset < ref.size ? ref.size - info.offset : 0)
+                             : info.range;
                 b.ok = true;
             }
             break;
@@ -946,7 +980,8 @@ bool BindStage(Owned& o, id<MTL4ArgumentTable> table, VkPipelineBindPoint point,
         }
     }
     if (shader->uses_push_constants) {
-        [table setAddress:Scratch(o, o.push.data(), o.push.size())
+        const auto& push = o.push[point == VK_PIPELINE_BIND_POINT_COMPUTE];
+        [table setAddress:Scratch(o, push.data(), push.size())
                   atIndex:shader->push_constant_buffer];
     }
     if (shader->buffer_size_buffer != ~0u) {
@@ -1021,6 +1056,13 @@ const char* DrawBlocker(const Owned& o) {
     return nullptr;
 }
 
+/// Indexed strips without primitive restart: Metal always restarts at the all-ones index.
+bool RestartDiffers(const Owned& o) {
+    const u32 type = o.graphics->render->primitive_type;
+    return !o.primitive_restart &&
+           (type == MTLPrimitiveTypeTriangleStrip || type == MTLPrimitiveTypeLineStrip);
+}
+
 /// Encodes the draw state; false with `why` when the draw goes to KosmicKrisp after all
 /// (checked before the encoder opens, so a fallback does not end a KosmicKrisp segment first).
 bool PrepareDraw(Owned& o, const char*& why) {
@@ -1031,10 +1073,17 @@ bool PrepareDraw(Owned& o, const char*& why) {
         return false;
     }
     for (u32 i = 0; i < p.num_vertex_slots; ++i) {
-        const u32 location = p.vertex_slots[i].location;
-        if (location < o.vertex_buffers.size() && o.vertex_buffers[location].buffer &&
-            !ResolveBuffer(o.vertex_buffers[location].buffer).buffer) {
+        const auto& slot = p.vertex_slots[i];
+        if (slot.location >= o.vertex_buffers.size()) {
+            continue;
+        }
+        const auto& vb = o.vertex_buffers[slot.location];
+        if (vb.buffer && !ResolveBuffer(vb.buffer).buffer) {
             why = "a vertex buffer without a Metal buffer";
+            return false;
+        }
+        if (vb.buffer && !vb.stride && !slot.constant) {
+            why = "a vertex stride of 0"; // every vertex reads one element: no Metal layout
             return false;
         }
     }
@@ -1151,10 +1200,7 @@ void Draw(Owned& o, const char* extra_blocker, Encode&& encode, KkRecord&& kk) {
                       : extra_blocker  ? extra_blocker
                                        : DrawBlocker(o);
     if (!why && o.cull_mode == VK_CULL_MODE_FRONT_AND_BACK) {
-        // Nothing is rasterized: no draw (vertex shader side effects aside, as on KosmicKrisp's
-        // own Metal encoding).
-        ++counters.metal_draws;
-        return;
+        why = "culling front and back"; // Metal has no such mode (points and lines still draw)
     }
     if (!why && PrepareDraw(o, why)) {
         encode(o.render);
@@ -1201,14 +1247,28 @@ MTLLoadAction Load(VkAttachmentLoadOp op) {
            : op == VK_ATTACHMENT_LOAD_OP_DONT_CARE ? MTLLoadActionDontCare
                                                    : MTLLoadActionLoad;
 }
-MTLStoreAction Store(VkAttachmentStoreOp op) {
-    return op == VK_ATTACHMENT_STORE_OP_DONT_CARE ? MTLStoreActionDontCare : MTLStoreActionStore;
+/// The clear color as Metal reads it for the pixel format (integer formats: the integer values).
+MTLClearColor ClearColor(const VkClearColorValue& c, MTLPixelFormat format) {
+    switch (format) {
+    case MTLPixelFormatR8Uint: case MTLPixelFormatR16Uint: case MTLPixelFormatR32Uint:
+    case MTLPixelFormatRG8Uint: case MTLPixelFormatRG16Uint: case MTLPixelFormatRG32Uint:
+    case MTLPixelFormatRGBA8Uint: case MTLPixelFormatRGBA16Uint: case MTLPixelFormatRGBA32Uint:
+    case MTLPixelFormatRGB10A2Uint:
+        return MTLClearColorMake(c.uint32[0], c.uint32[1], c.uint32[2], c.uint32[3]);
+    case MTLPixelFormatR8Sint: case MTLPixelFormatR16Sint: case MTLPixelFormatR32Sint:
+    case MTLPixelFormatRG8Sint: case MTLPixelFormatRG16Sint: case MTLPixelFormatRG32Sint:
+    case MTLPixelFormatRGBA8Sint: case MTLPixelFormatRGBA16Sint: case MTLPixelFormatRGBA32Sint:
+        return MTLClearColorMake(c.int32[0], c.int32[1], c.int32[2], c.int32[3]);
+    default:
+        return MTLClearColorMake(c.float32[0], c.float32[1], c.float32[2], c.float32[3]);
+    }
 }
 
 /// The Metal descriptors of the begun pass; false when Metal cannot render into it.
 bool BuildPass(Owned& o) {
     const VkRenderingInfo& info = o.pass_info;
-    if (info.viewMask || info.layerCount > 1 || o.pass_colors.size() > 8) {
+    if (info.viewMask || info.layerCount > 1 || o.pass_colors.size() > 8 ||
+        info.renderArea.offset.x || info.renderArea.offset.y) {
         return false;
     }
     MTL4RenderPassDescriptor* rp = [MTL4RenderPassDescriptor new];
@@ -1242,9 +1302,10 @@ bool BuildPass(Owned& o) {
         rp.colorAttachments[i].level = t.level;
         rp.colorAttachments[i].slice = t.slice;
         rp.colorAttachments[i].loadAction = Load(a.loadOp);
-        rp.colorAttachments[i].storeAction = Store(a.storeOp);
-        const auto& c = a.clearValue.color.float32;
-        rp.colorAttachments[i].clearColor = MTLClearColorMake(c[0], c[1], c[2], c[3]);
+        // Stored always: the pass may be split (reopened) before its end, where Vulkan's store
+        // operation has not happened yet.
+        rp.colorAttachments[i].storeAction = MTLStoreActionStore;
+        rp.colorAttachments[i].clearColor = ClearColor(a.clearValue.color, t.texture.pixelFormat);
         o.pass_color_formats[i] = u32(t.texture.pixelFormat);
     }
     if (o.has_depth && o.pass_depth.imageView) {
@@ -1260,7 +1321,7 @@ bool BuildPass(Owned& o) {
         rp.depthAttachment.level = t.level;
         rp.depthAttachment.slice = t.slice;
         rp.depthAttachment.loadAction = Load(a.loadOp);
-        rp.depthAttachment.storeAction = Store(a.storeOp);
+        rp.depthAttachment.storeAction = MTLStoreActionStore;
         rp.depthAttachment.clearDepth = a.clearValue.depthStencil.depth;
         o.pass_depth_format = u32(t.texture.pixelFormat);
     }
@@ -1280,7 +1341,7 @@ bool BuildPass(Owned& o) {
         rp.stencilAttachment.level = t.level;
         rp.stencilAttachment.slice = t.slice;
         rp.stencilAttachment.loadAction = Load(a.loadOp);
-        rp.stencilAttachment.storeAction = Store(a.storeOp);
+        rp.stencilAttachment.storeAction = MTLStoreActionStore;
         rp.stencilAttachment.clearStencil = a.clearValue.depthStencil.stencil;
         o.pass_stencil_format = u32(t.texture.pixelFormat);
     }
@@ -1289,6 +1350,9 @@ bool BuildPass(Owned& o) {
         rp.renderTargetHeight = std::max(1u, height);
         rp.defaultRasterSampleCount = 1;
         samples = 1;
+    }
+    if (info.renderArea.extent.width < width || info.renderArea.extent.height < height) {
+        return false; // Metal would clear (and store) the whole attachment
     }
     o.target_width = width;
     o.target_height = height;
@@ -1637,9 +1701,16 @@ void ImageViewDestroyed(VkImageView view) {
     }
 }
 
+void BufferCreated(VkBuffer buffer, VkDeviceSize size) {
+    std::scoped_lock lock{objects_mutex};
+    buffer_sizes[buffer] = size;
+    buffers.erase(buffer);
+}
+
 void BufferDestroyed(VkBuffer buffer) {
     std::scoped_lock lock{objects_mutex};
     buffers.erase(buffer);
+    buffer_sizes.erase(buffer);
 }
 
 // ---- Commands ----
@@ -1667,8 +1738,8 @@ void CmdPipelineBarrier(Owned& o, VkCommandBuffer, const VkDependencyInfo* info)
             BreakPass(o);
         }
         if (o.compute) {
-            [o.compute barrierAfterEncoderStages:MTLStageAll
-                             beforeEncoderStages:MTLStageAll
+            [o.compute barrierAfterEncoderStages:MTLStageDispatch | MTLStageBlit
+                             beforeEncoderStages:MTLStageDispatch | MTLStageBlit
                                visibilityOptions:Visible];
         }
     }
@@ -1679,9 +1750,13 @@ void CmdPipelineBarrier1(Owned& o, VkCommandBuffer cb, VkPipelineStageFlags src,
                          const VkMemoryBarrier* memory, uint32_t buffer_count,
                          const VkBufferMemoryBarrier* buffer_barriers, uint32_t image_count,
                          const VkImageMemoryBarrier* images) {
-    // One full barrier stands for it (KosmicKrisp segments get it as a sync2 barrier).
-    (void)src, (void)dst, (void)flags, (void)memory_count, (void)memory, (void)buffer_count,
-        (void)buffer_barriers, (void)image_count, (void)images;
+    if (o.kk) {
+        // As recorded (also valid inside a render pass if it was).
+        driver.vkCmdPipelineBarrier(o.kk->cb, src, dst, flags, memory_count, memory, buffer_count,
+                                    buffer_barriers, image_count, images);
+        return;
+    }
+    // Metal: one full barrier stands for it (CmdPipelineBarrier, with no segment open).
     const VkMemoryBarrier2 full{
         .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
         .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
@@ -1781,6 +1856,9 @@ void CmdPushDescriptorSet(Owned& o, VkPipelineBindPoint point, VkPipelineLayout 
                           uint32_t set, uint32_t count, const VkWriteDescriptorSet* writes) {
     @autoreleasepool {
         PushSet& s = o.push_sets[(u32(point) << 16) | set];
+        if (s.layout != layout) {
+            s.writes.clear(); // another layout's bindings mean nothing in this one
+        }
         s.layout = layout;
         o.bound_sets.erase((u32(point) << 16) | set);
         for (u32 i = 0; i < count; ++i) {
@@ -1824,10 +1902,21 @@ void CmdPushDescriptorSet(Owned& o, VkPipelineBindPoint point, VkPipelineLayout 
 void CmdBindDescriptorSets(Owned& o, VkPipelineBindPoint point, VkPipelineLayout layout,
                            uint32_t first, uint32_t count, const VkDescriptorSet* sets,
                            uint32_t dynamic_count, const uint32_t* dynamic_offsets) {
-    // Kept per call (for the replay); a draw that reads one of these sets falls back.
+    // Kept per call (for the replay); a draw that reads one of these sets falls back. Earlier
+    // binds of these sets go (a bind that covered more is dropped whole: the replay binds what
+    // is current, in set order).
     for (u32 i = 0; i < count; ++i) {
         o.push_sets.erase((u32(point) << 16) | (first + i));
     }
+    std::erase_if(o.bound_sets, [&](const auto& entry) {
+        const auto& [key, b] = entry;
+        if ((key >> 16) != u32(point)) {
+            return false;
+        }
+        const u32 begin = key & 0xffff;
+        const u32 end = begin + std::max<u32>(1, u32(b.sets.size()));
+        return begin < first + count && first < end;
+    });
     BoundSets b{layout, first, std::vector<VkDescriptorSet>(sets, sets + count),
                 std::vector<u32>(dynamic_offsets, dynamic_offsets + dynamic_count)};
     o.bound_sets[(u32(point) << 16) | first] = std::move(b);
@@ -1843,8 +1932,14 @@ void CmdBindDescriptorSets(Owned& o, VkPipelineBindPoint point, VkPipelineLayout
 
 void CmdPushConstants(Owned& o, VkPipelineLayout layout, VkShaderStageFlags stages,
                       uint32_t offset, uint32_t size, const void* values) {
-    if (u64(offset) + size <= o.push.size()) {
-        std::memcpy(o.push.data() + offset, values, size);
+    if (u64(offset) + size <= o.push[0].size()) {
+        // Into the bind point(s) the stages belong to.
+        if (stages & VK_SHADER_STAGE_COMPUTE_BIT) {
+            std::memcpy(o.push[1].data() + offset, values, size);
+        }
+        if (stages & ~VkShaderStageFlags(VK_SHADER_STAGE_COMPUTE_BIT)) {
+            std::memcpy(o.push[0].data() + offset, values, size);
+        }
         const PushCall call{layout, stages, offset, size};
         if (std::find(o.push_calls.begin(), o.push_calls.end(), call) == o.push_calls.end()) {
             o.push_calls.push_back(call);
@@ -1894,8 +1989,13 @@ void CmdSetViewports(Owned& o, uint32_t first, uint32_t count, const VkViewport*
         std::copy_n(viewports, count, o.viewports.begin() + first);
     }
     o.state_set[size_t(State::Viewport)] = true;
+    o.viewport_with_count = with_count;
     Mirror(o, [&](VkCommandBuffer cb) {
-        driver.vkCmdSetViewportWithCount(cb, u32(o.viewports.size()), o.viewports.data());
+        if (with_count) {
+            driver.vkCmdSetViewportWithCount(cb, count, viewports);
+        } else {
+            driver.vkCmdSetViewport(cb, first, count, viewports);
+        }
     });
 }
 
@@ -1910,8 +2010,13 @@ void CmdSetScissors(Owned& o, uint32_t first, uint32_t count, const VkRect2D* sc
         std::copy_n(scissors, count, o.scissors.begin() + first);
     }
     o.state_set[size_t(State::Scissor)] = true;
+    o.scissor_with_count = with_count;
     Mirror(o, [&](VkCommandBuffer cb) {
-        driver.vkCmdSetScissorWithCount(cb, u32(o.scissors.size()), o.scissors.data());
+        if (with_count) {
+            driver.vkCmdSetScissorWithCount(cb, count, scissors);
+        } else {
+            driver.vkCmdSetScissor(cb, first, count, scissors);
+        }
     });
 }
 
@@ -2089,7 +2194,9 @@ void CmdDrawIndexed(Owned& o, uint32_t index_count, uint32_t instance_count, uin
         const BufferRef index = ResolveBuffer(o.index_buffer);
         const char* blocker = !index.buffer ? "no Metal index buffer"
                               : o.graphics && o.graphics->rect_list ? "an indexed rect list"
-                                                                    : nullptr;
+                              : o.graphics && o.graphics->render && RestartDiffers(o)
+                                  ? "strips without primitive restart"
+                                  : nullptr;
         Draw(
             o, blocker,
             [&](id<MTL4RenderCommandEncoder> enc) {
@@ -2119,7 +2226,9 @@ void CmdDrawIndirect(Owned& o, VkBuffer buffer, VkDeviceSize offset, uint32_t co
         const char* blocker = !args.buffer                  ? "no Metal indirect buffer"
                               : indexed && !index.buffer    ? "no Metal index buffer"
                               : o.graphics && o.graphics->rect_list ? "an indirect rect list"
-                                                                    : nullptr;
+                              : indexed && o.graphics && o.graphics->render && RestartDiffers(o)
+                                  ? "strips without primitive restart"
+                                  : nullptr;
         Draw(
             o, blocker,
             [&](id<MTL4RenderCommandEncoder> enc) {

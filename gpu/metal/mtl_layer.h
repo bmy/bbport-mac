@@ -28,4 +28,8 @@ namespace MetalLayer {
 /// device.
 void InstallIfAsked(VkDevice device);
 
+/// Frame mode is on: libraries that record with the loader's own functions (FSR 4.1.1, FSR 4
+/// v07) cannot be used (their commands would miss the owned command buffers).
+bool FrameActive();
+
 } // namespace MetalLayer

@@ -219,12 +219,24 @@ endif()
 # stays undefined and the hooks are no-ops (metal/vk_metal_shadow.h).
 if (APPLE AND (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64" OR
                CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$"))
-    find_package(spirv_cross_core CONFIG QUIET)
-    find_package(spirv_cross_glsl CONFIG QUIET)
-    find_package(spirv_cross_msl CONFIG QUIET)
-    find_path(SPIRV_CROSS_INCLUDE_DIR spirv_cross/spirv_msl.hpp)
-    if (spirv_cross_core_FOUND AND spirv_cross_glsl_FOUND AND spirv_cross_msl_FOUND AND
-        SPIRV_CROSS_INCLUDE_DIR)
+    # Only the pinned build (its stamp, setup_deps.sh), never another copy (Homebrew's).
+    unset(bb_spvc_prefix)
+    foreach(prefix IN LISTS CMAKE_PREFIX_PATH)
+        if (EXISTS "${prefix}/share/spirv_cross_msl/.bbport-rev")
+            set(bb_spvc_prefix "${prefix}")
+            break()
+        endif()
+    endforeach()
+    if (bb_spvc_prefix)
+        file(STRINGS "${bb_spvc_prefix}/share/spirv_cross_msl/.bbport-rev" bb_spvc_rev LIMIT_COUNT 1)
+        find_package(spirv_cross_core CONFIG QUIET PATHS "${bb_spvc_prefix}" NO_DEFAULT_PATH)
+        find_package(spirv_cross_glsl CONFIG QUIET PATHS "${bb_spvc_prefix}" NO_DEFAULT_PATH)
+        find_package(spirv_cross_msl CONFIG QUIET PATHS "${bb_spvc_prefix}" NO_DEFAULT_PATH)
+        find_path(BB_SPIRV_CROSS_INCLUDE_DIR spirv_cross/spirv_msl.hpp
+                  PATHS "${bb_spvc_prefix}/include" NO_DEFAULT_PATH)
+    endif()
+    if (bb_spvc_prefix AND spirv_cross_core_FOUND AND spirv_cross_glsl_FOUND AND
+        spirv_cross_msl_FOUND AND BB_SPIRV_CROSS_INCLUDE_DIR)
         set(BB_METAL_OBJCXX_SOURCES metal/mtl_device.mm metal/mtl_geometry.mm
             metal/mtl_pso_cache.mm metal/mtl_shader.mm metal/mtl_shadow.mm
             metal/mtl_tessellation.mm metal/vk_to_mtl.mm)
@@ -232,10 +244,13 @@ if (APPLE AND (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64" OR
             metal/mtl_spirv_pervertex.cpp metal/mtl_spirv_rectlist.cpp)
         set_source_files_properties(${BB_METAL_OBJCXX_SOURCES} PROPERTIES
                                     COMPILE_OPTIONS "-fobjc-arc")
-        target_include_directories(bbgpu PRIVATE ${SPIRV_CROSS_INCLUDE_DIR})
+        target_include_directories(bbgpu PRIVATE ${BB_SPIRV_CROSS_INCLUDE_DIR})
         target_link_libraries(bbgpu PRIVATE spirv-cross-msl spirv-cross-glsl spirv-cross-core)
-        target_compile_definitions(bbgpu PRIVATE BB_METAL_BACKEND=1)
-        message(STATUS "Metal command path: SPIRV-Cross found, the shadow build is available")
+        # The MSL cache's header names it: a new pin does not reuse shaders of the old one.
+        target_compile_definitions(bbgpu PRIVATE BB_METAL_BACKEND=1
+                                   BB_SPIRV_CROSS_VERSION="${bb_spvc_rev}")
+        message(STATUS "Metal command path: SPIRV-Cross ${bb_spvc_rev}, the shadow build is "
+                       "available")
     else()
         message(STATUS "Metal command path: no SPIRV-Cross (BB_ARCH=arm64 setup_deps.sh), off")
     endif()

@@ -27,7 +27,6 @@ struct GraphicsEntry {
 /// Null when the Vulkan pipeline has no Metal counterpart (yet).
 const GraphicsEntry* FindGraphics(VkPipeline pipeline);
 const Metal::ComputePipeline* FindCompute(VkPipeline pipeline);
-void Forget(VkPipeline pipeline);
 /// id<MTLDepthStencilState> for the key (the pipeline cache's), null on failure.
 void* DepthStencil(const Metal::DepthStencilKey& key);
 

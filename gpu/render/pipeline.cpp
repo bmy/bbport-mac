@@ -63,7 +63,11 @@ Pipeline::Pipeline(const Instance& instance_, Scheduler& scheduler_, DescriptorH
     : instance{instance_}, scheduler{scheduler_}, desc_heap{desc_heap_}, profile{profile_},
       is_compute{is_compute_} {}
 
-Pipeline::~Pipeline() = default;
+Pipeline::~Pipeline() {
+    if (MetalShadow::Enabled() && pipeline) { // bbport (macOS): its handle may come back
+        MetalShadow::Forget(*pipeline);
+    }
+}
 
 void Pipeline::CreateLayouts(vk::ShaderStageFlags push_stages, const char* kind,
                              const std::string& debug_name) {
@@ -589,18 +593,31 @@ GraphicsPipeline::GraphicsPipeline(
     SetObjectName(device, *pipeline, "Graphics Pipeline {}", debug_name);
     if (MetalShadow::Enabled()) { // bbport (macOS): docs/MACOS_METAL_RENDERER.md, stage 2
         // The fetch shader's attributes in key.vertex_buffer_formats' order (GetVertexInputs).
+        // Step rates: the static vertex input's when there is one (also when preloading, where
+        // the runtime infos are not filled in), else the vertex stage's runtime info.
         boost::container::static_vector<MetalShadow::VertexInput, MaxVertexBufferCount> inputs;
         if (fetch_shader) {
             using InstanceIdType = Shader::Gcn::VertexAttribute::InstanceIdType;
             const auto& vs = runtime_infos[u32(Shader::SwStage::Vertex)].sw.vs;
+            const bool from_sdata = !sdata.vertex_bindings.empty();
             for (const auto& attrib : fetch_shader->attributes) {
                 const auto step_rate = attrib.GetStepRate();
+                u32 divisor = 1;
+                if (from_sdata) {
+                    for (const auto& d : sdata.divisors) {
+                        if (d.binding == attrib.semantic) {
+                            divisor = d.divisor;
+                        }
+                    }
+                } else if (!preloading) {
+                    divisor = step_rate == InstanceIdType::OverStepRate0   ? vs.step_rate_0
+                              : step_rate == InstanceIdType::OverStepRate1 ? vs.step_rate_1
+                                                                           : 1;
+                }
                 inputs.push_back({
                     .location = attrib.semantic,
                     .per_instance = step_rate != InstanceIdType::None,
-                    .divisor = step_rate == InstanceIdType::OverStepRate0   ? vs.step_rate_0
-                               : step_rate == InstanceIdType::OverStepRate1 ? vs.step_rate_1
-                                                                            : 1,
+                    .divisor = divisor,
                 });
             }
         }
@@ -609,7 +626,7 @@ GraphicsPipeline::GraphicsPipeline(
             has_stage[i] = infos[i] != nullptr;
         }
         const bool aux_fragment = !infos[u32(Shader::SwStage::Fragment)] && !sdata.fragment.empty();
-        MetalShadow::Graphics(key, modules, has_stage, inputs,
+        MetalShadow::Graphics(key, modules, has_stage, std::span{inputs.data(), inputs.size()},
                               std::span{attachments.data(), key.num_color_attachments},
                               aux_fragment, *pipeline);
     }

@@ -42,6 +42,23 @@ std::string FirstLine(NSError* error) {
 }
 
 
+/// The attributes field by field (VertexAttribute has padding after `per_instance`).
+u64 HashAttributes(std::span<const VertexAttribute> attributes) {
+    u64 h = attributes.size();
+    for (const VertexAttribute& a : attributes) {
+        const u64 fields[3] = {a.location, a.per_instance ? 1u : 0u, a.divisor};
+        h = XXH3_64bits_withSeed(fields, sizeof(fields), h);
+    }
+    return h;
+}
+
+/// A vertex attribute's format as the Vulkan pipeline uses it: the key keeps Undefined for a V#
+/// whose format is impossible, which GraphicsPipeline::GetVertexInputs reads as 32-bit floats.
+vk::Format VertexBufferFormat(const Vulkan::GraphicsPipelineKey& key, u32 i) {
+    const vk::Format stored = key.vertex_buffer_formats[i];
+    return stored == vk::Format::eUndefined ? vk::Format::eR32G32B32A32Sfloat : stored;
+}
+
 struct RenderMapKey {
     Vulkan::GraphicsPipelineKey key;
     const void* vs{}; ///< the MTLFunction objects (the entry retains them: no address reuse)
@@ -326,8 +343,7 @@ const RenderPipeline* PsoCache::GetRenderPipeline(const Vulkan::GraphicsPipeline
         .key = key,
         .vs = vs->function,
         .fs = fs ? fs->function : nullptr,
-        .attributes_hash = XXH3_64bits(input.vertex_attributes.data(),
-                                       input.vertex_attributes.size_bytes()),
+        .attributes_hash = HashAttributes(input.vertex_attributes),
         .rect_list_triangles = input.rect_list_triangles,
         .tessellation = input.tessellation_eval,
         .geometry = input.geometry,
@@ -504,7 +520,7 @@ const RenderPipeline* PsoCache::GetRenderPipeline(const Vulkan::GraphicsPipeline
                 MTLVertexDescriptor* vd = [MTLVertexDescriptor vertexDescriptor];
                 for (u32 i = 0; i < attributes.size(); ++i) {
                     const VertexAttribute& attribute = attributes[i];
-                    const vk::Format format = key.vertex_buffer_formats[i];
+                    const vk::Format format = VertexBufferFormat(key, i);
                     const u32 vertex_format = VkToMtl::VertexFormat(format);
                     if (!vertex_format || attribute.location >= 31) {
                         error = fmt::format("vertex attribute {} (location {}) format {} has no "
@@ -737,7 +753,7 @@ bool BuildStageInputs(const Vulkan::GraphicsPipelineKey& key,
             [MTLStageInputOutputDescriptor stageInputOutputDescriptor];
         for (u32 i = 0; i < attributes.size(); ++i) {
             const VertexAttribute& attribute = attributes[i];
-            const vk::Format format = key.vertex_buffer_formats[i];
+            const vk::Format format = VertexBufferFormat(key, i);
             const u32 vertex_format = VkToMtl::VertexFormat(format);
             if (!vertex_format || attribute.location >= 31) {
                 error = fmt::format("vertex attribute {} (location {}) format {} has no "
@@ -792,8 +808,7 @@ const TessellationPipeline* PsoCache::GetTessellationPipeline(
         .control = input.control->function,
         .eval = input.eval->function,
         .fs = fs ? fs->function : nullptr,
-        .attributes_hash = XXH3_64bits(input.vertex_attributes.data(),
-                                       input.vertex_attributes.size_bytes()),
+        .attributes_hash = HashAttributes(input.vertex_attributes),
     };
     {
         std::shared_lock lock{impl->mutex};
@@ -991,8 +1006,7 @@ const GeometryPipeline* PsoCache::GetGeometryPipeline(const Vulkan::GraphicsPipe
         .gs = input.gs->function,
         .pass_through = input.pass_through->function,
         .fs = fs ? fs->function : nullptr,
-        .attributes_hash = XXH3_64bits(input.vertex_attributes.data(),
-                                       input.vertex_attributes.size_bytes()),
+        .attributes_hash = HashAttributes(input.vertex_attributes),
     };
     {
         std::shared_lock lock{impl->mutex};

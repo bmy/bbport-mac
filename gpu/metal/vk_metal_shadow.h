@@ -37,6 +37,8 @@ void Graphics(const Vulkan::GraphicsPipelineKey& key, std::span<const vk::Shader
               std::span<const vk::PipelineColorBlendAttachmentState> blend, bool aux_fragment,
               vk::Pipeline pipeline);
 void Compute(const Vulkan::ComputePipelineKey& key, vk::ShaderModule module, vk::Pipeline pipeline);
+/// A Vulkan pipeline is destroyed: its handle stops standing for its Metal pipeline.
+void Forget(vk::Pipeline pipeline);
 #else
 inline bool Enabled() {
     return false;
@@ -46,6 +48,7 @@ inline void Graphics(const Vulkan::GraphicsPipelineKey&, std::span<const vk::Sha
                      std::span<const bool>, std::span<const VertexInput>,
                      std::span<const vk::PipelineColorBlendAttachmentState>, bool, vk::Pipeline) {}
 inline void Compute(const Vulkan::ComputePipelineKey&, vk::ShaderModule, vk::Pipeline) {}
+inline void Forget(vk::Pipeline) {}
 #endif
 
 } // namespace MetalShadow

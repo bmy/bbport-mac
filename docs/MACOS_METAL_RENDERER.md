@@ -89,9 +89,10 @@ one is upstream 0.6's (`gpu/render`, `gpu/textures`, `gpu/buffers`, ...), with t
 
 `BB_METAL_SHADOW=1` (native GPU process only). Each game pipeline the renderer creates is built a
 second time as a Metal pipeline state, on the same pipeline-creation thread, right after the
-Vulkan one; the log counts the results (`Metal shadow: N pipelines: ...` at the first and every
-50th) and names the first failures. Nothing draws with them. Off, it costs one branch per
-pipeline and shader module.
+Vulkan one, preloaded ones from the pipeline cache included; the log counts the results (`Metal
+shadow: N pipelines: ...` at the first and every 50th) and names the first failures. Nothing draws
+with them, but the Metal compiles add to pipeline creation (expect more stutter while it is on).
+Off, it costs one branch per pipeline and shader module.
 
 - Files, from 78b59f5's `renderer_metal/` with includes and names adapted to 0.6
   (`AmdGpu` -> `Gcn`, `LiverpoolToVK` -> `GcnToVk`): `gpu/metal/mtl_shader.*` and
@@ -102,17 +103,29 @@ pipeline and shader module.
   shadow build of the layer's own (host pass) pipelines, which came from that layer. Stage 3
   brings a layer of its own for KosmicKrisp.
 - Changed: blend states are the Vulkan pipeline's own (our `BlendAttachment`, GCN's differences
-  emulated) instead of a second copy of that logic; vertex inputs come from the fetch shader (with
-  dynamic vertex input the Vulkan pipeline has none); the Metal device is the system default (the
-  same object as KosmicKrisp's on Apple silicon; stage 3 takes the exported one); a reused Vulkan
-  handle drops what an earlier pipeline or module left.
-- Hooks in upstream files: `vulkan/shader_module.cpp` (`CompileSPV`: the module's SPIR-V) and
-  `render/pipeline.cpp` (the compute and graphics constructors, after the Vulkan create), each a
-  guarded block that is a no-op without `BB_METAL_BACKEND`.
+  emulated) instead of a second copy of that logic; vertex inputs come from the fetch shader, step
+  rates from the static vertex input (preloaded pipelines have no runtime infos); a vertex format
+  the key leaves undefined is read as 32-bit floats, as the Vulkan pipeline does; translations are
+  kept by SPIR-V content, not by module handle (handles come back after a module is destroyed),
+  and a destroyed pipeline's handle is forgotten; the Metal device is the system default (the same
+  object as KosmicKrisp's on Apple silicon; stage 3 takes the exported one). Vertex formats come
+  from the key, which has them without dynamic vertex input only: true of KosmicKrisp, not of
+  every driver.
+- Hooks in upstream files: `vulkan/shader_module.cpp` (`CompileSPV`) and
+  `render/pipeline_store.cpp` (cached SPIR-V): the module's SPIR-V; `render/pipeline.cpp` (the
+  compute and graphics constructors, after the Vulkan create; `~Pipeline`), each a guarded block
+  that is a no-op without `BB_METAL_BACKEND`.
 - SPIRV-Cross `vulkan-sdk-1.4.363.0` (f11ba9f0), static, MSL and GLSL back ends only, from
-  `setup_deps.sh` with `BB_ARCH=arm64`. CMake builds the Metal files and defines
-  `BB_METAL_BACKEND` only on arm64 macOS with SPIRV-Cross found; every other build is unchanged.
-- MSL and pipeline caches: the user cache directory (`metal-shadow/`, and per game serial).
+  `setup_deps.sh` with `BB_ARCH=arm64`, with a stamp naming the pin. CMake takes it only from a
+  prefix with that stamp (never Homebrew's), builds the Metal files and defines
+  `BB_METAL_BACKEND` only on arm64 macOS with it found; every other build is unchanged. The pin is
+  in the MSL cache's header, so a new pin translates again.
+- Licence: SPIRV-Cross is Apache-2.0, linked statically into the native GPU core. Apache-2.0 goes
+  with GPL-3.0 (this code is GPL-2.0-or-later), not with GPL-2.0-only, so a binary with it is
+  distributed under GPL-3.0; `package.sh` ships its licence (`licenses/`). To settle before a
+  release from this branch.
+- MSL and pipeline caches: the user cache directory, `metal-shadow/` (not per game: the MSL
+  files are named by SPIR-V hash).
 
 ## Stage 3a: the layer, counting
 
@@ -121,12 +134,13 @@ vulkan.hpp's default dispatcher's functions right after the device's dispatcher 
 (`vulkan/instance.cpp`), forwards every call unchanged and counts them. Every 5 s, from a
 submission, the log has `Metal layer: per second N commands, N submissions of N command buffers
 (N commands each); calls per second: ...`. Lookups of `vkCmd*` through `vkGet*ProcAddr` (FSR 3.1,
-MetalFX's FFX glue, the overlay) get the layer's entry and are logged once each, so those
-libraries are counted too.
+the overlay, VMA, DLSS) get the layer's entry for what it covers (where the driver has the
+function) and are logged once each, so those calls are counted too.
 
 What it is for: the command mix the Metal encoder has to cover first, and which code records
-around the dispatcher. Known so far: `upscale/fsr411` (FSR 4.1.1) calls the loader's `vkCmd*`
-directly, so its command buffers can never be encoded by the layer; those must stay
+around the dispatcher. Known so far: `upscale/fsr411` (FSR 4.1.1) and the FSR 4 v07 provider
+call the loader's `vkCmd*` directly, so their command buffers can never be encoded by the layer;
+those must stay
 KosmicKrisp's (the layer will own a command buffer only when everything recorded into it comes
 through it).
 

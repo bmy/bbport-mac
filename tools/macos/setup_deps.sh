@@ -181,13 +181,21 @@ if [[ $ARCH == arm64 ]]; then
     step "SPIRV-Cross (static, arm64)"
     SPVC_TAG=vulkan-sdk-1.4.363.0 SPVC_REV=f11ba9f0b21ba8fc15153d50a2a1ae31ab1cf8f7
     echo "tag: $SPVC_TAG"
-    if ! have lib/libspirv-cross-msl.a; then
+    # The stamp names the pin: the GPU build takes SPIRV-Cross only from a prefix that has it
+    # (gpu/CMakeLists.txt), and a new pin rebuilds it.
+    spvc_stamp=$PREFIX/share/spirv_cross_msl/.bbport-rev
+    if ! have lib/libspirv-cross-msl.a || [[ $(cat "$spvc_stamp" 2>/dev/null) != "$SPVC_TAG $SPVC_REV" ]]; then
+        rm -f "$spvc_stamp"
         fetch SPIRV-Cross https://github.com/KhronosGroup/SPIRV-Cross.git "$SPVC_TAG" "$SPVC_REV"
         cmake_build SPIRV-Cross -DSPIRV_CROSS_SHARED=OFF -DSPIRV_CROSS_STATIC=ON \
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DSPIRV_CROSS_CLI=OFF \
             -DSPIRV_CROSS_ENABLE_TESTS=OFF -DSPIRV_CROSS_ENABLE_HLSL=OFF \
             -DSPIRV_CROSS_ENABLE_CPP=OFF -DSPIRV_CROSS_ENABLE_REFLECT=OFF \
             -DSPIRV_CROSS_ENABLE_C_API=OFF -DSPIRV_CROSS_ENABLE_UTIL=OFF
+        # Apache-2.0: its licence goes with the binaries it is linked into (package.sh).
+        mkdir -p "$PREFIX/share/licenses"
+        cp "$SRC/SPIRV-Cross/LICENSE" "$PREFIX/share/licenses/SPIRV-Cross.txt"
+        echo "$SPVC_TAG $SPVC_REV" > "$spvc_stamp"
     fi
 fi
 

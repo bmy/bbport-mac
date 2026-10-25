@@ -23,8 +23,6 @@
 namespace MetalLayer {
 namespace {
 
-using Dispatcher = std::remove_reference_t<decltype(VULKAN_HPP_DEFAULT_DISPATCHER)>;
-
 // What the renderer records and submits (vulkan.hpp's CommandBuffer and Queue members it calls,
 // with the extension aliases vulkan.hpp may have filled instead of the core names), and the
 // lookups libraries make for themselves.
@@ -139,8 +137,7 @@ void NoteLookup(const char* name, bool covered) {
 
 PFN_vkVoidFunction HookedByName(const char* name) {
     for (unsigned i = 0; i < Count; ++i) {
-        if (hooked[i] && i != Id_vkGetDeviceProcAddr && i != Id_vkGetInstanceProcAddr &&
-            std::strcmp(Names[i], name) == 0) {
+        if (hooked[i] && std::strcmp(Names[i], name) == 0) {
             return hooked[i];
         }
     }
@@ -173,14 +170,19 @@ struct Hook<I, R (*)(A...)> {
             }
             Report();
         } else if constexpr (I == Id_vkGetDeviceProcAddr || I == Id_vkGetInstanceProcAddr) {
+            // What the driver answers, replaced by the layer's entry for a function it covers
+            // (the lookup function itself too, so later lookups come back here). Not where the
+            // driver has none (a core name of an extension vulkan.hpp filled from its alias).
             const char* name = std::get<1>(std::tuple{args...});
-            if (name && std::strncmp(name, "vkCmd", 5) == 0) {
-                PFN_vkVoidFunction ours = HookedByName(name);
-                NoteLookup(name, ours != nullptr);
-                if (ours) {
-                    return ours;
-                }
+            const R driver = original(args...);
+            if (!driver || !name) {
+                return driver;
             }
+            PFN_vkVoidFunction ours = HookedByName(name);
+            if (std::strncmp(name, "vkCmd", 5) == 0 || std::strncmp(name, "vkQueueSubmit", 13) == 0) {
+                NoteLookup(name, ours != nullptr);
+            }
+            return ours ? ours : driver;
         }
         return original(args...);
     }

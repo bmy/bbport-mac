@@ -8,6 +8,7 @@
 
 #import <Metal/Metal.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
@@ -17,6 +18,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <xxhash.h>
 #include "common/path_util.h"
 #include "shader/runtime_info.h"
 #include "metal/mtl_device.h"
@@ -42,7 +44,10 @@ __attribute__((format(printf, 1, 2))) void Print(const char* format, ...) {
     std::fflush(stdout);
 }
 
+/// One SPIR-V module's translations, by its content (never dropped: pipeline states keep pointers
+/// to them, and a module the driver gives an old handle again is another entry).
 struct ShaderEntry {
+    std::shared_ptr<const std::vector<u32>> words;
     std::once_flag once;
     std::unique_ptr<Metal::CompiledShader> compiled;
     std::once_flag rect_once; ///< the RectList rewrite of a vertex shader (mtl_spirv_rectlist.h)
@@ -61,8 +66,10 @@ struct State {
     Metal::PsoCache pso;
     Metal::Geometry::PassThroughCache pass_through{device};
     std::mutex mutex;
-    std::unordered_map<u64, std::shared_ptr<std::vector<u32>>> spirv; ///< by VkShaderModule
-    std::unordered_map<u64, std::shared_ptr<ShaderEntry>> shaders;          ///< by VkShaderModule
+    /// By VkShaderModule: the module registered last with that handle.
+    std::unordered_map<u64, std::shared_ptr<ShaderEntry>> modules;
+    /// By the SPIR-V's hash (XXH3); compared in full on a match.
+    std::unordered_multimap<u64, std::shared_ptr<ShaderEntry>> shaders;
 
     std::atomic<u32> render_ok{}, render_failed{}, compute_ok{}, compute_failed{};
     std::atomic<u32> shader_failed{}, no_spirv{};
@@ -90,23 +97,11 @@ struct State {
 
     const Metal::CompiledShader* Get(vk::ShaderModule module, u64 hash, const char* what,
                                      bool rect_list = false) {
-        const u64 handle = u64(VkShaderModule(module));
-        std::shared_ptr<std::vector<u32>> words;
-        std::shared_ptr<ShaderEntry> shader;
-        {
-            std::scoped_lock lock{mutex};
-            auto it = spirv.find(handle);
-            if (it == spirv.end()) {
-                ++no_spirv;
-                return nullptr;
-            }
-            words = it->second;
-            auto& slot = shaders[handle];
-            if (!slot) {
-                slot = std::make_shared<ShaderEntry>();
-            }
-            shader = slot;
+        std::shared_ptr<ShaderEntry> shader = Lookup(module);
+        if (!shader) {
+            return nullptr;
         }
+        const auto& words = shader->words;
         if (rect_list) {
             std::call_once(shader->rect_once, [&] {
                 const auto rewrite = Metal::RewriteRectListVertex(*words);
@@ -133,32 +128,24 @@ struct State {
         return shader->compiled.get();
     }
 
-    /// The module's SPIR-V and its cache entry, or false when it was never registered.
-    bool Entry(vk::ShaderModule module, std::shared_ptr<std::vector<u32>>& words,
-               std::shared_ptr<ShaderEntry>& entry) {
-        const u64 handle = u64(VkShaderModule(module));
+    /// The module's entry, null (counted) when it was never registered.
+    std::shared_ptr<ShaderEntry> Lookup(vk::ShaderModule module) {
         std::scoped_lock lock{mutex};
-        auto it = spirv.find(handle);
-        if (it == spirv.end()) {
+        auto it = modules.find(u64(VkShaderModule(module)));
+        if (it == modules.end()) {
             ++no_spirv;
-            return false;
+            return nullptr;
         }
-        words = it->second;
-        auto& slot = shaders[handle];
-        if (!slot) {
-            slot = std::make_shared<ShaderEntry>();
-        }
-        entry = slot;
-        return true;
+        return it->second;
     }
 
     const Metal::CompiledShader* Variant(vk::ShaderModule module, u64 hash,
                                          const Metal::CompileVariant& variant) {
-        std::shared_ptr<std::vector<u32>> words;
-        std::shared_ptr<ShaderEntry> entry;
-        if (!Entry(module, words, entry)) {
+        std::shared_ptr<ShaderEntry> entry = Lookup(module);
+        if (!entry) {
             return nullptr;
         }
+        const auto& words = entry->words;
         std::scoped_lock lock{entry->variant_mutex};
         for (const auto& [known, shader] : entry->variants) {
             if (known == variant) {
@@ -170,10 +157,9 @@ struct State {
         return made.second.get();
     }
 
-    std::shared_ptr<std::vector<u32>> Words(vk::ShaderModule module) {
-        std::shared_ptr<std::vector<u32>> words;
-        std::shared_ptr<ShaderEntry> entry;
-        return Entry(module, words, entry) ? words : nullptr;
+    std::shared_ptr<const std::vector<u32>> Words(vk::ShaderModule module) {
+        const auto entry = Lookup(module);
+        return entry ? entry->words : nullptr;
     }
 
     void Report() {
@@ -194,9 +180,10 @@ struct State {
     }
 };
 
+/// Never destroyed: pipeline-creation threads may still use it while the process exits.
 State& Get() {
-    static State state;
-    return state;
+    static State* const state = new State;
+    return *state;
 }
 
 } // namespace
@@ -227,7 +214,8 @@ void* DepthStencil(const Metal::DepthStencilKey& key) {
     return Get().pso.GetDepthStencilState(key);
 }
 
-void Forget(VkPipeline pipeline) {
+void Forget(vk::Pipeline vk_pipeline) {
+    const VkPipeline pipeline = vk_pipeline;
     if (!Enabled()) {
         return;
     }
@@ -239,11 +227,23 @@ void Forget(VkPipeline pipeline) {
 
 void RegisterModule(vk::ShaderModule module, std::span<const u32> spirv) {
     auto& s = Get();
-    auto words = std::make_shared<std::vector<u32>>(spirv.begin(), spirv.end());
+    const u64 hash = XXH3_64bits(spirv.data(), spirv.size_bytes());
     std::scoped_lock lock{s.mutex};
-    s.spirv[u64(VkShaderModule(module))] = std::move(words);
-    // A handle the driver reused: the shaders compiled from the module it was before are stale.
-    s.shaders.erase(u64(VkShaderModule(module)));
+    std::shared_ptr<ShaderEntry> entry;
+    const auto [first, last] = s.shaders.equal_range(hash);
+    for (auto it = first; it != last; ++it) {
+        if (std::ranges::equal(*it->second->words, spirv)) {
+            entry = it->second;
+            break;
+        }
+    }
+    if (!entry) {
+        entry = std::make_shared<ShaderEntry>();
+        entry->words = std::make_shared<const std::vector<u32>>(spirv.begin(), spirv.end());
+        s.shaders.emplace(hash, entry);
+    }
+    // A handle the driver reused now stands for this module.
+    s.modules[u64(VkShaderModule(module))] = std::move(entry);
 }
 
 void Graphics(const Vulkan::GraphicsPipelineKey& key, std::span<const vk::ShaderModule> modules,

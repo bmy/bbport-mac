@@ -13,6 +13,7 @@
 #include "shader/info.h"
 #include "shader/specialization.h"
 #include "vulkan/instance.h"
+#include "metal/vk_metal_shadow.h" // bbport (macOS): no-ops elsewhere
 
 namespace Vulkan {
 
@@ -185,6 +186,9 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) 
             {.codeSize = spv.size() * sizeof(u32), .pCode = spv.data()});
         if (result != vk::Result::eSuccess) {
             throw Serialization::CorruptData{"cached SPIR-V rejected by the driver"};
+        }
+        if (MetalShadow::Enabled()) { // bbport (macOS): docs/MACOS_METAL_RENDERER.md, stage 2
+            MetalShadow::RegisterModule(created, spv);
         }
         return created;
     };

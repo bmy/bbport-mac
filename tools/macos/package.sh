@@ -85,6 +85,12 @@ if [[ -n $native ]]; then
     cp -L "$DEPS_ARM64/lib/libvulkan.1.dylib" "$engine_arm64/"
     cp "$kk_arm64/libvulkan_kosmickrisp.dylib" "$engine_arm64/kosmickrisp/"
     manifest "$kk_arm64/kosmickrisp_mesa_icd.json" "$engine_arm64/kosmickrisp/kosmickrisp_mesa_icd.json"
+    # Licences of what is linked statically into the native GPU core (SPIRV-Cross, Apache-2.0,
+    # on the Metal command path's branches).
+    if compgen -G "$DEPS_ARM64/share/licenses/*" > /dev/null; then
+        mkdir -p "$engine/licenses"
+        cp "$DEPS_ARM64"/share/licenses/* "$engine/licenses/"
+    fi
 fi
 touch "$engine/.packaged"
 echo "$version" > "$engine/.version"

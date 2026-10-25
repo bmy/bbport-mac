@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: from Huax-1839/bloodborne-macos (ee3120a, GPL-2.0-or-later), renderer_metal/;
-// the draw steps that need their RenderList (EncodeDraw, EncodeIndirectDraw) are in mtl_frame.mm.
+// the draw steps (EncodeDraw, EncodeIndirectDraw) were in its mtl_frame.mm: stage 3 here.
 // Taken from Wooloomooloo2/bloodborne_mac_port at 78b59f5, its includes and names adapted.
 
 #import <Metal/Metal.h>

@@ -9,6 +9,12 @@ To turn something off for one run, put its switch in Extra variables. To drop a 
 good, revert its commit on the branch (`git revert <commit>`); review-fix commits go with the
 change they fix.
 
+## Diagnostics (2026-10-25)
+
+| Commit | Change | Off for a run | Notes |
+|---|---|---|---|
+| `901d520a`, review fixes after it | Tessellated and rect/quad-list draws counted (frame stats, stall reports); each pipeline with the game's tessellation logged once; "Upscaler: now X (N s after the first frame)" | none (log lines only) | `BB_SKIP_TESS_DRAWS=1` is a test: those draws are not drawn (missing from the picture). Off unless set. |
+
 ## Batch 3 (2026-10-24): MetalFX stalls, command thread
 
 | Commit | Change | Off for a run | Notes |

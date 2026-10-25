@@ -888,6 +888,14 @@ void Decode(PushWrite& w) {
                                                             : BbMetal::ViewTextureSampled)
                             .texture;
             b.ok = b.texture != nil;
+            if (storage && b.ok) {
+                // Writes to a format stored swizzled would land in the wrong channels.
+                std::scoped_lock lock{objects_mutex};
+                const auto f = view_formats.find(info.imageView);
+                b.ok = f != view_formats.end() &&
+                       Metal::VkToMtl::FormatSwizzle(vk::Format(f->second)) ==
+                           Metal::VkToMtl::IdentitySwizzle;
+            }
             if (write.descriptorType == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER) {
                 std::scoped_lock lock{objects_mutex};
                 auto it = samplers.find(info.sampler);

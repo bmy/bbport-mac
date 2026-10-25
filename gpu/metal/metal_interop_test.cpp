@@ -249,7 +249,7 @@ void RunInteropTestIfAsked(const Vulkan::Instance& instance) {
     if (!env || (env[0] != '1' && env[0] != '2')) {
         return;
     }
-    // 2: a negative control. The Metal side has no barriers of its own; a FAIL then shows the
+    // 2: a negative control. The render pass has no barriers of its own; a FAIL then shows the
     // test can catch work out of order (a PASS says only that it ran in order anyway).
     const bool barriers = env[0] == '1';
     if (EmulatorSettings.IsVkValidationEnabled()) {

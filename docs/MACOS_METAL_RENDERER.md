@@ -148,3 +148,46 @@ Notes for 3b (the layer encoding): KosmicKrisp commits at vkQueueSubmit, waits i
 submission with our command buffers in it is split: KosmicKrisp first gets the waits (no command
 buffers), then ours are committed to its queue, then KosmicKrisp gets the rest with the signals
 and the fence. Queue order then carries the semaphores both ways.
+
+## Stage 3b: the frame encoder (`BB_METAL_FRAME=1`)
+
+`gpu/metal/mtl_frame.{h,mm}`, driven by the layer: every primary command buffer begun through
+the dispatcher is owned (secondaries stay KosmicKrisp's); its commands go to the frame encoder,
+which keeps the Vulkan state as recorded and encodes what it can in Metal 4 on KosmicKrisp's
+queue. Frame mode also turns on the shadow build (its draws need the Metal pipelines) and needs
+the validation layers off.
+
+- **Segments.** An owned command buffer becomes a sequence of segments: Metal 4 command buffers
+  (one allocator per recording, argument tables for the vertex, fragment and compute stages,
+  scratch memory for push constants and buffer sizes in a residency set added to the queue) and
+  KosmicKrisp command buffers of the encoder's own (a command pool per recording thread, recycled
+  by a timeline semaphore). At submission (`vkQueueSubmit`, `vkQueueSubmit2`) a batch with owned
+  command buffers goes to the queue as: the waits (a submission without command buffers), the
+  segments in order (Metal ones committed, KosmicKrisp ones submitted), the signals and the fence.
+  KosmicKrisp commits at submission, so queue order carries the semaphores both ways.
+- **What Metal encodes.** Render passes (`vkCmdBeginRendering`; reopened, loading, after anything
+  that has to come between draws), draws and indexed and indirect draws with a Metal pipeline
+  from the shadow build, dispatches (direct and indirect), push descriptors (buffers by GPU
+  address, image views by their sampled or storage texture, samplers made from their create
+  infos), push constants, vertex and index buffers, the dynamic state. Every encoder ends with a
+  full producer barrier, as KosmicKrisp's do; a pipeline barrier is an encoder barrier in a
+  compute encoder and ends a render encoder.
+- **What goes to KosmicKrisp (the fallback).** Each draw or dispatch Metal does not take, with the
+  reason counted: no Metal pipeline (host passes, FSR 3.1's own pipelines), tessellation and
+  geometry shaders (Metal 4 has no tessellation stage), topologies Metal lacks, bound descriptor
+  sets, a descriptor without a Metal object, attachment or sample formats other than the
+  pipeline's, rasterizer discard, the depth bounds test, a color write mask other than the
+  pipeline's, a GPU draw count, 8-bit indices, render passes with resolves, layers or view masks.
+  Its segment gets the whole recorded state when it opens (pipelines, descriptors, push
+  constants, vertex and index buffers, dynamic state, the render pass loading), and the state
+  commands as they come while it stays open. Transfers, clears, blits, query and timestamp
+  commands always go there; while an occlusion query is active everything does (a query begins
+  and ends in one command buffer, and in one render pass instance when begun in one).
+  Debug labels are dropped.
+- **Log:** every 5 s, `Metal frame: per second N draws and N dispatches in Metal, N draws and N
+  dispatches and N other commands to KosmicKrisp (N segments, N switches); ...; to KosmicKrisp
+  because: <the top reasons>`; once each, what it cannot do at all.
+- **Not yet:** a library that records with the loader's own functions (FSR 4.1.1, FSR 4 v07)
+  cannot be used in frame mode (its commands would reach KosmicKrisp's copy of the command
+  buffer, which is never submitted: choose MetalFX or FSR 3.1). Occlusion queries and
+  tessellated draws keep their passes on KosmicKrisp.

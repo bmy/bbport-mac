@@ -194,7 +194,8 @@ State& Get() {
 bool Enabled() {
     static const bool enabled = [] {
         const char* shadow = std::getenv("BB_METAL_SHADOW");
-        return shadow && shadow[0] == '1';
+        const char* frame = std::getenv("BB_METAL_FRAME"); // its draws need the pipelines
+        return (shadow && shadow[0] == '1') || (frame && frame[0] == '1');
     }();
     return enabled;
 }

@@ -566,7 +566,7 @@ void Instance::CreateDevice() {
             VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
     ASSERT_MSG(dispatch.vkCmdPushDescriptorSetKHR,
                "the driver does not resolve vkCmdPushDescriptorSetKHR (VK_KHR_push_descriptor)");
-    MetalLayer::InstallIfAsked(); // bbport: BB_METAL_TRACE=1 (docs/MACOS_METAL_RENDERER.md)
+    MetalLayer::InstallIfAsked(*device); // bbport: BB_METAL_TRACE/FRAME (MACOS_METAL_RENDERER.md)
     if (dlss) {
         dlss->Initialize(*instance, physical_device, *device);
     }

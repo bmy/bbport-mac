@@ -192,9 +192,11 @@ if [[ $ARCH == arm64 ]]; then
             -DSPIRV_CROSS_ENABLE_TESTS=OFF -DSPIRV_CROSS_ENABLE_HLSL=OFF \
             -DSPIRV_CROSS_ENABLE_CPP=OFF -DSPIRV_CROSS_ENABLE_REFLECT=OFF \
             -DSPIRV_CROSS_ENABLE_C_API=OFF -DSPIRV_CROSS_ENABLE_UTIL=OFF
-        # Apache-2.0: its licence goes with the binaries it is linked into (package.sh).
-        mkdir -p "$PREFIX/share/licenses"
-        cp "$SRC/SPIRV-Cross/LICENSE" "$PREFIX/share/licenses/SPIRV-Cross.txt"
+        # Apache-2.0 (headers MIT and Khronos): its licences go with the binaries it is linked
+        # into (package.sh).
+        mkdir -p "$PREFIX/share/licenses/SPIRV-Cross"
+        cp "$SRC/SPIRV-Cross/LICENSE" "$PREFIX/share/licenses/SPIRV-Cross/LICENSE.txt"
+        cp "$SRC/SPIRV-Cross"/LICENSES/* "$PREFIX/share/licenses/SPIRV-Cross/"
         echo "$SPVC_TAG $SPVC_REV" > "$spvc_stamp"
     fi
 fi

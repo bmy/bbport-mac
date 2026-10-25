@@ -227,6 +227,11 @@ if (APPLE AND (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64" OR
             break()
         endif()
     endforeach()
+    # Searched again at every configure: a path an older configure cached may be another copy.
+    unset(spirv_cross_core_DIR CACHE)
+    unset(spirv_cross_glsl_DIR CACHE)
+    unset(spirv_cross_msl_DIR CACHE)
+    unset(BB_SPIRV_CROSS_INCLUDE_DIR CACHE)
     if (bb_spvc_prefix)
         file(STRINGS "${bb_spvc_prefix}/share/spirv_cross_msl/.bbport-rev" bb_spvc_rev LIMIT_COUNT 1)
         find_package(spirv_cross_core CONFIG QUIET PATHS "${bb_spvc_prefix}" NO_DEFAULT_PATH)

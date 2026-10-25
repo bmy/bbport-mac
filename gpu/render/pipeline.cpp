@@ -591,7 +591,9 @@ GraphicsPipeline::GraphicsPipeline(
     pipeline = CheckPipeline(device.createGraphicsPipelineUnique(pipeline_cache, pipeline_ci),
                              preloading, "graphics");
     SetObjectName(device, *pipeline, "Graphics Pipeline {}", debug_name);
-    if (MetalShadow::Enabled()) { // bbport (macOS): docs/MACOS_METAL_RENDERER.md, stage 2
+    // bbport (macOS): docs/MACOS_METAL_RENDERER.md, stage 2. Not with dynamic vertex input: the
+    // key then holds no vertex formats (never so on KosmicKrisp).
+    if (MetalShadow::Enabled() && !instance.IsVertexInputDynamicState()) {
         // The fetch shader's attributes in key.vertex_buffer_formats' order (GetVertexInputs).
         // Step rates: the static vertex input's when there is one (also when preloading, where
         // the runtime infos are not filled in), else the vertex stage's runtime info.

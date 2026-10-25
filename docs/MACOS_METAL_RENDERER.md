@@ -109,8 +109,9 @@ Off, it costs one branch per pipeline and shader module.
   kept by SPIR-V content, not by module handle (handles come back after a module is destroyed),
   and a destroyed pipeline's handle is forgotten; the Metal device is the system default (the same
   object as KosmicKrisp's on Apple silicon; stage 3 takes the exported one). Vertex formats come
-  from the key, which has them without dynamic vertex input only: true of KosmicKrisp, not of
-  every driver.
+  from the key, which has them without dynamic vertex input only (true of KosmicKrisp): with
+  dynamic vertex input the shadow build skips graphics pipelines. The Metal binary archive is
+  written every 200 pipelines.
 - Hooks in upstream files: `vulkan/shader_module.cpp` (`CompileSPV`) and
   `render/pipeline_store.cpp` (cached SPIR-V): the module's SPIR-V; `render/pipeline.cpp` (the
   compute and graphics constructors, after the Vulkan create; `~Pipeline`), each a guarded block
@@ -122,8 +123,8 @@ Off, it costs one branch per pipeline and shader module.
   in the MSL cache's header, so a new pin translates again.
 - Licence: SPIRV-Cross is Apache-2.0, linked statically into the native GPU core. Apache-2.0 goes
   with GPL-3.0 (this code is GPL-2.0-or-later), not with GPL-2.0-only, so a binary with it is
-  distributed under GPL-3.0; `package.sh` ships its licence (`licenses/`). To settle before a
-  release from this branch.
+  distributed under GPL-3.0; `package.sh` ships its licences (`licenses/SPIRV-Cross`), not yet
+  the GPL-3.0 text. To settle before a release from this branch.
 - MSL and pipeline caches: the user cache directory, `metal-shadow/` (not per game: the MSL
   files are named by SPIR-V hash).
 

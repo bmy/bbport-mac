@@ -164,6 +164,9 @@ struct State {
 
     void Report() {
         const u32 n = ++seen;
+        if (n % 200 == 0) {
+            pso.Flush(); // the binary archive, for the next run (the state is never destroyed)
+        }
         if (n != 1 && n % 50 != 0) {
             return;
         }

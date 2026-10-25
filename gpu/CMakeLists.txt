@@ -205,7 +205,7 @@ add_dependencies(bbgpu host_shaders)
 # opened at run time (dlopen), so a missing x86-64 slice cannot break the link or the start.
 # bbport: the Metal command path (metal/, docs/MACOS_METAL_RENDERER.md); its interop test is a no-op
 # elsewhere.
-target_sources(bbgpu PRIVATE metal/metal_interop_test.cpp)
+target_sources(bbgpu PRIVATE metal/metal_interop_test.cpp metal/mtl_layer.cpp)
 if (APPLE)
     target_sources(bbgpu PRIVATE shim/bbport_metalfx.mm metal/metal_interop.mm)
     set_source_files_properties(shim/bbport_metalfx.mm metal/metal_interop.mm PROPERTIES

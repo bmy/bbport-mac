@@ -74,8 +74,9 @@ one is upstream 0.6's (`gpu/render`, `gpu/textures`, `gpu/buffers`, ...), with t
    layers off.
 2. **Shaders (now).** Every pipeline the renderer builds is also built as a Metal pipeline state
    from the same key and SPIR-V (a shadow build); failures logged. Nothing drawn through it yet.
-3. **First pixels.** The layer forwards and counts; then the presenter's command buffer in Metal;
-   then the whole frame. Checked against KosmicKrisp's picture.
+3. **First pixels.** The layer forwards and counts (3a, `BB_METAL_TRACE=1`); then the
+   presenter's command buffer in Metal; then the whole frame. Checked against KosmicKrisp's
+   picture.
 4. **Speed.** Ordering of guest memory without full barriers, merged render passes, rect lists as
    triangles, tessellation in runs; A/B measured at each step.
 
@@ -112,3 +113,24 @@ pipeline and shader module.
   `setup_deps.sh` with `BB_ARCH=arm64`. CMake builds the Metal files and defines
   `BB_METAL_BACKEND` only on arm64 macOS with SPIRV-Cross found; every other build is unchanged.
 - MSL and pipeline caches: the user cache directory (`metal-shadow/`, and per game serial).
+
+## Stage 3a: the layer, counting
+
+`BB_METAL_TRACE=1` (any platform): `gpu/metal/mtl_layer.cpp` installs itself over about 90 of
+vulkan.hpp's default dispatcher's functions right after the device's dispatcher init
+(`vulkan/instance.cpp`), forwards every call unchanged and counts them. Every 5 s, from a
+submission, the log has `Metal layer: per second N commands, N submissions of N command buffers
+(N commands each); calls per second: ...`. Lookups of `vkCmd*` through `vkGet*ProcAddr` (FSR 3.1,
+MetalFX's FFX glue, the overlay) get the layer's entry and are logged once each, so those
+libraries are counted too.
+
+What it is for: the command mix the Metal encoder has to cover first, and which code records
+around the dispatcher. Known so far: `upscale/fsr411` (FSR 4.1.1) calls the loader's `vkCmd*`
+directly, so its command buffers can never be encoded by the layer; those must stay
+KosmicKrisp's (the layer will own a command buffer only when everything recorded into it comes
+through it).
+
+Notes for 3b (the layer encoding): KosmicKrisp commits at vkQueueSubmit, waits included, so a
+submission with our command buffers in it is split: KosmicKrisp first gets the waits (no command
+buffers), then ours are committed to its queue, then KosmicKrisp gets the rest with the signals
+and the fence. Queue order then carries the semaphores both ways.

@@ -869,6 +869,15 @@ void Decode(PushWrite& w) {
         case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
         case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: {
             const VkDescriptorBufferInfo& info = w.buffer_infos[i];
+            if (!info.buffer) {
+                // A null descriptor (nullDescriptor): reads give zeros. Writes are dropped in
+                // Vulkan and land in the shared zero buffer here (a later null read sees them:
+                // the guest's shaders write only buffers they were given).
+                b.address = null_buffer.gpuAddress;
+                b.size = 0;
+                b.ok = true;
+                break;
+            }
             const BufferRef ref = ResolveBuffer(info.buffer);
             b.why = "a buffer descriptor without a Metal buffer";
             if (ref.buffer) {
@@ -886,8 +895,9 @@ void Decode(PushWrite& w) {
         case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER: {
             const VkDescriptorImageInfo& info = w.image_infos[i];
             const bool storage = write.descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            b.why = storage ? "a storage image without a Metal texture"
-                            : "a sampled image without a Metal texture";
+            b.why = !info.imageView ? "a null image descriptor (no stand-in of its type yet)"
+                    : storage       ? "a storage image without a Metal texture"
+                                    : "a sampled image without a Metal texture";
             b.texture = ResolveView(info.imageView, storage ? BbMetal::ViewTextureStorage
                                                             : BbMetal::ViewTextureSampled)
                             .texture;
@@ -1480,7 +1490,9 @@ bool Init(VkDevice vkdev, PFN_vkGetDeviceProcAddr driver_proc) {
                       error ? error.localizedDescription.UTF8String : "unknown");
                 return false;
             }
-            null_buffer = [device newBufferWithLength:65536 options:MTLResourceStorageModePrivate];
+            // Zeros: what a null descriptor reads.
+            null_buffer = [device newBufferWithLength:65536 options:MTLResourceStorageModeShared];
+            std::memset(null_buffer.contents, 0, null_buffer.length);
             MTLTextureDescriptor* td =
                 [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
                                                                    width:1

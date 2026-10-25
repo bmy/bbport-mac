@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "render/presenter.h"
+#include "metal/metal_interop_test.h"
 
 #include <algorithm>
 #include <atomic>
@@ -105,6 +106,7 @@ Presenter::Presenter(Frontend::WindowSDL& window_, BbCp::CommandProcessor* cp_)
         free_frames.push_back(&frames[i]);
     }
     BbOverlay::Init(instance, swapchain.GetSurfaceFormat().format, count);
+    BbMetal::RunInteropTestIfAsked(instance); // BB_METAL_INTEROP_TEST=1 (macOS)
 }
 
 Presenter::~Presenter() {

@@ -259,6 +259,22 @@ std::pair<u32, u32> GetDrawOffsets(
 }
 } // namespace
 
+namespace {
+/// bbport (macOS) experiment bits of BB_TOGGLE_FILE (its second number), to measure what draws
+/// drawn as patches cost on drivers that tessellate in software (KosmicKrisp): 128 leaves out
+/// the game's tessellated draws, 256 the rect and quad lists (drawn as patches). The picture is
+/// wrong while either is set: for GPU time measurements only.
+bool SkippedPatchDraw(const GraphicsPipeline* pipeline) {
+    const bool skip_tess = BbToggle::Experiment(128), skip_lists = BbToggle::Experiment(256);
+    if (!skip_tess && !skip_lists) {
+        return false;
+    }
+    const auto prim = pipeline->GetGraphicsKey().prim_type;
+    const bool list = prim == Gcn::PrimitiveType::RectList || prim == Gcn::PrimitiveType::QuadList;
+    return (skip_lists && list) || (skip_tess && prim == Gcn::PrimitiveType::PatchPrimitive);
+}
+} // namespace
+
 void Rasterizer::Draw(bool is_indexed, u32 index_offset, const PreparedDraw* prepared) {
     BB_SECTION(ADraw);
     BbStats::draws.fetch_add(1, std::memory_order_relaxed);
@@ -398,6 +414,9 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
         if (ps && std::ranges::find(skipped_ps, ps->pgm_hash) != skipped_ps.end()) {
             return;
         }
+    }
+    if (SkippedPatchDraw(pipeline)) {
+        return;
     }
     // bbport: the key guide icons for the device in use (a change: uploaded before this draw).
     prompts->Update();
@@ -888,6 +907,9 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     if (DrawPipe::OnStageB()) {
         FrameCapture::Poll();
         scheduler.PopPendingOperations();
+    }
+    if (SkippedPatchDraw(pipeline)) {
+        return;
     }
     const VAddr count_address = indirect.count;
     const u32 stride = indirect.stride;

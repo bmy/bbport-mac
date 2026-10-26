@@ -1,15 +1,28 @@
 diff --git a/src/kosmickrisp/vulkan/kk_sync.c b/src/kosmickrisp/vulkan/kk_sync.c
-index e5c7d85..bd195b1 100644
+index e5c7d85..092712b 100644
 --- a/src/kosmickrisp/vulkan/kk_sync.c
 +++ b/src/kosmickrisp/vulkan/kk_sync.c
-@@ -157,6 +157,16 @@ typedef struct VkExportMetalBufferObjectBBPORT {
+@@ -117,7 +117,7 @@ const struct vk_sync_type kk_sync_type = {
+ };
+ 
+ #ifdef VK_USE_PLATFORM_METAL_EXT
+-/* bbport: two chain entries of this port's own for vkExportMetalObjectsEXT (the renderer has the
++/* bbport: chain entries of this port's own for vkExportMetalObjectsEXT (the renderer has the
+  * same definitions, gpu/metal/kk_exports.h; their sType values decode to an unallocated
+  * extension number).
+  * - VkExportMetalViewTextureBBPORT: an image view's texture for one use, with the level and slice
+@@ -157,6 +157,20 @@ typedef struct VkExportMetalBufferObjectBBPORT {
     MTLBuffer_id mtlBuffer;
     uint64_t offset;
  } VkExportMetalBufferObjectBBPORT;
 +/* bbport: the device's id<MTLResidencySet> (every allocation the driver makes, committed at each
 + * vkQueueSubmit), so a Metal command queue of the caller's own can be given it
 + * (addResidencySet:) and use the driver's buffers and images. Not retained: it lives as long as
-+ * the device. */
++ * the device: remove it from such a queue before vkDestroyDevice. The caller must never add,
++ * remove or commit allocations itself (the driver does so under its own lock). An allocation is
++ * resident only from the next submission on this device (vkQueueSubmit with at least one submit,
++ * vkQueueBindSparse), where the driver commits the set; the caller's queue must not use it
++ * before that. */
 +#define VK_STRUCTURE_TYPE_EXPORT_METAL_RESIDENCY_SET_BBPORT ((VkStructureType)0x62627603)
 +typedef struct VkExportMetalResidencySetBBPORT {
 +   VkStructureType sType;
@@ -19,7 +32,7 @@ index e5c7d85..bd195b1 100644
  
  /* bbport: VK_EXT_metal_objects: the MTLSharedEvent of a timeline semaphore (every KosmicKrisp
   * semaphore is one), a queue's Metal 4 command queue, the device, a memory object's heap-wide
-@@ -265,6 +275,12 @@ kk_ExportMetalObjectsEXT(VkDevice device,
+@@ -265,6 +279,12 @@ kk_ExportMetalObjectsEXT(VkDevice device,
           info->offset = kk_buffer_mtl_offset(buffer, 0);
           continue;
        }

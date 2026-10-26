@@ -57,7 +57,9 @@ struct ExportBufferObject {
 };
 
 /// The device's id<MTLResidencySet> (patch 0009): every allocation KosmicKrisp makes, committed at
-/// each vkQueueSubmit; a Metal queue of our own adds it to use the driver's buffers and images.
+/// each submission; a Metal queue of our own adds it to use the driver's buffers and images. Never
+/// add, remove or commit through it (the driver does, under its own lock); an allocation is
+/// resident from the next submission on; remove it from our queue before vkDestroyDevice.
 struct ExportResidencySet {
     VkStructureType sType = ExportResidencySetType;
     const void* pNext = nullptr;

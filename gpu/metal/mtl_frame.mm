@@ -1251,7 +1251,8 @@ const char* DrawBlocker(const Owned& o) {
     if (p.fill_point) {
         return "point polygon mode";
     }
-    if (p.clip_minus_w_to_w) {
+    if (p.clip_minus_w_to_w && !entry->geometry) {
+        // (A geometry draw's pass-through function converts it itself.)
         return "clip space z from -w";
     }
     if (o.rasterizer_discard) {

@@ -269,7 +269,11 @@ has no tessellator, so the frame encoder (`BB_METAL_FRAME=1`) now encodes classi
   `drawPatches` with the evaluation and fragment shaders in the pass (reopened, loading): the
   pipelines of stage 2 (`mtl_tessellation.h`). Indirect and instanced ones still go to
   KosmicKrisp. The report counts them (`tessellated draws in Metal`).
-- Not yet: geometry-shader draws in Metal, ordering by the renderer's barriers instead of the
+- **Geometry-shader draws in Metal** (direct, one instance): per chunk of primitives the export
+  and geometry shaders as compute kernels writing vertex records and strip indices into private
+  scratch, then indexed strip draws of the generated pass-through vertex function
+  (`mtl_geometry.h`). Indirect and instanced ones still go to KosmicKrisp.
+- Not yet: ordering by the renderer's barriers instead of the
   fence chain, batched tessellation, a KosmicKrisp-free frame. The classic device and encoder of
   Wooloomooloo2's native renderer are in the tree (`mtl_device`, `mtl_encoder`, `mtl_order`) for
   that ordering; the frame encoder does not use them yet.

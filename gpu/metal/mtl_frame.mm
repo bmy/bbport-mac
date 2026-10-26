@@ -67,7 +67,7 @@ struct Counters {
     std::atomic<unsigned long long> metal_draws{}, metal_dispatches{}, metal_transfers{},
         fallback_draws{},
         fallback_dispatches{}, fallback_other{}, metal_buffers{}, kk_segments{}, switches{},
-        metal_passes{}, pass_breaks{}, kk_reopens{}, gpu_errors{}, tess_draws{};
+        metal_passes{}, pass_breaks{}, kk_reopens{}, gpu_errors{}, tess_draws{}, geometry_draws{};
 };
 Counters counters;
 
@@ -1244,9 +1244,6 @@ const char* DrawBlocker(const Owned& o) {
     if (!entry || !entry->render) {
         return "no Metal pipeline";
     }
-    if (entry->geometry) {
-        return "a geometry shader";
-    }
     const Metal::RenderPipeline& p = *entry->render;
     if (p.primitive_emulated && !entry->rect_list) {
         return "a topology Metal lacks";
@@ -1495,6 +1492,42 @@ void Dispatch(Owned& o, Encode&& encode, KkRecord&& kk) {
 
 // ---- Tessellated draws (mtl_tessellation.h) ----
 
+/// The vertex buffers of a vertex (export) kernel's stage input, as the draw has them bound.
+struct KernelStreams {
+    std::array<Metal::Tessellation::VertexBinding, Vulkan::MaxVertexBufferCount> bindings;
+    u32 count{};
+
+    bool Resolve(const Owned& o, std::span<const Metal::VertexBufferSlot> slots, const char*& why) {
+        count = 0;
+        for (const auto& slot : slots) {
+            const auto& vb = slot.location < o.vertex_buffers.size()
+                                 ? o.vertex_buffers[slot.location]
+                                 : Owned::VertexBuffer{};
+            id<MTLBuffer> buffer = null_buffer;
+            u64 offset = 0;
+            if (vb.buffer) {
+                const BufferRef ref = ResolveBuffer(vb.buffer);
+                if (!ref.buffer) {
+                    why = "a vertex buffer without a Metal buffer";
+                    return false;
+                }
+                if (!vb.stride && !slot.constant) {
+                    why = "a vertex stride of 0";
+                    return false;
+                }
+                buffer = ref.buffer;
+                offset = ref.offset + vb.offset;
+            }
+            const u64 stride = slot.constant || !vb.stride ? 16 : vb.stride;
+            bindings[count++] = {(__bridge void*)buffer, offset, stride, slot.slot};
+        }
+        return true;
+    }
+    std::span<const Metal::Tessellation::VertexBinding> Span() const {
+        return {bindings.data(), count};
+    }
+};
+
 struct TessArgs {
     u32 count{};          ///< vertices (indices) of the draw
     u32 instances{};
@@ -1570,29 +1603,9 @@ bool EncodeTessellated(Owned& o, const TessArgs& a, const char*& why) {
         why = "no Metal depth/stencil state";
         return false;
     }
-    std::array<Metal::Tessellation::VertexBinding, Vulkan::MaxVertexBufferCount> streams;
-    u32 num_streams = 0;
-    for (u32 i = 0; i < t.num_vertex_slots; ++i) {
-        const auto& slot = t.vertex_slots[i];
-        const auto& vb = slot.location < o.vertex_buffers.size() ? o.vertex_buffers[slot.location]
-                                                                 : Owned::VertexBuffer{};
-        id<MTLBuffer> buffer = null_buffer;
-        u64 offset = 0;
-        if (vb.buffer) {
-            const BufferRef ref = ResolveBuffer(vb.buffer);
-            if (!ref.buffer) {
-                why = "a vertex buffer without a Metal buffer";
-                return false;
-            }
-            if (!vb.stride && !slot.constant) {
-                why = "a vertex stride of 0";
-                return false;
-            }
-            buffer = ref.buffer;
-            offset = ref.offset + vb.offset;
-        }
-        const u64 stride = slot.constant || !vb.stride ? 16 : vb.stride;
-        streams[num_streams++] = {(__bridge void*)buffer, offset, stride, slot.slot};
+    KernelStreams streams;
+    if (!streams.Resolve(o, std::span{t.vertex_slots.data(), t.num_vertex_slots}, why)) {
+        return false;
     }
 
     // Steps 1 and 2: the kernels (after the encoder before them, the chain).
@@ -1606,8 +1619,7 @@ bool EncodeTessellated(Owned& o, const TessArgs& a, const char*& why) {
         const char* bind_why = nullptr;
         BindStage(o, Stage::Compute, graphics, &shader, bind_why);
     };
-    Metal::Tessellation::EncodeKernels((__bridge void*)enc, t, params,
-                                       std::span{streams.data(), num_streams},
+    Metal::Tessellation::EncodeKernels((__bridge void*)enc, t, params, streams.Span(),
                                        (__bridge void*)scratch, at, plan, bind, bind);
     // Step 3: the patch draw (the render encoder after the compute one, the chain).
     if (!PrepareDraw(o, why)) {
@@ -1629,14 +1641,127 @@ bool EncodeTessellated(Owned& o, const TessArgs& a, const char*& why) {
     return true;
 }
 
-/// A tessellated draw in Metal if it can be, else in a KosmicKrisp segment.
+/// A geometry-shader draw (mtl_geometry.h): per chunk of primitives the export and geometry
+/// shaders as compute kernels writing vertex records and strip indices into GPU scratch, then the
+/// strip draws of the pass-through vertex function in the pass (reopened, loading). False with
+/// `why` when the draw goes to KosmicKrisp (as EncodeTessellated).
+bool EncodeGeometry(Owned& o, const TessArgs& a, const char*& why) {
+    const Metal::GeometryPipeline& g = *o.graphics->geometry;
+    const Metal::RenderPipeline& p = *g.render;
+    const u32 input_vertices = g.info.input_vertices;
+    const u32 prims = input_vertices ? a.count / input_vertices : 0;
+    if (!prims || !a.instances) {
+        return true; // nothing to draw
+    }
+    if (a.instances > 1) {
+        why = "an instanced geometry-shader draw";
+        return false;
+    }
+    if (a.indexed && a.vertex_offset < 0) {
+        why = "a geometry-shader draw with a negative vertex offset";
+        return false;
+    }
+    Metal::Tessellation::DrawParams params;
+    params.num_vertices = prims * input_vertices;
+    params.first_vertex = a.indexed ? u32(a.vertex_offset) : a.first;
+    params.first_instance = a.first_instance;
+    u64 index_size = 0;
+    if (a.indexed) {
+        const BufferRef index = ResolveBuffer(o.index_buffer);
+        if (!index.buffer) {
+            why = "no Metal index buffer";
+            return false;
+        }
+        index_size = o.index_type == VK_INDEX_TYPE_UINT32 ? 4 : 2;
+        params.index_type = index_size == 4 ? 2 : 1;
+        params.index_buffer = (__bridge void*)index.buffer;
+        params.index_offset = index.offset + o.index_offset + u64(a.first) * index_size;
+    }
+    const Metal::TessKernel& es = g.es[params.index_type];
+    if (!es.state || !es.shader || !g.gs.state || !g.gs.shader) {
+        why = "a geometry kernel not built";
+        return false;
+    }
+    constexpr auto graphics = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    if (!StageResolvable(o, graphics, es.shader, why) ||
+        !StageResolvable(o, graphics, g.gs.shader, why) ||
+        !StageResolvable(o, graphics, p.vs, why) || !StageResolvable(o, graphics, p.fs, why)) {
+        return false;
+    }
+    if (EmptyScissor(o)) {
+        why = "an empty scissor";
+        return false;
+    }
+    if (!MetalShadow::DepthStencil(DepthStencilKeyOf(o, p))) {
+        why = "no Metal depth/stencil state";
+        return false;
+    }
+    KernelStreams streams;
+    if (!streams.Resolve(o, std::span{g.vertex_slots.data(), g.num_vertex_slots}, why)) {
+        return false;
+    }
+    // Steps 1 and 2 per chunk (the kernels of all chunks in one compute encoder).
+    struct Chunk {
+        Metal::Geometry::Plan plan;
+        id<MTLBuffer> buffer;
+        u64 offset{};
+    };
+    std::vector<Chunk> chunks;
+    const auto bind = [&](const Metal::CompiledShader& shader) {
+        const char* bind_why = nullptr;
+        BindStage(o, Stage::Compute, graphics, &shader, bind_why);
+    };
+    const u32 chunk_prims = std::max(1u, Metal::Geometry::MaxPrimitivesPerChunk(g));
+    for (u32 at = 0; at < prims; at += chunk_prims) {
+        const u32 n = std::min(chunk_prims, prims - at);
+        Chunk c;
+        c.plan = Metal::Geometry::PlanScratch(g, n);
+        id<MTLBuffer> buffer;
+        GpuScratch(o, c.plan.total, &buffer, &c.offset);
+        c.buffer = buffer;
+        Metal::Tessellation::DrawParams draw = params;
+        draw.num_vertices = n * input_vertices;
+        const u64 first_vertex = u64(at) * input_vertices;
+        if (a.indexed) {
+            draw.index_offset = params.index_offset + first_vertex * index_size;
+        } else {
+            draw.first_vertex = params.first_vertex + u32(first_vertex);
+        }
+        id<MTLComputeCommandEncoder> enc = ComputeEncoder(o);
+        Metal::Geometry::EncodeKernels((__bridge void*)enc, g, draw, at, streams.Span(),
+                                       (__bridge void*)c.buffer, c.offset, c.plan, bind, bind);
+        chunks.push_back(c);
+    }
+    // Step 3: the strip draws (the render encoder after the compute one, the chain). 0xFFFFFFFF
+    // restarts a strip (Metal always restarts at it).
+    if (!PrepareDraw(o, why)) {
+        return false; // the kernels' output goes unused
+    }
+    id<MTLRenderCommandEncoder> r = o.render;
+    for (const Chunk& c : chunks) {
+        // The pass-through function reads the records at its buffer 0.
+        [r setVertexBuffer:c.buffer offset:c.offset + c.plan.record_offset atIndex:0];
+        [r drawIndexedPrimitives:MTLPrimitiveType(p.primitive_type)
+                      indexCount:u64(c.plan.prims) * g.info.IndexSlots()
+                       indexType:MTLIndexTypeUInt32
+                     indexBuffer:c.buffer
+               indexBufferOffset:c.offset + c.plan.index_offset
+                   instanceCount:1
+                      baseVertex:0
+                    baseInstance:a.first_instance];
+    }
+    ++counters.geometry_draws;
+    return true;
+}
+
+/// A tessellated or geometry-shader draw in Metal if it can be, else in a KosmicKrisp segment.
 template <typename KkRecord>
 void DrawTessellated(Owned& o, const TessArgs& a, KkRecord&& kk) {
     const char* why = KkOnly(o) ? KkOnly(o) : DrawBlocker(o);
     if (!why && o.cull_mode == VK_CULL_MODE_FRONT_AND_BACK) {
         why = "culling front and back";
     }
-    if (!why && EncodeTessellated(o, a, why)) {
+    if (!why && (o.graphics->tess ? EncodeTessellated(o, a, why) : EncodeGeometry(o, a, why))) {
         ++counters.metal_draws;
         return;
     }
@@ -2730,7 +2855,7 @@ void CmdSetLineWidth(Owned& o, float width) {
 void CmdDraw(Owned& o, uint32_t vertex_count, uint32_t instance_count, uint32_t first_vertex,
              uint32_t first_instance) {
     @autoreleasepool {
-        if (o.graphics && o.graphics->tess) {
+        if (o.graphics && (o.graphics->tess || o.graphics->geometry)) {
             DrawTessellated(o, {vertex_count, instance_count, first_vertex, 0, first_instance, false},
                             [&](VkCommandBuffer cb) {
                                 driver.vkCmdDraw(cb, vertex_count, instance_count, first_vertex,
@@ -2762,7 +2887,7 @@ void CmdDraw(Owned& o, uint32_t vertex_count, uint32_t instance_count, uint32_t 
 void CmdDrawIndexed(Owned& o, uint32_t index_count, uint32_t instance_count, uint32_t first_index,
                     int32_t vertex_offset, uint32_t first_instance) {
     @autoreleasepool {
-        if (o.graphics && o.graphics->tess) {
+        if (o.graphics && (o.graphics->tess || o.graphics->geometry)) {
             DrawTessellated(o,
                             {index_count, instance_count, first_index, vertex_offset,
                              first_instance, true},
@@ -2805,7 +2930,8 @@ void CmdDrawIndirect(Owned& o, VkBuffer buffer, VkDeviceSize offset, uint32_t co
     @autoreleasepool {
         const BufferRef args = ResolveBuffer(buffer);
         const BufferRef index = indexed ? ResolveBuffer(o.index_buffer) : BufferRef{};
-        const char* blocker = o.graphics && o.graphics->tess ? "an indirect tessellated draw"
+        const char* blocker = o.graphics && o.graphics->tess       ? "an indirect tessellated draw"
+                              : o.graphics && o.graphics->geometry ? "an indirect geometry-shader draw"
                               : !args.buffer                ? "no Metal indirect buffer"
                               : indexed && !index.buffer    ? "no Metal index buffer"
                               : o.graphics && o.graphics->rect_list ? "an indirect rect list"
@@ -3450,14 +3576,15 @@ void Report(double seconds) {
     Print("Metal frame: per second %.0f draws, %.0f dispatches and %.0f transfers in Metal, %.0f "
           "draws and %.0f dispatches and %.0f other commands to KosmicKrisp (%.0f segments, %.0f "
           "switches); %.0f Metal command buffers; render passes ended in Metal %.0f, split %.0f "
-          "times in Metal, reopened %.0f times on KosmicKrisp; %.0f tessellated draws in Metal; GPU "
-          "errors so far %llu; to KosmicKrisp because: %s\n",
+          "times in Metal, reopened %.0f times on KosmicKrisp; %.0f tessellated and %.0f "
+          "geometry-shader draws in Metal; GPU errors so far %llu; to KosmicKrisp because: %s\n",
           take(counters.metal_draws), take(counters.metal_dispatches),
           take(counters.metal_transfers),
           take(counters.fallback_draws), take(counters.fallback_dispatches),
           take(counters.fallback_other), take(counters.kk_segments), take(counters.switches),
           take(counters.metal_buffers), take(counters.metal_passes), take(counters.pass_breaks),
-          take(counters.kk_reopens), take(counters.tess_draws), counters.gpu_errors.load(),
+          take(counters.kk_reopens), take(counters.tess_draws), take(counters.geometry_draws),
+          counters.gpu_errors.load(),
           top.empty() ? "-" : top.c_str());
 }
 

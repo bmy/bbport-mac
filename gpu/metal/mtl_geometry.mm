@@ -83,6 +83,10 @@ void EncodeKernels(void* compute_encoder, const GeometryPipeline& pipeline,
     Tessellation::EncodeVertexKernel(compute_encoder, pipeline.es, draw, vertex_buffers, scratch,
                                      scratch_offset + plan.es_offset, bind_es);
 
+    // bbport: the geometry kernel reads what the export kernel wrote (the encoder may be a
+    // concurrent one).
+    [enc memoryBarrierWithScope:MTLBarrierScopeBuffers];
+
     // 2. The geometry shader: one thread per primitive.
     const TessKernel& kernel = pipeline.gs;
     ASSERT_MSG(kernel.state, "the geometry kernel was not built");

@@ -3422,8 +3422,13 @@ void CmdDraw(Owned& o, uint32_t vertex_count, uint32_t instance_count, uint32_t 
                             });
             return;
         }
+        // The rewritten rect list shader builds rectangle k from guest vertices 3k..3k+2
+        // (mtl_spirv_rectlist.h): a draw starting inside a rectangle would shift every one.
+        const char* blocker = o.graphics && o.graphics->rect_list && first_vertex % 3
+                                  ? "a rect list draw starting inside a rectangle"
+                                  : nullptr;
         Draw(
-            o, nullptr,
+            o, blocker,
             [&](id<MTLRenderCommandEncoder> enc) {
                 u32 start = first_vertex, n = vertex_count;
                 if (o.graphics->rect_list) {

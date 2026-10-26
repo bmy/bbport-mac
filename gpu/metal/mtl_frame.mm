@@ -112,6 +112,7 @@ id<MTLCommandQueue> queue;
 /// each one runs after the one before it in commit order, as KosmicKrisp puts a full barrier after
 /// each of its encoders. (Fences are evaluated in commit order, across command buffers.)
 id<MTLFence> chain;
+id<MTLResidencySet> kk_residency; ///< KosmicKrisp's (patch 0009), on our queue until Shutdown
 /// Between the two queues (KosmicKrisp's timeline semaphores, their MTLSharedEvents): KosmicKrisp
 /// signals `to_metal` after its work and our command buffers wait for it; ours signal `to_kk` and
 /// KosmicKrisp's submissions wait for it. Values only grow (submissions are serialized).
@@ -2298,6 +2299,18 @@ bool BuildPass(Owned& o) {
 
 // ---- The interface ----
 
+void Shutdown() {
+    @autoreleasepool {
+        if (!queue || !kk_residency) {
+            return;
+        }
+        // (No wait for the queue: a gate command buffer waiting for KosmicKrisp could hang the
+        // exit; the queue's residency sets apply to the command buffers committed after.)
+        [queue removeResidencySet:kk_residency];
+        kk_residency = nil;
+    }
+}
+
 bool Init(VkDevice vkdev, PFN_vkGetDeviceProcAddr driver_proc) {
     vk_device = vkdev;
 #define BB_RESOLVE(name)                                                                           \
@@ -2351,7 +2364,8 @@ bool Init(VkDevice vkdev, PFN_vkGetDeviceProcAddr driver_proc) {
                 return false;
             }
             queue.label = @"bbport Metal frame";
-            [queue addResidencySet:(__bridge id<MTLResidencySet>)kk_set.mtlResidencySet];
+            kk_residency = (__bridge id<MTLResidencySet>)kk_set.mtlResidencySet;
+            [queue addResidencySet:kk_residency];
             [queue addResidencySet:residency];
             // Zeros: what a null descriptor reads.
             null_buffer = [device newBufferWithLength:65536 options:MTLResourceStorageModeShared];

@@ -1054,12 +1054,15 @@ const GeometryPipeline* PsoCache::GetGeometryPipeline(const Vulkan::GraphicsPipe
                                   pipeline->num_vertex_slots, error)) {
                 break;
             }
-            const RenderPipelineInput render_input{.blend = input.blend,
-                                                   .geometry = true,
-                                                   .geometry_output = pipeline->info.output};
+            RenderPipelineInput render_input{.blend = input.blend,
+                                             .geometry = true,
+                                             .geometry_output = pipeline->info.output};
             Vulkan::GraphicsPipelineKey render_key = key;
             const CompiledShader* render_fs = fs;
             if (GeometryDebugEnabled() && fs) { // BB_GS_DEBUG
+                // bbport: no blending (the pipeline's blend states come from `blend`, not the
+                // key's blend controls DebugFragment clears).
+                render_input.blend = {};
                 render_fs = DebugFragment(*impl, render_key, error);
                 if (!render_fs) {
                     break;

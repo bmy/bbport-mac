@@ -245,8 +245,9 @@ struct DepthStencilKey {
 /// threads missing on the same key both build, the second result is dropped). Pointers returned
 /// stay valid until the cache is destroyed. A failed build is remembered (the error is logged
 /// once, with the shader hashes and the Metal error) and returns nullptr every time.
-/// BB_GS_DEBUG=1 (read once): geometry draws use a constant magenta fragment function, no
-/// blending, no depth write, and the draws log their first vertex records (P7.1c).
+/// BB_GS_DEBUG=1 (read once): geometry draws use a constant magenta fragment function without
+/// blending (P7.1c). bbport: the frame encoder neither turns their depth writes off nor logs
+/// their vertex records (mtl_geometry.h's DebugWantsDraw / DebugLog are not called).
 bool GeometryDebugEnabled();
 
 class PsoCache {

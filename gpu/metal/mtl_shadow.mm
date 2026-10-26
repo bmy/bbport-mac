@@ -28,6 +28,7 @@
 #include "common/path_util.h"
 #include "shader/runtime_info.h"
 #include "metal/mtl_device.h"
+#include "metal/mtl_layer.h"
 #include "metal/mtl_device_impl.h"
 #include "metal/mtl_pso_cache.h"
 #include "metal/mtl_shader.h"
@@ -291,19 +292,31 @@ struct State {
 
 /// Never destroyed: pipeline-creation threads may still use it while the process exits.
 State& Get() {
-    static State* const state = new State;
+    static State* const state = [] {
+        State* s = new State;
+        // bbport: the binary archive is written every 200 pipelines (Report); the rest at exit
+        // (the state is never destroyed, so ~PsoCache's flush never runs).
+        std::atexit([] { Get().pso.Flush(); });
+        return s;
+    }();
     return *state;
 }
 
 } // namespace
 
 bool Enabled() {
-    static const bool enabled = [] {
+    static const bool shadow_asked = [] {
         const char* shadow = std::getenv("BB_METAL_SHADOW");
-        const char* frame = std::getenv("BB_METAL_FRAME"); // its draws need the pipelines
-        return (shadow && shadow[0] == '1') || (frame && frame[0] == '1');
+        return shadow && shadow[0] == '1';
     }();
-    return enabled;
+    static const bool frame_asked = [] {
+        const char* frame = std::getenv("BB_METAL_FRAME"); // its draws need the pipelines
+        return frame && frame[0] == '1';
+    }();
+    // bbport: for the frame encoder only while it is on (not when the layer fell back to
+    // counting: validation layers, an Init that failed); the layer is installed at the device's
+    // creation, before any pipeline.
+    return shadow_asked || (frame_asked && MetalLayer::FrameActive());
 }
 
 const GraphicsEntry* FindGraphics(VkPipeline pipeline) {

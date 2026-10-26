@@ -24,6 +24,9 @@ struct Owned;
 /// KosmicKrisp's residency set (patch 0009), the shared events between the queues. False (logged)
 /// when something is missing: the layer then stays a counting one.
 bool Init(VkDevice device, PFN_vkGetDeviceProcAddr driver_proc);
+/// bbport: before vkDestroyDevice: KosmicKrisp's residency set off our queue (the device
+/// releases it; patch 0009's contract).
+void Shutdown();
 
 /// A command buffer begins (vkBeginCommandBuffer, after the driver's): its encoding state.
 Owned* Begin(VkCommandBuffer command_buffer);

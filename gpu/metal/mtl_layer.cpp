@@ -69,7 +69,8 @@ namespace {
     X(vkCreateImage) X(vkDestroyImage) X(vkCreateShaderModule) X(vkCreateGraphicsPipelines)       \
     X(vkCreateComputePipelines) X(vkDestroyPipeline) X(vkAllocateDescriptorSets)                   \
     X(vkUpdateDescriptorSets) X(vkFreeDescriptorSets) X(vkResetDescriptorPool)                     \
-    X(vkDestroyDescriptorPool) X(vkGetDeviceProcAddr)                                              \
+    X(vkDestroyDescriptorPool) X(vkAllocateCommandBuffers) X(vkResetCommandPool)                   \
+    X(vkDestroyCommandPool) X(vkDestroyDevice) X(vkGetDeviceProcAddr)                              \
     X(vkGetInstanceProcAddr)
 
 enum Id : unsigned {
@@ -180,6 +181,9 @@ PFN_vkVoidFunction HookedByName(const char* name) {
 
 std::mutex owned_mutex;
 std::unordered_map<VkCommandBuffer, MetalFrame::Owned*> owned;
+/// bbport: the command buffers of each pool (vkAllocateCommandBuffers), so that a pool's reset
+/// or destruction discards their owned states; under owned_mutex.
+std::unordered_map<VkCommandPool, std::vector<VkCommandBuffer>> pool_buffers;
 std::atomic<unsigned> owned_count{0}; ///< owned.size(): the lock is skipped while it is zero
 /// Bumped whenever an owned command buffer appears or goes: a thread's cached lookup is valid
 /// while it is unchanged (a command buffer is recorded by one thread at a time).
@@ -219,6 +223,29 @@ MetalFrame::Owned* TakeOwned(VkCommandBuffer cb) {
     owned_count.store(unsigned(owned.size()), std::memory_order_release);
     ++owned_generation;
     return o;
+}
+
+/// Takes the states of a pool's command buffers out (vkResetCommandPool, vkDestroyCommandPool:
+/// every one of them is reset or freed); `forget`: the pool goes (its list too).
+std::vector<MetalFrame::Owned*> TakePool(VkCommandPool pool, bool forget) {
+    std::vector<MetalFrame::Owned*> taken;
+    std::scoped_lock lock{owned_mutex};
+    const auto it = pool_buffers.find(pool);
+    if (it == pool_buffers.end()) {
+        return taken;
+    }
+    for (const VkCommandBuffer cb : it->second) {
+        if (const auto o = owned.find(cb); o != owned.end()) {
+            taken.push_back(o->second);
+            owned.erase(o);
+        }
+    }
+    if (forget) {
+        pool_buffers.erase(it);
+    }
+    owned_count.store(unsigned(owned.size()), std::memory_order_release);
+    ++owned_generation;
+    return taken;
 }
 
 void Own(VkCommandBuffer cb) {
@@ -396,7 +423,9 @@ struct Hook<I, R (*)(A...)> {
                I == Id_vkCreateComputePipelines || I == Id_vkDestroyPipeline ||
                I == Id_vkAllocateDescriptorSets || I == Id_vkUpdateDescriptorSets ||
                I == Id_vkFreeDescriptorSets || I == Id_vkResetDescriptorPool ||
-               I == Id_vkDestroyDescriptorPool;
+               I == Id_vkDestroyDescriptorPool || I == Id_vkAllocateCommandBuffers ||
+               I == Id_vkResetCommandPool || I == Id_vkDestroyCommandPool ||
+               I == Id_vkDestroyDevice;
     }
 
     static R Frame(A... args) {
@@ -405,7 +434,11 @@ struct Hook<I, R (*)(A...)> {
         if constexpr (I == Id_vkBeginCommandBuffer) {
             const R result = original(args...);
             const VkCommandBufferBeginInfo* info = std::get<1>(t);
-            if (result == VK_SUCCESS && !info->pInheritanceInfo) { // secondaries stay the driver's
+            // Secondaries stay the driver's; so does a command buffer that may be submitted more
+            // than once (the owned state is used up by its submission).
+            if (result == VK_SUCCESS && !info->pInheritanceInfo &&
+                (info->flags & VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT) &&
+                !(info->flags & VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT)) {
                 Own(std::get<0>(t));
             } else {
                 // A handle that was owned before (its pool reset or destroyed): no longer.
@@ -425,6 +458,33 @@ struct Hook<I, R (*)(A...)> {
             for (uint32_t i = 0; i < count; ++i) {
                 F::Discard(TakeOwned(cbs[i]));
             }
+            {
+                std::scoped_lock lock{owned_mutex};
+                if (const auto it = pool_buffers.find(pool); it != pool_buffers.end()) {
+                    std::erase_if(it->second, [&](VkCommandBuffer cb) {
+                        return std::find(cbs, cbs + count, cb) != cbs + count;
+                    });
+                }
+            }
+            return original(args...);
+        } else if constexpr (I == Id_vkAllocateCommandBuffers) {
+            const R result = original(args...);
+            const auto [dev, info, cbs] = t;
+            if (result == VK_SUCCESS && info && cbs) {
+                std::scoped_lock lock{owned_mutex};
+                auto& list = pool_buffers[info->commandPool];
+                list.insert(list.end(), cbs, cbs + info->commandBufferCount);
+            }
+            return result;
+        } else if constexpr (I == Id_vkResetCommandPool || I == Id_vkDestroyCommandPool) {
+            // bbport: every command buffer of the pool is reset (or freed): their owned states
+            // go, as at their own reset (a begun one never submitted would stay for ever).
+            for (F::Owned* o : TakePool(std::get<1>(t), I == Id_vkDestroyCommandPool)) {
+                F::Discard(o);
+            }
+            return original(args...);
+        } else if constexpr (I == Id_vkDestroyDevice) {
+            F::Shutdown();
             return original(args...);
         } else if constexpr (I == Id_vkCreateSampler) {
             const R result = original(args...);

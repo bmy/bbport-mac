@@ -389,23 +389,42 @@ struct VariantSource {
 namespace {
 
 /// One graphics pipeline's build (a worker thread): what Graphics was given, kept.
-/// bbport: whether a SPIR-V module decorates anything Flat (a fragment shader's flat inputs:
-/// OpDecorate id Flat, OpMemberDecorate struct member Flat).
+/// bbport: whether a fragment shader has flat inputs (OpDecorate id Flat, OpMemberDecorate
+/// struct member Flat) other than built-ins (the recompiler decorates the sample index, layer and
+/// subgroup built-ins Flat: they do not come from a vertex).
 bool HasFlat(const std::vector<u32>& w) {
-    constexpr u32 Flat = 14;
+    constexpr u32 Flat = 14, BuiltIn = 11;
+    std::vector<u32> flat_ids, builtin_ids;
+    std::vector<std::pair<u32, u32>> flat_members, builtin_members;
     for (size_t i = 5; i < w.size();) {
         const u32 count = w[i] >> 16, op = w[i] & 0xffff;
-        if (!count || i + count > w.size()) {
+        if (!count || i + count > w.size() || op == 54) { // OpFunction: decorations are before
             break;
         }
-        if ((op == 71 && count >= 3 && w[i + 2] == Flat) ||
-            (op == 72 && count >= 4 && w[i + 3] == Flat)) {
-            return true;
-        }
-        if (op == 54) { // OpFunction: no decorations after the first one
-            break;
+        if (op == 71 && count >= 3) {
+            if (w[i + 2] == Flat) {
+                flat_ids.push_back(w[i + 1]);
+            } else if (w[i + 2] == BuiltIn) {
+                builtin_ids.push_back(w[i + 1]);
+            }
+        } else if (op == 72 && count >= 4) {
+            if (w[i + 3] == Flat) {
+                flat_members.emplace_back(w[i + 1], w[i + 2]);
+            } else if (w[i + 3] == BuiltIn) {
+                builtin_members.emplace_back(w[i + 1], w[i + 2]);
+            }
         }
         i += count;
+    }
+    for (const u32 id : flat_ids) {
+        if (std::find(builtin_ids.begin(), builtin_ids.end(), id) == builtin_ids.end()) {
+            return true;
+        }
+    }
+    for (const auto& m : flat_members) {
+        if (std::find(builtin_members.begin(), builtin_members.end(), m) == builtin_members.end()) {
+            return true;
+        }
     }
     return false;
 }
@@ -417,9 +436,13 @@ void BuildGraphics(const Vulkan::GraphicsPipelineKey& key, const ModuleRefs& mod
     using Stage = ::Shader::SwStage;
     auto& s = Get();
     bool published = false;
+    // (Not for tessellated draws, rect lists among them on the Vulkan side: the provoking
+    // vertex does not decide their flat values.)
     bool flat_from_last = false;
     if (key.provoking_vtx_last != Gcn::ProvokingVtxLast::First &&
-        has_stage[u32(Stage::Fragment)]) {
+        has_stage[u32(Stage::Fragment)] && !has_stage[u32(Stage::TessellationControl)] &&
+        !has_stage[u32(Stage::TessellationEval)] &&
+        key.prim_type != Gcn::PrimitiveType::RectList) {
         const auto words = s.Words(modules[u32(Stage::Fragment)]);
         flat_from_last = !words || HasFlat(*words); // (unknown: as if it had)
     }

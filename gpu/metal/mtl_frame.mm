@@ -867,6 +867,20 @@ void ReplayPass(Owned& o, VkCommandBuffer cb) {
     VkRenderingInfo info = o.pass_info;
     std::vector<VkRenderingAttachmentInfo> colors = o.pass_colors;
     VkRenderingAttachmentInfo depth = o.pass_depth, stencil = o.pass_stencil;
+    // bbport: this part may not be the pass's last (a later draw can go to Metal, or a new
+    // segment begin): what it draws is kept for the next part to load (as CloseRender's split
+    // stores do on the Metal side). The renderer's passes store anyway.
+    const auto keep = [](VkRenderingAttachmentInfo& a) {
+        if (a.storeOp == VK_ATTACHMENT_STORE_OP_DONT_CARE ||
+            a.storeOp == VK_ATTACHMENT_STORE_OP_NONE) {
+            a.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        }
+    };
+    for (auto& c : colors) {
+        keep(c);
+    }
+    keep(depth);
+    keep(stencil);
     if (o.pass_begun) {
         ++counters.kk_reopens;
         for (auto& c : colors) {
@@ -2617,7 +2631,11 @@ VkResult Submit(VkQueue vkqueue, const Batch* batches, uint32_t count, VkFence f
 
         for (u32 b = 0; b < count; ++b) {
             const Batch& batch = batches[b];
-            submit(batch.waits, batch.wait_count, nullptr, 0, VK_NULL_HANDLE);
+            // Its waits (and, for the first, KosmicKrisp's residency made current for our
+            // command buffers): a later batch without waits needs no submission of its own.
+            if (b == 0 || batch.wait_count) {
+                submit(batch.waits, batch.wait_count, nullptr, 0, VK_NULL_HANDLE);
+            }
             for (u32 i = 0; i < batch.command_buffer_count; ++i) {
                 Owned* o = batch.owned[i];
                 if (!o) {

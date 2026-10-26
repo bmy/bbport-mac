@@ -2458,13 +2458,60 @@ void CmdDispatchIndirect(Owned& o, VkBuffer buffer, VkDeviceSize offset) {
 
 namespace {
 
-/// BB_METAL_TRANSFERS=0: copies, fills, updates and clears go to KosmicKrisp (for bisecting).
-bool TransfersInMetal() {
-    static const bool on = [] {
+enum class Transfer : u32 { Copy, Fill, Update, BufferToImage, ImageToBuffer, ImageCopy, Clear };
+
+/// Which transfers are encoded in Metal (for bisecting a broken picture), BB_METAL_TRANSFERS:
+/// unset or 1: all; 0: none; a comma-separated list of kinds (copy, fill, update, b2i, i2b,
+/// image, clear): only those; kinds with a leading '-': all but those.
+bool TransfersInMetal(Transfer kind) {
+    static const u32 mask = [] {
+        constexpr u32 all = (1u << 7) - 1;
         const char* env = std::getenv("BB_METAL_TRANSFERS");
-        return !(env && env[0] == '0');
+        if (!env || !*env || std::strcmp(env, "1") == 0) {
+            return all;
+        }
+        if (std::strcmp(env, "0") == 0) {
+            Print("Metal frame: every transfer to KosmicKrisp (BB_METAL_TRANSFERS=0)\n");
+            return 0u;
+        }
+        static constexpr std::array<const char*, 7> names{"copy", "fill",  "update", "b2i",
+                                                         "i2b",  "image", "clear"};
+        u32 only = 0, without = 0;
+        std::string list{env};
+        for (size_t start = 0; start <= list.size();) {
+            size_t end = list.find(',', start);
+            if (end == std::string::npos) {
+                end = list.size();
+            }
+            std::string token = list.substr(start, end - start);
+            start = end + 1;
+            const bool minus = !token.empty() && token[0] == '-';
+            if (minus) {
+                token.erase(0, 1);
+            }
+            const auto it = std::find_if(names.begin(), names.end(),
+                                         [&](const char* n) { return token == n; });
+            if (it == names.end()) {
+                if (!token.empty()) {
+                    Print("Metal frame: BB_METAL_TRANSFERS: unknown kind '%s'\n", token.c_str());
+                }
+                continue;
+            }
+            (minus ? without : only) |= 1u << u32(it - names.begin());
+        }
+        const u32 result = (only ? only : all) & ~without;
+        std::string in_metal;
+        for (u32 i = 0; i < names.size(); ++i) {
+            if (result & (1u << i)) {
+                in_metal += in_metal.empty() ? "" : ", ";
+                in_metal += names[i];
+            }
+        }
+        Print("Metal frame: transfers in Metal: %s (BB_METAL_TRANSFERS=%s)\n",
+              in_metal.empty() ? "none" : in_metal.c_str(), env);
+        return result;
     }();
-    return on;
+    return (mask >> u32(kind)) & 1u;
 }
 
 /// A transfer for KosmicKrisp: why, counted.
@@ -2705,7 +2752,7 @@ void CmdCopyBuffer(Owned& o, VkBuffer src, VkBuffer dst, uint32_t count,
                    const VkBufferCopy* regions) {
     @autoreleasepool {
         const BufferRef s = ResolveBuffer(src), d = ResolveBuffer(dst);
-        if (!TransfersInMetal() || o.active_queries || !s.buffer || !d.buffer) {
+        if (!TransfersInMetal(Transfer::Copy) || o.active_queries || !s.buffer || !d.buffer) {
             if (VkCommandBuffer cb = KkTransfer(o, "a buffer copy KosmicKrisp makes")) {
                 driver.vkCmdCopyBuffer(cb, src, dst, count, regions);
             }
@@ -2727,7 +2774,7 @@ void CmdFillBuffer(Owned& o, VkBuffer dst, VkDeviceSize offset, VkDeviceSize siz
     @autoreleasepool {
         const BufferRef d = ResolveBuffer(dst);
         const u8 byte = u8(data);
-        if (!TransfersInMetal() || o.active_queries || !d.buffer ||
+        if (!TransfersInMetal(Transfer::Fill) || o.active_queries || !d.buffer ||
             data != u32(byte) * 0x01010101u) {
             if (VkCommandBuffer cb = KkTransfer(o, "a fill KosmicKrisp makes")) {
                 driver.vkCmdFillBuffer(cb, dst, offset, size, data);
@@ -2749,7 +2796,7 @@ void CmdUpdateBuffer(Owned& o, VkBuffer dst, VkDeviceSize offset, VkDeviceSize s
                      const void* data) {
     @autoreleasepool {
         const BufferRef d = ResolveBuffer(dst);
-        if (!TransfersInMetal() || o.active_queries || !d.buffer) {
+        if (!TransfersInMetal(Transfer::Update) || o.active_queries || !d.buffer) {
             if (VkCommandBuffer cb = KkTransfer(o, "an update KosmicKrisp makes")) {
                 driver.vkCmdUpdateBuffer(cb, dst, offset, size, data);
             }
@@ -2770,7 +2817,7 @@ void CmdUpdateBuffer(Owned& o, VkBuffer dst, VkDeviceSize offset, VkDeviceSize s
 void CmdCopyBufferToImage(Owned& o, VkBuffer src, VkImage dst, VkImageLayout layout,
                           uint32_t count, const VkBufferImageCopy* regions) {
     @autoreleasepool {
-        if (!TransfersInMetal() || o.active_queries ||
+        if (!TransfersInMetal(Transfer::BufferToImage) || o.active_queries ||
             !BufferImageCopies(o, src, dst, count, regions, true)) {
             if (VkCommandBuffer cb = KkTransfer(o, "a buffer to image copy KosmicKrisp makes")) {
                 driver.vkCmdCopyBufferToImage(cb, src, dst, layout, count, regions);
@@ -2784,7 +2831,7 @@ void CmdCopyBufferToImage(Owned& o, VkBuffer src, VkImage dst, VkImageLayout lay
 void CmdCopyImageToBuffer(Owned& o, VkImage src, VkImageLayout layout, VkBuffer dst,
                           uint32_t count, const VkBufferImageCopy* regions) {
     @autoreleasepool {
-        if (!TransfersInMetal() || o.active_queries ||
+        if (!TransfersInMetal(Transfer::ImageToBuffer) || o.active_queries ||
             !BufferImageCopies(o, dst, src, count, regions, false)) {
             if (VkCommandBuffer cb = KkTransfer(o, "an image to buffer copy KosmicKrisp makes")) {
                 driver.vkCmdCopyImageToBuffer(cb, src, layout, dst, count, regions);
@@ -2799,8 +2846,9 @@ void CmdCopyImage(Owned& o, VkImage src, VkImageLayout src_layout, VkImage dst,
                   VkImageLayout dst_layout, uint32_t count, const VkImageCopy* regions) {
     @autoreleasepool {
         VkFormat src_format{}, dst_format{};
-        id<MTLTexture> s = TransfersInMetal() && !o.active_queries ? ImageTexture(src, src_format)
-                                                                   : nil;
+        id<MTLTexture> s = TransfersInMetal(Transfer::ImageCopy) && !o.active_queries
+                               ? ImageTexture(src, src_format)
+                               : nil;
         id<MTLTexture> d = s ? ImageTexture(dst, dst_format) : nil;
         // Same texture kind both ways (3D <-> 2D array copies turn layers into depth: left to
         // KosmicKrisp).
@@ -2844,7 +2892,8 @@ void CmdClearColorImage(Owned& o, VkImage image, VkImageLayout layout,
     @autoreleasepool {
         VkFormat format{};
         id<MTLTexture> texture =
-            TransfersInMetal() && !o.active_queries ? ImageTexture(image, format) : nil;
+            TransfersInMetal(Transfer::Clear) && !o.active_queries ? ImageTexture(image, format)
+                                                                   : nil;
         // A format stored swizzled (BGRA twins, 4-4-4-4) clears with its channels moved:
         // KosmicKrisp knows how.
         if (!texture || !ClearableTexture(texture) ||
@@ -2876,7 +2925,8 @@ void CmdClearDepthStencilImage(Owned& o, VkImage image, VkImageLayout layout,
     @autoreleasepool {
         VkFormat format{};
         id<MTLTexture> texture =
-            TransfersInMetal() && !o.active_queries ? ImageTexture(image, format) : nil;
+            TransfersInMetal(Transfer::Clear) && !o.active_queries ? ImageTexture(image, format)
+                                                                   : nil;
         if (!texture || !ClearableTexture(texture) ||
             !Metal::VkToMtl::IsDepthPixelFormat(u32(texture.pixelFormat))) {
             if (VkCommandBuffer cb = KkTransfer(o, "a depth clear KosmicKrisp makes")) {

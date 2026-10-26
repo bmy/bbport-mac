@@ -65,6 +65,12 @@ Not on `macos-native-0.6-weak`; a branch of its own on top of it.
 | `d5859642`, `2e3da4af` | Review fixes | `BB_TEXTURE_COMPRESSION=0` | |
 | `102b8683` | Upgrades keep GPU-optimized contents; feedback loops per mip range | `BB_TEXTURE_COMPRESSION=0` | |
 
+## Tessellation heap (2026-10-26)
+
+| Commit | Change | Off for a run | Notes |
+|---|---|---|---|
+| (KosmicKrisp patch 0010) | The driver's heap for emulated tessellation, geometry shaders and unrolled draws: 1 GiB instead of 128 MiB (512 MiB on Macs with less than 16 GiB; 128 MiB if the larger one cannot be had); a tessellated draw that does not fit draws nothing instead of a runaway draw that hangs the GPU | `BB_KK_POLY_HEAP_MB=128` (the old size; the overflow checks stay); 64 to 2048 | Costs the heap's size in memory for as long as the game runs, once anything tessellates. |
+
 ## Everything off at once
 
 Every run-time switch above, as one Extra variables entry:

@@ -59,6 +59,11 @@ struct Profile {
     bool needs_unorm_fixup{};
     bool needs_clip_distance_emulation{};
     bool supports_shader_stencil_export{};
+    /// bbport (macOS), BB_SPIRV_PRECISE=vertex: float adds, multiplies, divides and FMAs are
+    /// NoContraction only in the stages that make positions (vertex, tessellation, geometry),
+    /// not in fragment and compute shaders. KosmicKrisp compiles every NoContraction operation
+    /// in Metal's safe math mode, which keeps the compiler from optimising it.
+    bool precise_vertex_stages_only{};
     /// BB_LAYER_MEMORY: guest buffers of IsPagedBuffer size go through the page table.
     bool paged_buffers{};
     /// The game's buffer copy compute shader (its GCN program hash, from the game's profile;

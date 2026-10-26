@@ -229,6 +229,18 @@ Shader::Profile MakeProfile(const Instance& instance, u32 sparse_page_shift) {
         .needs_unorm_fixup = driver == vk::DriverId::eMesaKosmickrisp,
         .needs_clip_distance_emulation = nvidia,
         .supports_shader_stencil_export = instance.IsShaderStencilExportSupported(),
+        // BB_SPIRV_PRECISE=vertex: exact float math in the position stages only (macOS);
+        // unset or anything else: everywhere, as upstream. Part of the profile, so switching
+        // rebuilds the shader cache.
+        .precise_vertex_stages_only = [] {
+            const char* env = std::getenv("BB_SPIRV_PRECISE");
+            const bool vertex_only = env && std::strcmp(env, "vertex") == 0;
+            if (vertex_only) {
+                LOG_WARNING(Render, "Shaders: exact float math in vertex, tessellation and "
+                                 "geometry stages only (BB_SPIRV_PRECISE=vertex)");
+            }
+            return vertex_only;
+        }(),
         // BB_LAYER_MEMORY: buffers over nearly all memory go through the page table.
         .paged_buffers = VideoCore::BufferCache::LayerPagedActive(),
         // The game's buffer copy shader, from its profile (games/).

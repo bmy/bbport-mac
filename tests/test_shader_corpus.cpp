@@ -286,7 +286,7 @@ Outcome Replay(const std::string& path, bool verbose, u32 repeat) {
     Reader in{bytes};
     char magic[4];
     in.Raw(magic, 4);
-    if (std::memcmp(magic, "BBSC", 4) != 0 || in.Value<u32>() != 2) {
+    if (std::memcmp(magic, "BBSC", 4) != 0 || in.Value<u32>() != 3) { // the capture format (shader_capture.cpp)
         return Outcome::Unreadable;
     }
     Shader::MotionVectors::params_address = in.Value<u64>();

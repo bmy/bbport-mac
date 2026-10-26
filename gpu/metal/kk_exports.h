@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport (macOS): this port's own chain entries for vkExportMetalObjectsEXT, as KosmicKrisp patch
-// 0008 defines them (tools/macos/kosmickrisp-patches, kk_sync.c): the two definitions must stay
+// 0008 and 0009 define them (tools/macos/kosmickrisp-patches, kk_sync.c): the two definitions must stay
 // the same. Their sType values decode to an unallocated extension number; another driver ignores
 // them (and leaves the outputs as the caller set them). With the Vulkan validation layers on they
 // may not reach the driver, or reach it with wrapped handles: use them without layers.
@@ -18,6 +18,7 @@ namespace BbMetal {
 
 inline constexpr VkStructureType ExportViewTextureType = static_cast<VkStructureType>(0x62627601);
 inline constexpr VkStructureType ExportBufferObjectType = static_cast<VkStructureType>(0x62627602);
+inline constexpr VkStructureType ExportResidencySetType = static_cast<VkStructureType>(0x62627603);
 
 /// What an image view's texture is for (KosmicKrisp keeps one per use).
 enum ViewTextureUse : uint32_t {
@@ -55,6 +56,14 @@ struct ExportBufferObject {
     uint64_t offset = 0;              ///< out
 };
 
+/// The device's id<MTLResidencySet> (patch 0009): every allocation KosmicKrisp makes, committed at
+/// each vkQueueSubmit; a Metal queue of our own adds it to use the driver's buffers and images.
+struct ExportResidencySet {
+    VkStructureType sType = ExportResidencySetType;
+    const void* pNext = nullptr;
+    void* mtlResidencySet = nullptr; ///< out (id<MTLResidencySet>, not retained)
+};
+
 // The C structs in the patch have these layouts (LP64).
 static_assert(offsetof(ExportViewTexture, imageView) == 16 && offsetof(ExportViewTexture, plane) == 24 &&
               offsetof(ExportViewTexture, use) == 28 && offsetof(ExportViewTexture, mtlTexture) == 32 &&
@@ -63,5 +72,7 @@ static_assert(offsetof(ExportViewTexture, imageView) == 16 && offsetof(ExportVie
 static_assert(offsetof(ExportBufferObject, buffer) == 16 &&
               offsetof(ExportBufferObject, mtlBuffer) == 24 && offsetof(ExportBufferObject, offset) == 32 &&
               sizeof(ExportBufferObject) == 40);
+static_assert(offsetof(ExportResidencySet, mtlResidencySet) == 16 &&
+              sizeof(ExportResidencySet) == 24);
 
 } // namespace BbMetal

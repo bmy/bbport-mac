@@ -1,0 +1,34 @@
+diff --git a/src/kosmickrisp/vulkan/kk_sync.c b/src/kosmickrisp/vulkan/kk_sync.c
+index e5c7d85..bd195b1 100644
+--- a/src/kosmickrisp/vulkan/kk_sync.c
++++ b/src/kosmickrisp/vulkan/kk_sync.c
+@@ -157,6 +157,16 @@ typedef struct VkExportMetalBufferObjectBBPORT {
+    MTLBuffer_id mtlBuffer;
+    uint64_t offset;
+ } VkExportMetalBufferObjectBBPORT;
++/* bbport: the device's id<MTLResidencySet> (every allocation the driver makes, committed at each
++ * vkQueueSubmit), so a Metal command queue of the caller's own can be given it
++ * (addResidencySet:) and use the driver's buffers and images. Not retained: it lives as long as
++ * the device. */
++#define VK_STRUCTURE_TYPE_EXPORT_METAL_RESIDENCY_SET_BBPORT ((VkStructureType)0x62627603)
++typedef struct VkExportMetalResidencySetBBPORT {
++   VkStructureType sType;
++   const void *pNext;
++   void *mtlResidencySet;
++} VkExportMetalResidencySetBBPORT;
+ 
+ /* bbport: VK_EXT_metal_objects: the MTLSharedEvent of a timeline semaphore (every KosmicKrisp
+  * semaphore is one), a queue's Metal 4 command queue, the device, a memory object's heap-wide
+@@ -265,6 +275,12 @@ kk_ExportMetalObjectsEXT(VkDevice device,
+          info->offset = kk_buffer_mtl_offset(buffer, 0);
+          continue;
+       }
++      if (ext->sType == VK_STRUCTURE_TYPE_EXPORT_METAL_RESIDENCY_SET_BBPORT) {
++         VkExportMetalResidencySetBBPORT *info = (VkExportMetalResidencySetBBPORT *)ext;
++         info->mtlResidencySet =
++            (void *)kk_device_from_handle(device)->residency_set.handle;
++         continue;
++      }
+       if (ext->sType == VK_STRUCTURE_TYPE_EXPORT_METAL_COMMAND_QUEUE_INFO_EXT) {
+          /* bbport: the queue's id<MTL4CommandQueue> (not an id<MTLCommandQueue>, whatever the
+           * field's type says), so Metal work outside the driver (MetalFX) can be committed to

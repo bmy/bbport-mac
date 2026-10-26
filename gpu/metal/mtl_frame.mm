@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport (macOS): the Metal command path's frame encoder (mtl_frame.h). Built with ARC.
 // After Wooloomooloo2/bloodborne_mac_port's mtl_frame.mm (78b59f5, GPL-2.0-or-later): the same
-// draw state, binding and pass handling, rewritten for Metal 4 (argument tables, GPU addresses,
-// queue barriers) on KosmicKrisp's objects, with a KosmicKrisp fallback for what is not encoded.
+// draw state, binding and pass handling, on KosmicKrisp's objects, with a KosmicKrisp fallback for
+// what is not encoded. Classic Metal on a queue of our own (Metal 4 has no tessellator): direct
+// binding, command buffers that retain nothing, encoders ordered by one fence (as KosmicKrisp's
+// barrier after every encoder), and shared events between our queue and KosmicKrisp's.
 
 #import <Metal/Metal.h>
 
-// Metal 4 throughout: nothing here runs unless Init found it (its @available check), and the
-// layer calls none of it before Init succeeded.
+// macOS 26 throughout (the depth bounds test, residency sets): nothing here runs unless Init found
+// it (its @available check), and the layer calls none of it before Init succeeded.
 #pragma clang diagnostic ignored "-Wunguarded-availability-new"
 
 #include <algorithm>
@@ -29,10 +31,12 @@
 
 #include "metal/kk_exports.h"
 #include "metal/mtl_frame.h"
+#include "metal/mtl_geometry.h"
 #include "metal/mtl_pso_cache.h"
 #include "metal/mtl_raster_util.h"
 #include "metal/mtl_shader.h"
 #include "metal/mtl_shadow.h"
+#include "metal/mtl_tessellation.h"
 #include "metal/vk_to_mtl.h"
 
 namespace MetalFrame {
@@ -63,7 +67,7 @@ struct Counters {
     std::atomic<unsigned long long> metal_draws{}, metal_dispatches{}, metal_transfers{},
         fallback_draws{},
         fallback_dispatches{}, fallback_other{}, metal_buffers{}, kk_segments{}, switches{},
-        metal_passes{}, pass_breaks{}, kk_reopens{}, gpu_errors{};
+        metal_passes{}, pass_breaks{}, kk_reopens{}, gpu_errors{}, tess_draws{};
 };
 Counters counters;
 
@@ -98,6 +102,21 @@ void Reason(const char* why) {
 VkDevice vk_device{};
 id<MTLDevice> device;
 PFN_vkExportMetalObjectsEXT export_objects{};
+/// Our own queue (classic Metal: the hardware tessellator); KosmicKrisp's residency set and ours
+/// are on it.
+id<MTLCommandQueue> queue;
+/// Every Metal encoder we open waits for this fence when it starts and updates it when it ends:
+/// each one runs after the one before it in commit order, as KosmicKrisp puts a full barrier after
+/// each of its encoders. (Fences are evaluated in commit order, across command buffers.)
+id<MTLFence> chain;
+/// Between the two queues (KosmicKrisp's timeline semaphores, their MTLSharedEvents): KosmicKrisp
+/// signals `to_metal` after its work and our command buffers wait for it; ours signal `to_kk` and
+/// KosmicKrisp's submissions wait for it. Values only grow (submissions are serialized).
+VkSemaphore to_metal_sem{}, to_kk_sem{};
+id<MTLSharedEvent> to_metal_event, to_kk_event;
+u64 to_metal_value = 0, to_kk_value = 0;
+/// Work on one queue the other has not waited for yet.
+bool kk_ahead = false, metal_ahead = false;
 
 /// KosmicKrisp's own entry points (the driver's lookup: not the layer's).
 struct Driver {
@@ -105,6 +124,7 @@ struct Driver {
     X(vkCreateCommandPool) X(vkAllocateCommandBuffers) X(vkResetCommandBuffer)                     \
     X(vkBeginCommandBuffer) X(vkEndCommandBuffer) X(vkQueueSubmit2) X(vkCreateSemaphore)           \
     X(vkGetSemaphoreCounterValue) X(vkCmdBeginRendering) X(vkCmdEndRendering)                      \
+    X(vkDestroySemaphore)                      \
     X(vkCmdBindPipeline) X(vkCmdPushDescriptorSetKHR) X(vkCmdBindDescriptorSets)                   \
     X(vkCmdPushConstants) X(vkCmdBindVertexBuffers2) X(vkCmdBindIndexBuffer)                       \
     X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCmdSetViewportWithCount)                           \
@@ -284,6 +304,44 @@ void GiveScratch(std::vector<id<MTLBuffer>>& chunks) {
     chunks.clear();
 }
 
+// ---- GPU scratch (between a tessellated draw's kernels and its patch draw): private ----
+
+constexpr u64 GpuScratchChunk = 64ull << 20;
+std::mutex gpu_scratch_mutex;
+std::vector<id<MTLBuffer>> gpu_scratch_pool;
+
+/// A chunk of at least `size` bytes (a pooled one of GpuScratchChunk when it fits).
+id<MTLBuffer> TakeGpuScratch(u64 size) {
+    if (size <= GpuScratchChunk) {
+        std::scoped_lock lock{gpu_scratch_mutex};
+        if (!gpu_scratch_pool.empty()) {
+            id<MTLBuffer> b = gpu_scratch_pool.back();
+            gpu_scratch_pool.pop_back();
+            return b;
+        }
+    }
+    id<MTLBuffer> b = [device newBufferWithLength:std::max(size, GpuScratchChunk)
+                                          options:MTLResourceStorageModePrivate |
+                                                  MTLResourceHazardTrackingModeUntracked];
+    b.label = @"bbport Metal frame GPU scratch";
+    MakeResident(b);
+    return b;
+}
+
+void GiveGpuScratch(std::vector<id<MTLBuffer>>& chunks) {
+    std::scoped_lock lock{gpu_scratch_mutex};
+    for (id<MTLBuffer> b : chunks) {
+        if (b.length == GpuScratchChunk && gpu_scratch_pool.size() < 16) {
+            gpu_scratch_pool.push_back(b);
+        } else {
+            std::scoped_lock residency_lock{residency_mutex};
+            [residency removeAllocation:b];
+            [residency commit];
+        }
+    }
+    chunks.clear();
+}
+
 // ---- KosmicKrisp segments: command buffers of our own, recycled by a timeline ----
 
 VkSemaphore kk_timeline{};
@@ -345,68 +403,40 @@ KkBuffer* TakeKk() {
 
 // ---- Metal command buffers ----
 
-std::mutex allocator_mutex;
-std::vector<id<MTL4CommandAllocator>> allocator_pool;
-
-id<MTL4CommandAllocator> TakeAllocator() {
-    {
-        std::scoped_lock lock{allocator_mutex};
-        if (!allocator_pool.empty()) {
-            id<MTL4CommandAllocator> a = allocator_pool.back();
-            allocator_pool.pop_back();
-            return a;
-        }
-    }
-    return [device newCommandAllocator];
-}
-
-void GiveAllocator(id<MTL4CommandAllocator> a) {
-    [a reset];
-    std::scoped_lock lock{allocator_mutex};
-    allocator_pool.push_back(a);
-}
-
-id<MTL4ArgumentTable> NewTable(bool vertex) {
-    MTL4ArgumentTableDescriptor* d = [MTL4ArgumentTableDescriptor new];
-    d.maxBufferBindCount = Metal::kMaxBuffers;
-    d.maxTextureBindCount = Metal::kMaxTextures;
-    d.maxSamplerStateBindCount = Metal::kMaxSamplers;
-    d.supportAttributeStrides = vertex;
-    NSError* error = nil;
-    id<MTL4ArgumentTable> table = [device newArgumentTableWithDescriptor:d error:&error];
-    if (!table) {
-        Note(std::string("argument table: ") +
-             (error ? error.localizedDescription.UTF8String : "unknown error"));
-    }
-    return table;
-}
-
 /// What a Metal segment's completion hands back.
 struct Retire {
-    id<MTL4CommandAllocator> allocator;
     std::vector<id<MTLBuffer>> scratch;
-    /// Holds: the submission while it runs, and each committed run of its Metal buffers until
-    /// the GPU is done with it.
+    std::vector<id<MTLBuffer>> gpu_scratch;
+    /// Holds: the owner until its submission is done, and each committed Metal command buffer
+    /// of it until the GPU is done with it.
     std::atomic<u32> pending{0};
 };
 
 void Release(const std::shared_ptr<Retire>& r) {
     if (r->pending.fetch_sub(1, std::memory_order_acq_rel) == 1) {
         GiveScratch(r->scratch);
-        if (r->allocator) {
-            GiveAllocator(r->allocator);
-        }
+        GiveGpuScratch(r->gpu_scratch);
     }
 }
 
-constexpr MTL4VisibilityOptions Visible =
-    MTL4VisibilityOptionDevice | MTL4VisibilityOptionResourceAlias;
-
-/// At an encoder's end, as KosmicKrisp's: its work before everything after it on the queue.
-void ProducerBarrier(id<MTL4CommandEncoder> encoder) {
-    [encoder barrierAfterStages:MTLStageAll
-              beforeQueueStages:MTLStageAll
-              visibilityOptions:Visible];
+/// Every encoder: after the one before it (the chain fence), and before the next.
+void WaitChain(id<MTLRenderCommandEncoder> e) {
+    [e waitForFence:chain beforeStages:MTLRenderStageVertex];
+}
+void WaitChain(id<MTLComputeCommandEncoder> e) {
+    [e waitForFence:chain];
+}
+void WaitChain(id<MTLBlitCommandEncoder> e) {
+    [e waitForFence:chain];
+}
+void UpdateChain(id<MTLRenderCommandEncoder> e) {
+    [e updateFence:chain afterStages:MTLRenderStageVertex | MTLRenderStageFragment];
+}
+void UpdateChain(id<MTLComputeCommandEncoder> e) {
+    [e updateFence:chain];
+}
+void UpdateChain(id<MTLBlitCommandEncoder> e) {
+    [e updateFence:chain];
 }
 
 } // namespace
@@ -415,7 +445,8 @@ void ProducerBarrier(id<MTL4CommandEncoder> encoder) {
 
 /// One descriptor, decoded for Metal.
 struct Bound {
-    MTLGPUAddress address{};
+    id<MTLBuffer> buffer; ///< buffers: where the range starts (`offset`), `size` bytes of it
+    u64 offset{};
     u64 size{};
     id<MTLTexture> texture;
     id<MTLSamplerState> sampler;
@@ -452,7 +483,7 @@ struct PushCall {
 };
 
 struct Segment {
-    id<MTL4CommandBuffer> metal; ///< or:
+    id<MTLCommandBuffer> metal; ///< or:
     KkBuffer* kk{};
 };
 
@@ -461,17 +492,19 @@ struct Owned {
     std::vector<Segment> segments;
 
     // The open segment: a Metal command buffer, or a KosmicKrisp one.
-    id<MTL4CommandBuffer> cmd;
+    id<MTLCommandBuffer> cmd;
     KkBuffer* kk{};
     bool kk_in_pass{}; ///< the KosmicKrisp segment has the render pass begun
     bool kk_graphics{}, kk_compute{}; ///< it has the graphics / compute state (replayed)
 
     std::shared_ptr<Retire> retire;
-    id<MTL4RenderCommandEncoder> render;
-    id<MTL4ComputeCommandEncoder> compute;
-    id<MTL4ArgumentTable> vertex_table, fragment_table, compute_table;
+    id<MTLRenderCommandEncoder> render;
+    id<MTLComputeCommandEncoder> compute;
+    id<MTLBlitCommandEncoder> blit;
     id<MTLBuffer> scratch;
     u64 scratch_used{};
+    id<MTLBuffer> gpu_scratch;
+    u64 gpu_scratch_used{};
 
     // ---- The Vulkan state as recorded (Metal encodes from it; the fallback replays it) ----
     VkPipeline graphics_pipeline{}, compute_pipeline{};
@@ -523,8 +556,8 @@ struct Owned {
     std::vector<VkRenderingAttachmentInfo> pass_colors;
     VkRenderingAttachmentInfo pass_depth{}, pass_stencil{};
     bool has_depth{}, has_stencil{};
-    MTL4RenderPassDescriptor* pass_first;  ///< as begun (its clears)
-    MTL4RenderPassDescriptor* pass_reopen; ///< loading
+    MTLRenderPassDescriptor* pass_first;  ///< as begun (its clears)
+    MTLRenderPassDescriptor* pass_reopen; ///< loading
     u32 target_width{}, target_height{};
     std::array<u32, 8> pass_color_formats{};
     u32 pass_depth_format{}, pass_stencil_format{}, pass_samples{1};
@@ -541,7 +574,7 @@ void CloseRender(Owned& o, bool pass_end) {
     if (!o.render) {
         return;
     }
-    MTL4RenderPassDescriptor* rp = o.pass_first;
+    MTLRenderPassDescriptor* rp = o.pass_first;
     const auto store = [&](VkAttachmentStoreOp op) {
         return pass_end && op == VK_ATTACHMENT_STORE_OP_DONT_CARE ? MTLStoreActionDontCare
                                                                  : MTLStoreActionStore;
@@ -562,18 +595,31 @@ void CloseRender(Owned& o, bool pass_end) {
     } else if (o.in_pass) {
         ++counters.pass_breaks;
     }
-    ProducerBarrier(o.render);
+    UpdateChain(o.render);
     [o.render endEncoding];
     o.render = nil;
 }
 
-void EndEncoders(Owned& o) {
-    CloseRender(o, false);
+void EndCompute(Owned& o) {
     if (o.compute) {
-        ProducerBarrier(o.compute);
+        UpdateChain(o.compute);
         [o.compute endEncoding];
         o.compute = nil;
     }
+}
+
+void EndBlit(Owned& o) {
+    if (o.blit) {
+        UpdateChain(o.blit);
+        [o.blit endEncoding];
+        o.blit = nil;
+    }
+}
+
+void EndEncoders(Owned& o) {
+    CloseRender(o, false);
+    EndCompute(o);
+    EndBlit(o);
 }
 
 void EndMetal(Owned& o) {
@@ -581,7 +627,6 @@ void EndMetal(Owned& o) {
         return;
     }
     EndEncoders(o);
-    [o.cmd endCommandBuffer];
     o.segments.push_back({.metal = o.cmd});
     o.cmd = nil;
 }
@@ -599,7 +644,7 @@ void EndKk(Owned& o) {
     o.kk = nullptr;
 }
 
-id<MTL4CommandBuffer> Metal(Owned& o) {
+id<MTLCommandBuffer> Metal(Owned& o) {
     if (o.cmd) {
         return o.cmd;
     }
@@ -609,10 +654,10 @@ id<MTL4CommandBuffer> Metal(Owned& o) {
     }
     if (!o.retire) {
         o.retire = std::make_shared<Retire>();
-        o.retire->allocator = TakeAllocator();
     }
-    o.cmd = [device newCommandBuffer];
-    [o.cmd beginCommandBufferWithAllocator:o.retire->allocator];
+    // Retains nothing: KosmicKrisp's objects live as their Vulkan objects (in use until the
+    // submission's fence), ours (scratch) until the Retire is released.
+    o.cmd = [queue commandBufferWithUnretainedReferences];
     o.cmd.label = @"bbport Metal frame";
     return o.cmd;
 }
@@ -841,66 +886,79 @@ void Mirror(Owned& o, F&& f) {
 
 // ---- Metal encoders ----
 
-id<MTL4RenderCommandEncoder> RenderEncoder(Owned& o) {
+id<MTLRenderCommandEncoder> RenderEncoder(Owned& o) {
     if (o.render) {
         return o.render;
     }
-    id<MTL4CommandBuffer> cmd = Metal(o);
-    if (o.compute) {
-        ProducerBarrier(o.compute);
-        [o.compute endEncoding];
-        o.compute = nil;
-    }
+    id<MTLCommandBuffer> cmd = Metal(o);
+    EndCompute(o);
+    EndBlit(o);
     o.render = [cmd renderCommandEncoderWithDescriptor:o.pass_begun ? o.pass_reopen : o.pass_first];
     o.pass_begun = true;
-    if (!o.render) {
-        return nil;
+    if (o.render) {
+        WaitChain(o.render);
     }
-    if (!o.vertex_table) {
-        o.vertex_table = NewTable(true);
-        o.fragment_table = NewTable(false);
-    }
-    [o.render setArgumentTable:o.vertex_table atStages:MTLRenderStageVertex];
-    [o.render setArgumentTable:o.fragment_table atStages:MTLRenderStageFragment];
     return o.render;
 }
 
-id<MTL4ComputeCommandEncoder> ComputeEncoder(Owned& o) {
+id<MTLComputeCommandEncoder> ComputeEncoder(Owned& o) {
     if (o.compute) {
         return o.compute;
     }
-    id<MTL4CommandBuffer> cmd = Metal(o);
+    id<MTLCommandBuffer> cmd = Metal(o);
     CloseRender(o, false);
-    o.compute = [cmd computeCommandEncoder];
-    if (!o.compute_table) {
-        o.compute_table = NewTable(false);
-    }
-    [o.compute setArgumentTable:o.compute_table];
+    EndBlit(o);
+    // Concurrent: Vulkan orders dispatches only through barriers (CmdPipelineBarrier).
+    o.compute = [cmd computeCommandEncoderWithDispatchType:MTLDispatchTypeConcurrent];
+    WaitChain(o.compute);
     return o.compute;
 }
 
-/// `size` bytes of scratch memory: their GPU address, `out` their CPU address.
-/// `bytes` of `data` in scratch memory: their GPU address (`buffer`/`offset`: where they are).
-MTLGPUAddress Scratch(Owned& o, const void* data, u64 bytes, id<MTLBuffer>* buffer = nullptr,
-                      u64* offset = nullptr) {
+id<MTLBlitCommandEncoder> BlitEncoder(Owned& o) {
+    if (o.blit) {
+        return o.blit;
+    }
+    id<MTLCommandBuffer> cmd = Metal(o);
+    CloseRender(o, false);
+    EndCompute(o);
+    o.blit = [cmd blitCommandEncoder];
+    WaitChain(o.blit);
+    return o.blit;
+}
+
+/// `bytes` of `data` in scratch memory (shared, kept until the segment is done): `buffer`/
+/// `offset` say where.
+void Scratch(Owned& o, const void* data, u64 bytes, id<MTLBuffer>* buffer, u64* offset) {
     const u64 size = std::max<u64>((bytes + 255) & ~u64(255), 256);
     if (!o.scratch || o.scratch_used + size > ScratchChunk) {
         o.scratch = TakeScratch();
         o.scratch_used = 0;
         if (!o.retire) {
             o.retire = std::make_shared<Retire>();
-            o.retire->allocator = TakeAllocator();
         }
         o.retire->scratch.push_back(o.scratch);
     }
     const u64 at = o.scratch_used;
     o.scratch_used += size;
     std::memcpy(static_cast<u8*>(o.scratch.contents) + at, data, bytes);
-    if (buffer) {
-        *buffer = o.scratch;
-        *offset = at;
+    *buffer = o.scratch;
+    *offset = at;
+}
+
+/// `bytes` of GPU scratch (private, kept until the segment is done): `buffer`/`offset` say where.
+void GpuScratch(Owned& o, u64 bytes, id<MTLBuffer>* buffer, u64* offset) {
+    const u64 size = std::max<u64>((bytes + 255) & ~u64(255), 256);
+    if (!o.gpu_scratch || o.gpu_scratch_used + size > o.gpu_scratch.length) {
+        o.gpu_scratch = TakeGpuScratch(size);
+        o.gpu_scratch_used = 0;
+        if (!o.retire) {
+            o.retire = std::make_shared<Retire>();
+        }
+        o.retire->gpu_scratch.push_back(o.gpu_scratch);
     }
-    return o.scratch.gpuAddress + at;
+    *buffer = o.gpu_scratch;
+    *offset = o.gpu_scratch_used;
+    o.gpu_scratch_used += size;
 }
 
 // ---- Descriptors ----
@@ -918,7 +976,8 @@ void Decode(PushWrite& w) {
                 // A null descriptor (nullDescriptor): an empty buffer. Every access of the Metal
                 // shaders is checked against the bound size (mtl_spirv_robust.h): with size 0
                 // reads give zero and writes are dropped; the zero buffer is only addressed.
-                b.address = null_buffer.gpuAddress;
+                b.buffer = null_buffer;
+                b.offset = 0;
                 b.size = 0;
                 b.ok = true;
                 break;
@@ -926,8 +985,8 @@ void Decode(PushWrite& w) {
             const BufferRef ref = ResolveBuffer(info.buffer);
             b.why = "a buffer descriptor without a Metal buffer";
             if (ref.buffer) {
-                const u64 start = ref.offset + info.offset;
-                b.address = ref.buffer.gpuAddress + start;
+                b.buffer = ref.buffer;
+                b.offset = ref.offset + info.offset;
                 b.size = info.range == VK_WHOLE_SIZE
                              ? (info.offset < ref.size ? ref.size - info.offset : 0)
                              : info.range;
@@ -1030,10 +1089,67 @@ bool StageResolvable(const Owned& o, VkPipelineBindPoint point, const Metal::Com
     return true;
 }
 
-/// Binds a stage's resources into `table` (StageResolvable first); false with `why` when one
-/// has no Metal object or comes from a bound descriptor set.
-bool BindStage(Owned& o, id<MTL4ArgumentTable> table, VkPipelineBindPoint point,
-               const Metal::CompiledShader* shader, const char*& why) {
+/// The Metal stage a shader binds to.
+enum class Stage { Vertex, Fragment, Compute };
+
+/// Sets one slot of `stage` on the open encoder (render for Vertex/Fragment, compute otherwise).
+void SetBuffer(Owned& o, Stage stage, id<MTLBuffer> buffer, u64 offset, u32 slot) {
+    switch (stage) {
+    case Stage::Vertex:
+        [o.render setVertexBuffer:buffer offset:offset atIndex:slot];
+        break;
+    case Stage::Fragment:
+        [o.render setFragmentBuffer:buffer offset:offset atIndex:slot];
+        break;
+    case Stage::Compute:
+        [o.compute setBuffer:buffer offset:offset atIndex:slot];
+        break;
+    }
+}
+void SetBytes(Owned& o, Stage stage, const void* data, u64 size, u32 slot) {
+    switch (stage) {
+    case Stage::Vertex:
+        [o.render setVertexBytes:data length:size atIndex:slot];
+        break;
+    case Stage::Fragment:
+        [o.render setFragmentBytes:data length:size atIndex:slot];
+        break;
+    case Stage::Compute:
+        [o.compute setBytes:data length:size atIndex:slot];
+        break;
+    }
+}
+void SetTexture(Owned& o, Stage stage, id<MTLTexture> texture, u32 slot) {
+    switch (stage) {
+    case Stage::Vertex:
+        [o.render setVertexTexture:texture atIndex:slot];
+        break;
+    case Stage::Fragment:
+        [o.render setFragmentTexture:texture atIndex:slot];
+        break;
+    case Stage::Compute:
+        [o.compute setTexture:texture atIndex:slot];
+        break;
+    }
+}
+void SetSampler(Owned& o, Stage stage, id<MTLSamplerState> sampler, u32 slot) {
+    switch (stage) {
+    case Stage::Vertex:
+        [o.render setVertexSamplerState:sampler atIndex:slot];
+        break;
+    case Stage::Fragment:
+        [o.render setFragmentSamplerState:sampler atIndex:slot];
+        break;
+    case Stage::Compute:
+        [o.compute setSamplerState:sampler atIndex:slot];
+        break;
+    }
+}
+
+/// Binds a stage's resources on the open encoder (StageResolvable first); false with `why` when
+/// one has no Metal object or comes from a bound descriptor set.
+bool BindStage(Owned& o, Stage stage, VkPipelineBindPoint point, const Metal::CompiledShader* shader,
+               const char*& why) {
     if (!shader) {
         return true;
     }
@@ -1056,7 +1172,11 @@ bool BindStage(Owned& o, id<MTL4ArgumentTable> table, VkPipelineBindPoint point,
             const u32 slot = b.msl_index + e;
             switch (b.kind) {
             case Kind::Buffer:
-                [table setAddress:bound ? bound->address : null_buffer.gpuAddress atIndex:slot];
+                if (bound) {
+                    SetBuffer(o, stage, bound->buffer, bound->offset, slot);
+                } else {
+                    SetBuffer(o, stage, null_buffer, 0, slot);
+                }
                 if (slot < sizes.size()) {
                     // An unbound slot is an empty buffer: its accesses are dropped.
                     sizes[slot] = u32(std::min<u64>(bound ? bound->size : 0, 0xffffffffu));
@@ -1065,14 +1185,10 @@ bool BindStage(Owned& o, id<MTL4ArgumentTable> table, VkPipelineBindPoint point,
             case Kind::Texture:
             case Kind::StorageTexture:
             case Kind::TexelBuffer:
-                [table setTexture:(bound && bound->texture ? bound->texture : null_texture)
-                                      .gpuResourceID
-                          atIndex:slot];
+                SetTexture(o, stage, bound && bound->texture ? bound->texture : null_texture, slot);
                 break;
             case Kind::Sampler:
-                [table setSamplerState:(bound && bound->sampler ? bound->sampler : null_sampler)
-                                           .gpuResourceID
-                               atIndex:slot];
+                SetSampler(o, stage, bound && bound->sampler ? bound->sampler : null_sampler, slot);
                 break;
             default:
                 break;
@@ -1081,12 +1197,11 @@ bool BindStage(Owned& o, id<MTL4ArgumentTable> table, VkPipelineBindPoint point,
     }
     if (shader->uses_push_constants) {
         const auto& push = o.push[point == VK_PIPELINE_BIND_POINT_COMPUTE];
-        [table setAddress:Scratch(o, push.data(), push.size())
-                  atIndex:shader->push_constant_buffer];
+        SetBytes(o, stage, push.data(), push.size(), shader->push_constant_buffer);
     }
     if (shader->buffer_size_buffer != ~0u) {
-        [table setAddress:Scratch(o, sizes.data(), sizeof(u32) * shader->num_buffers)
-                  atIndex:shader->buffer_size_buffer];
+        SetBytes(o, stage, sizes.data(), sizeof(u32) * std::max(1u, shader->num_buffers),
+                 shader->buffer_size_buffer);
     }
     return true;
 }
@@ -1105,14 +1220,11 @@ const char* DrawBlocker(const Owned& o) {
     if (!entry || !entry->render) {
         return "no Metal pipeline";
     }
-    if (entry->tess) {
-        return "tessellation";
-    }
     if (entry->geometry) {
         return "a geometry shader";
     }
     const Metal::RenderPipeline& p = *entry->render;
-    if (p.primitive_emulated && !entry->rect_list) {
+    if (p.primitive_emulated && !entry->rect_list && !p.tessellation) {
         return "a topology Metal lacks";
     }
     if (p.fill_point) {
@@ -1204,13 +1316,13 @@ bool PrepareDraw(Owned& o, const char*& why) {
         }
         scissors[i] = {r.x, r.y, r.width, r.height};
     }
-    id<MTL4RenderCommandEncoder> enc = RenderEncoder(o);
+    id<MTLRenderCommandEncoder> enc = RenderEncoder(o);
     if (!enc) {
         why = "no render encoder";
         return false;
     }
-    if (!BindStage(o, o.vertex_table, VK_PIPELINE_BIND_POINT_GRAPHICS, p.vs, why) ||
-        !BindStage(o, o.fragment_table, VK_PIPELINE_BIND_POINT_GRAPHICS, p.fs, why)) {
+    if (!BindStage(o, Stage::Vertex, VK_PIPELINE_BIND_POINT_GRAPHICS, p.vs, why) ||
+        !BindStage(o, Stage::Fragment, VK_PIPELINE_BIND_POINT_GRAPHICS, p.fs, why)) {
         return false;
     }
     [enc setRenderPipelineState:(__bridge id<MTLRenderPipelineState>)p.state];
@@ -1259,7 +1371,7 @@ bool PrepareDraw(Owned& o, const char*& why) {
     if (ds.stencil_test) {
         [enc setStencilFrontReferenceValue:o.front.reference backReferenceValue:o.back.reference];
     }
-    // Metal 4's depth bounds test (on the stored depth, as Vulkan's); [0, 1] turns it off.
+    // Metal's depth bounds test (macOS 26; on the stored depth, as Vulkan's); [0, 1] turns it off.
     if (o.depth_bounds_test && p.depth_pixel_format) { // Vulkan's test needs a depth attachment
         [enc setDepthTestMinBound:o.depth_bounds[0] maxBound:o.depth_bounds[1]];
     } else {
@@ -1278,20 +1390,22 @@ bool PrepareDraw(Owned& o, const char*& why) {
         const auto& slot = p.vertex_slots[i];
         const auto& vb = slot.location < o.vertex_buffers.size() ? o.vertex_buffers[slot.location]
                                                                  : Owned::VertexBuffer{};
-        MTLGPUAddress address = null_buffer.gpuAddress;
+        id<MTLBuffer> buffer = null_buffer;
+        u64 offset = 0;
         if (vb.buffer) {
             const BufferRef ref = ResolveBuffer(vb.buffer);
             if (!ref.buffer) {
                 why = "a vertex buffer without a Metal buffer";
                 return false;
             }
-            address = ref.buffer.gpuAddress + ref.offset + vb.offset;
+            buffer = ref.buffer;
+            offset = ref.offset + vb.offset;
         }
         u64 stride = vb.stride;
         if (slot.constant || !stride) {
             stride = 16;
         }
-        [o.vertex_table setAddress:address attributeStride:stride atIndex:slot.slot];
+        [enc setVertexBuffer:buffer offset:offset attributeStride:stride atIndex:slot.slot];
     }
     return true;
 }
@@ -1331,8 +1445,8 @@ void Dispatch(Owned& o, Encode&& encode, KkRecord&& kk) {
         StageResolvable(o, VK_PIPELINE_BIND_POINT_COMPUTE, o.compute_metal->shader, why);
     }
     if (!why) {
-        id<MTL4ComputeCommandEncoder> enc = ComputeEncoder(o);
-        if (BindStage(o, o.compute_table, VK_PIPELINE_BIND_POINT_COMPUTE, o.compute_metal->shader,
+        id<MTLComputeCommandEncoder> enc = ComputeEncoder(o);
+        if (BindStage(o, Stage::Compute, VK_PIPELINE_BIND_POINT_COMPUTE, o.compute_metal->shader,
                       why)) {
             [enc setComputePipelineState:(__bridge id<MTLComputePipelineState>)
                                              o.compute_metal->state];
@@ -1345,6 +1459,151 @@ void Dispatch(Owned& o, Encode&& encode, KkRecord&& kk) {
     Reason(why);
     ++counters.fallback_dispatches;
     if (VkCommandBuffer cb = KkWithState(o, VK_PIPELINE_BIND_POINT_COMPUTE)) {
+        kk(cb);
+    }
+}
+
+// ---- Tessellated draws (mtl_tessellation.h) ----
+
+struct TessArgs {
+    u32 count{};          ///< vertices (indices) of the draw
+    u32 instances{};
+    u32 first{};          ///< the first vertex, or the first index
+    s32 vertex_offset{};  ///< indexed: the base vertex
+    u32 first_instance{};
+    bool indexed{};
+};
+
+/// Whether the draw's scissors leave nothing to draw (as PrepareDraw finds them).
+bool EmptyScissor(const Owned& o) {
+    for (const VkRect2D& s : o.scissors) {
+        Metal::RasterUtil::ScissorRect r;
+        if (!Metal::RasterUtil::ClampScissor(s.offset.x, s.offset.y, s.extent.width,
+                                             s.extent.height, o.target_width, o.target_height,
+                                             r)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// The vertex and control shaders as compute kernels writing GPU scratch, then the patch draw of
+/// the evaluation and fragment shaders in the pass (reopened, loading). False with `why` when the
+/// draw goes to KosmicKrisp (checked before anything is encoded, except the draw state itself).
+bool EncodeTessellated(Owned& o, const TessArgs& a, const char*& why) {
+    const Metal::TessellationPipeline& t = *o.graphics->tess;
+    const Metal::RenderPipeline& p = *t.render;
+    const u32 patches = t.input_control_points ? a.count / t.input_control_points : 0;
+    if (!patches || !a.instances) {
+        return true; // nothing to draw
+    }
+    if (a.instances > 1) {
+        why = "an instanced tessellated draw";
+        return false;
+    }
+    Metal::Tessellation::DrawParams params;
+    params.num_vertices = patches * t.input_control_points;
+    params.first_vertex = a.indexed ? u32(a.vertex_offset) : a.first;
+    params.first_instance = a.first_instance;
+    if (a.indexed) {
+        const BufferRef index = ResolveBuffer(o.index_buffer);
+        if (!index.buffer) {
+            why = "no Metal index buffer";
+            return false;
+        }
+        const u32 size = o.index_type == VK_INDEX_TYPE_UINT32 ? 4 : 2;
+        params.index_type = size == 4 ? 2 : 1;
+        params.index_buffer = (__bridge void*)index.buffer;
+        params.index_offset = index.offset + o.index_offset + u64(a.first) * size;
+    }
+    const Metal::TessKernel& kernel = t.vertex[params.index_type];
+    if (!kernel.state || !kernel.shader || !t.control.state || !t.control.shader) {
+        why = "a tessellation kernel not built";
+        return false;
+    }
+    constexpr auto graphics = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    if (!StageResolvable(o, graphics, kernel.shader, why) ||
+        !StageResolvable(o, graphics, t.control.shader, why) ||
+        !StageResolvable(o, graphics, p.vs, why) || !StageResolvable(o, graphics, p.fs, why)) {
+        return false;
+    }
+    if (EmptyScissor(o)) {
+        why = "an empty scissor";
+        return false;
+    }
+    std::array<Metal::Tessellation::VertexBinding, Vulkan::MaxVertexBufferCount> streams;
+    u32 num_streams = 0;
+    for (u32 i = 0; i < t.num_vertex_slots; ++i) {
+        const auto& slot = t.vertex_slots[i];
+        const auto& vb = slot.location < o.vertex_buffers.size() ? o.vertex_buffers[slot.location]
+                                                                 : Owned::VertexBuffer{};
+        id<MTLBuffer> buffer = null_buffer;
+        u64 offset = 0;
+        if (vb.buffer) {
+            const BufferRef ref = ResolveBuffer(vb.buffer);
+            if (!ref.buffer) {
+                why = "a vertex buffer without a Metal buffer";
+                return false;
+            }
+            if (!vb.stride && !slot.constant) {
+                why = "a vertex stride of 0";
+                return false;
+            }
+            buffer = ref.buffer;
+            offset = ref.offset + vb.offset;
+        }
+        const u64 stride = slot.constant || !vb.stride ? 16 : vb.stride;
+        streams[num_streams++] = {(__bridge void*)buffer, offset, stride, slot.slot};
+    }
+
+    // Steps 1 and 2: the kernels (after the encoder before them, the chain).
+    const auto plan = Metal::Tessellation::PlanScratch(t, patches);
+    id<MTLBuffer> scratch;
+    u64 at = 0;
+    GpuScratch(o, plan.total, &scratch, &at);
+    id<MTLComputeCommandEncoder> enc = ComputeEncoder(o);
+    // Every resource was found above (StageResolvable), so the binding succeeds.
+    const auto bind = [&](const Metal::CompiledShader& shader) {
+        const char* bind_why = nullptr;
+        BindStage(o, Stage::Compute, graphics, &shader, bind_why);
+    };
+    Metal::Tessellation::EncodeKernels((__bridge void*)enc, t, params,
+                                       std::span{streams.data(), num_streams},
+                                       (__bridge void*)scratch, at, plan, bind, bind);
+    // Step 3: the patch draw (the render encoder after the compute one, the chain).
+    if (!PrepareDraw(o, why)) {
+        return false; // the kernels' output goes unused
+    }
+    id<MTLRenderCommandEncoder> r = o.render;
+    [r setTessellationFactorBuffer:scratch offset:at + plan.factor_offset instanceStride:0];
+    [r setVertexBuffer:scratch offset:at + plan.control_offset atIndex:Metal::kTessInputBuffer];
+    [r setVertexBuffer:scratch offset:at + plan.patch_offset atIndex:Metal::kTessPatchBuffer];
+    [r setVertexBuffer:scratch offset:at + plan.factor_offset atIndex:Metal::kTessFactorBuffer];
+    [r drawPatches:t.output_control_points
+                   patchStart:0
+                   patchCount:patches
+             patchIndexBuffer:nil
+       patchIndexBufferOffset:0
+                instanceCount:1
+                 baseInstance:0];
+    ++counters.tess_draws;
+    return true;
+}
+
+/// A tessellated draw in Metal if it can be, else in a KosmicKrisp segment.
+template <typename KkRecord>
+void DrawTessellated(Owned& o, const TessArgs& a, KkRecord&& kk) {
+    const char* why = o.active_queries ? "an occlusion query" : DrawBlocker(o);
+    if (!why && o.cull_mode == VK_CULL_MODE_FRONT_AND_BACK) {
+        why = "culling front and back";
+    }
+    if (!why && EncodeTessellated(o, a, why)) {
+        ++counters.metal_draws;
+        return;
+    }
+    Reason(why);
+    ++counters.fallback_draws;
+    if (VkCommandBuffer cb = KkWithState(o, VK_PIPELINE_BIND_POINT_GRAPHICS)) {
         kk(cb);
     }
 }
@@ -1382,7 +1641,7 @@ bool BuildPass(Owned& o) {
         (info.flags & (VK_RENDERING_SUSPENDING_BIT | VK_RENDERING_RESUMING_BIT))) {
         return false;
     }
-    MTL4RenderPassDescriptor* rp = [MTL4RenderPassDescriptor new];
+    MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
     u32 width = info.renderArea.offset.x + info.renderArea.extent.width;
     u32 height = info.renderArea.offset.y + info.renderArea.extent.height;
     u32 samples = 0;
@@ -1480,7 +1739,7 @@ bool BuildPass(Owned& o) {
     o.target_height = height;
     o.pass_samples = samples;
     o.pass_first = rp;
-    MTL4RenderPassDescriptor* again = [rp copy];
+    MTLRenderPassDescriptor* again = [rp copy];
     for (u32 i = 0; i < o.pass_colors.size(); ++i) {
         if (again.colorAttachments[i].texture) {
             again.colorAttachments[i].loadAction = MTLLoadActionLoad;
@@ -1528,6 +1787,13 @@ bool Init(VkDevice vkdev, PFN_vkGetDeviceProcAddr driver_proc) {
                       "shadow build's); the frame encoder stays off\n");
                 return false;
             }
+            BbMetal::ExportResidencySet kk_set{};
+            Export(reinterpret_cast<VkBaseOutStructure*>(&kk_set));
+            if (!kk_set.mtlResidencySet) {
+                Print("Metal frame: KosmicKrisp exports no residency set (patch 0009); the frame "
+                      "encoder stays off\n");
+                return false;
+            }
             MTLResidencySetDescriptor* rd = [MTLResidencySetDescriptor new];
             rd.label = @"bbport Metal frame";
             NSError* error = nil;
@@ -1537,6 +1803,16 @@ bool Init(VkDevice vkdev, PFN_vkGetDeviceProcAddr driver_proc) {
                       error ? error.localizedDescription.UTF8String : "unknown");
                 return false;
             }
+            // Command buffers are made when recording begins and committed at the submission:
+            // room for every recording thread's and a few frames' worth.
+            queue = [device newCommandQueueWithMaxCommandBufferCount:1024];
+            if (!queue) {
+                Print("Metal frame: no command queue; the frame encoder stays off\n");
+                return false;
+            }
+            queue.label = @"bbport Metal frame";
+            [queue addResidencySet:(__bridge id<MTLResidencySet>)kk_set.mtlResidencySet];
+            [queue addResidencySet:residency];
             // Zeros: what a null descriptor reads.
             null_buffer = [device newBufferWithLength:65536 options:MTLResourceStorageModeShared];
             std::memset(null_buffer.contents, 0, null_buffer.length);
@@ -1549,10 +1825,19 @@ bool Init(VkDevice vkdev, PFN_vkGetDeviceProcAddr driver_proc) {
             td.storageMode = MTLStorageModePrivate;
             null_texture = [device newTextureWithDescriptor:td];
             MTLSamplerDescriptor* sd = [MTLSamplerDescriptor new];
-            sd.supportArgumentBuffers = YES;
             null_sampler = [device newSamplerStateWithDescriptor:sd];
             MakeResident(null_buffer);
             MakeResident(null_texture);
+            // The chain fence, updated once so that no wait depends on whether it was used yet.
+            chain = [device newFence];
+            {
+                id<MTLCommandBuffer> prime = [queue commandBuffer];
+                id<MTLBlitCommandEncoder> blit = [prime blitCommandEncoder];
+                [blit updateFence:chain];
+                [blit endEncoding];
+                [prime commit];
+                [prime waitUntilCompleted];
+            }
             const VkSemaphoreTypeCreateInfo type{
                 .sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
                 .semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE,
@@ -1564,43 +1849,39 @@ bool Init(VkDevice vkdev, PFN_vkGetDeviceProcAddr driver_proc) {
                 Print("Metal frame: no timeline semaphore; the frame encoder stays off\n");
                 return false;
             }
-            Print("Metal frame: encoding owned command buffers in Metal 4 on %s; what it does "
-                  "not encode goes to KosmicKrisp segments (BB_METAL_FRAME=1)\n",
+            // The two directions between the queues: timelines from 0 (nothing to wait for).
+            const VkSemaphoreTypeCreateInfo zero{
+                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
+                .semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE,
+                .initialValue = 0,
+            };
+            const VkSemaphoreCreateInfo zero_sem{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+                                                 .pNext = &zero};
+            const auto event_of = [&](VkSemaphore semaphore) -> id<MTLSharedEvent> {
+                VkExportMetalSharedEventInfoEXT e{
+                    .sType = VK_STRUCTURE_TYPE_EXPORT_METAL_SHARED_EVENT_INFO_EXT,
+                    .semaphore = semaphore,
+                };
+                Export(reinterpret_cast<VkBaseOutStructure*>(&e));
+                return e.mtlSharedEvent;
+            };
+            if (driver.vkCreateSemaphore(vkdev, &zero_sem, nullptr, &to_metal_sem) != VK_SUCCESS ||
+                driver.vkCreateSemaphore(vkdev, &zero_sem, nullptr, &to_kk_sem) != VK_SUCCESS ||
+                !(to_metal_event = event_of(to_metal_sem)) ||
+                !(to_kk_event = event_of(to_kk_sem))) {
+                Print("Metal frame: no shared events between the queues; the frame encoder stays "
+                      "off\n");
+                return false;
+            }
+            Print("Metal frame: encoding owned command buffers in Metal on %s, on a queue of its "
+                  "own; what it does not encode goes to KosmicKrisp segments (BB_METAL_FRAME=1)\n",
                   device.name.UTF8String);
             return true;
         }
     }
-    Print("Metal frame: Metal 4 needs macOS 26; the frame encoder stays off\n");
+    Print("Metal frame: needs macOS 26; the frame encoder stays off\n");
     return false;
 }
-
-namespace {
-std::mutex queues_mutex;
-std::unordered_map<VkQueue, id<MTL4CommandQueue>> queues;
-
-/// The VkQueue's Metal 4 queue (exported once; our residency set added to it).
-id<MTL4CommandQueue> QueueOf(VkQueue vkqueue) {
-    std::scoped_lock lock{queues_mutex};
-    if (auto it = queues.find(vkqueue); it != queues.end()) {
-        return it->second;
-    }
-    VkExportMetalCommandQueueInfoEXT q{
-        .sType = VK_STRUCTURE_TYPE_EXPORT_METAL_COMMAND_QUEUE_INFO_EXT,
-        .queue = vkqueue,
-    };
-    Export(reinterpret_cast<VkBaseOutStructure*>(&q));
-    id object = q.mtlCommandQueue;
-    id<MTL4CommandQueue> mtl = nil;
-    if (object && [object respondsToSelector:@selector(commit:count:options:)]) {
-        mtl = object;
-        [mtl addResidencySet:residency];
-    } else {
-        Print("Metal frame: a queue without a Metal 4 queue: its Metal command buffers are lost\n");
-    }
-    queues[vkqueue] = mtl;
-    return mtl;
-}
-} // namespace
 
 Owned* Begin(VkCommandBuffer command_buffer) {
     auto* o = new Owned;
@@ -1636,12 +1917,13 @@ void Discard(Owned* o) {
 
 VkResult Submit(VkQueue vkqueue, const Batch* batches, uint32_t count, VkFence fence) {
     @autoreleasepool {
-        id<MTL4CommandQueue> queue = QueueOf(vkqueue);
-        // KosmicKrisp makes new allocations resident at each submission: one before the first
-        // Metal command buffer, with the first batch's waits.
+        // Each KosmicKrisp submission makes new allocations resident (its residency set is on
+        // our queue too), signals `to_metal` for our command buffers after it, and waits for
+        // `to_kk` when ours ran since the last one; a run of our command buffers waits for
+        // `to_metal` first when KosmicKrisp ran since, and signals `to_kk` at its end.
         std::vector<VkCommandBufferSubmitInfo> kk_run;
         std::vector<KkBuffer*> kk_run_buffers;
-        std::vector<id<MTL4CommandBuffer>> metal_run;
+        std::vector<id<MTLCommandBuffer>> metal_run;
         std::vector<std::shared_ptr<Retire>> metal_retires;
         std::vector<std::shared_ptr<Retire>> held; ///< released when the submission is done
         VkResult result = VK_SUCCESS;
@@ -1650,6 +1932,14 @@ VkResult Submit(VkQueue vkqueue, const Batch* batches, uint32_t count, VkFence f
         const auto submit = [&](const VkSemaphoreSubmitInfo* waits, u32 wait_count,
                                 const VkSemaphoreSubmitInfo* signals, u32 signal_count,
                                 VkFence f) {
+            std::vector<VkSemaphoreSubmitInfo> all_waits(waits, waits + wait_count);
+            if (metal_ahead) {
+                all_waits.push_back({.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                                     .semaphore = to_kk_sem,
+                                     .value = to_kk_value,
+                                     .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT});
+                metal_ahead = false;
+            }
             std::vector<VkSemaphoreSubmitInfo> all_signals(signals, signals + signal_count);
             if (!kk_run_buffers.empty()) {
                 const u64 value = ++kk_timeline_next;
@@ -1661,10 +1951,15 @@ VkResult Submit(VkQueue vkqueue, const Batch* batches, uint32_t count, VkFence f
                                        .value = value,
                                        .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT});
             }
+            all_signals.push_back({.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                                   .semaphore = to_metal_sem,
+                                   .value = ++to_metal_value,
+                                   .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT});
+            kk_ahead = true;
             const VkSubmitInfo2 info{
                 .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-                .waitSemaphoreInfoCount = wait_count,
-                .pWaitSemaphoreInfos = waits,
+                .waitSemaphoreInfoCount = u32(all_waits.size()),
+                .pWaitSemaphoreInfos = all_waits.data(),
                 .commandBufferInfoCount = u32(kk_run.size()),
                 .pCommandBufferInfos = kk_run.data(),
                 .signalSemaphoreInfoCount = u32(all_signals.size()),
@@ -1694,27 +1989,58 @@ VkResult Submit(VkQueue vkqueue, const Batch* batches, uint32_t count, VkFence f
             if (metal_run.empty()) {
                 return;
             }
+            const auto t = SubmitTimes::Clock::now();
+            if (kk_ahead) {
+                // After KosmicKrisp's work: a command buffer that waits for it and passes the
+                // chain on (every encoder after it waits for the chain).
+                id<MTLCommandBuffer> gate = [queue commandBufferWithUnretainedReferences];
+                gate.label = @"bbport Metal frame: after KosmicKrisp";
+                [gate encodeWaitForEvent:to_metal_event value:to_metal_value];
+                id<MTLBlitCommandEncoder> blit = [gate blitCommandEncoder];
+                [blit waitForFence:chain];
+                [blit updateFence:chain];
+                [blit endEncoding];
+                [gate commit];
+                kk_ahead = false;
+            }
+            // The run's end: after its last encoder (the chain), for KosmicKrisp.
+            id<MTLCommandBuffer> last = metal_run.back();
+            {
+                id<MTLBlitCommandEncoder> blit = [last blitCommandEncoder];
+                [blit waitForFence:chain];
+                [blit updateFence:chain];
+                [blit endEncoding];
+            }
+            [last encodeSignalEvent:to_kk_event value:++to_kk_value];
+            metal_ahead = true;
             for (auto& r : metal_retires) {
                 r->pending.fetch_add(1, std::memory_order_relaxed);
             }
-            MTL4CommitOptions* options = [MTL4CommitOptions new];
             std::vector<std::shared_ptr<Retire>> retires = std::move(metal_retires);
-            [options addFeedbackHandler:^(id<MTL4CommitFeedback> feedback) {
-              if (feedback.error) {
-                  if (counters.gpu_errors++ < 4) {
-                      Print("Metal frame: a Metal command buffer failed on the GPU: %s\n",
-                            feedback.error.localizedDescription.UTF8String);
+            for (id<MTLCommandBuffer> cb : metal_run) {
+                const bool is_last = cb == last;
+                // Held by the handler: the queue keeps an uncommitted command buffer, not a
+                // committed one, alive for its handlers (they run once it completed).
+                [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {
+                  if (done.status == MTLCommandBufferStatusError) {
+                      if (counters.gpu_errors++ < 4) {
+                          Print("Metal frame: a Metal command buffer failed on the GPU: %s\n",
+                                done.error ? done.error.localizedDescription.UTF8String
+                                           : "unknown error");
+                      }
                   }
-              }
-              for (auto& r : retires) {
-                  Release(r);
-              }
-            }];
-            if (queue) {
-                const auto t = SubmitTimes::Clock::now();
-                [queue commit:metal_run.data() count:metal_run.size() options:options];
-                times.Add(times.metal_ms, times.metal_max_ms, times.metal, SubmitTimes::Since(t));
+                }];
+                if (is_last) {
+                    // The chain orders every encoder of the run before the last one's end.
+                    [cb addCompletedHandler:^(id<MTLCommandBuffer>) {
+                      for (auto& r : retires) {
+                          Release(r);
+                      }
+                    }];
+                }
+                [cb commit];
             }
+            times.Add(times.metal_ms, times.metal_max_ms, times.metal, SubmitTimes::Since(t));
             counters.metal_buffers += metal_run.size();
             metal_run.clear();
             metal_retires.clear();
@@ -1763,6 +2089,11 @@ VkResult Submit(VkQueue vkqueue, const Batch* batches, uint32_t count, VkFence f
         }
         if (count == 0 && fence) {
             submit(nullptr, 0, nullptr, 0, fence);
+        }
+        if (metal_ahead) {
+            // KosmicKrisp's queue is not idle before our work is done (vkQueueWaitIdle, and the
+            // next submission's order).
+            submit(nullptr, 0, nullptr, 0, VK_NULL_HANDLE);
         }
         for (auto& r : held) {
             Release(r);
@@ -1825,7 +2156,6 @@ void SamplerCreated(VkSampler sampler, const VkSamplerCreateInfo* info) {
                                           : MTLSamplerReductionModeWeightedAverage;
                 }
             }
-            d.supportArgumentBuffers = YES;
             s.state = [device newSamplerStateWithDescriptor:d];
         }
         std::scoped_lock lock{objects_mutex};
@@ -1888,10 +2218,11 @@ void CmdPipelineBarrier(Owned& o, VkCommandBuffer, const VkDependencyInfo* info)
             BreakPass(o);
         }
         if (o.compute) {
-            [o.compute barrierAfterEncoderStages:MTLStageDispatch | MTLStageBlit
-                             beforeEncoderStages:MTLStageDispatch | MTLStageBlit
-                               visibilityOptions:Visible];
+            // Dispatches of a concurrent encoder: after everything before the barrier.
+            [o.compute memoryBarrierWithScope:MTLBarrierScopeBuffers | MTLBarrierScopeTextures];
         }
+        // A blit encoder runs its commands in order; the next encoder waits for it (the chain).
+        EndBlit(o);
     }
 }
 
@@ -2344,9 +2675,17 @@ void CmdSetLineWidth(Owned& o, float width) {
 void CmdDraw(Owned& o, uint32_t vertex_count, uint32_t instance_count, uint32_t first_vertex,
              uint32_t first_instance) {
     @autoreleasepool {
+        if (o.graphics && o.graphics->tess) {
+            DrawTessellated(o, {vertex_count, instance_count, first_vertex, 0, first_instance, false},
+                            [&](VkCommandBuffer cb) {
+                                driver.vkCmdDraw(cb, vertex_count, instance_count, first_vertex,
+                                                 first_instance);
+                            });
+            return;
+        }
         Draw(
             o, nullptr,
-            [&](id<MTL4RenderCommandEncoder> enc) {
+            [&](id<MTLRenderCommandEncoder> enc) {
                 u32 start = first_vertex, n = vertex_count;
                 if (o.graphics->rect_list) {
                     // Two triangles (6 vertices) per rectangle of 3 (mtl_spirv_rectlist.h).
@@ -2368,6 +2707,17 @@ void CmdDraw(Owned& o, uint32_t vertex_count, uint32_t instance_count, uint32_t 
 void CmdDrawIndexed(Owned& o, uint32_t index_count, uint32_t instance_count, uint32_t first_index,
                     int32_t vertex_offset, uint32_t first_instance) {
     @autoreleasepool {
+        if (o.graphics && o.graphics->tess) {
+            DrawTessellated(o,
+                            {index_count, instance_count, first_index, vertex_offset,
+                             first_instance, true},
+                            [&](VkCommandBuffer cb) {
+                                driver.vkCmdDrawIndexed(cb, index_count, instance_count,
+                                                        first_index, vertex_offset,
+                                                        first_instance);
+                            });
+            return;
+        }
         const BufferRef index = ResolveBuffer(o.index_buffer);
         const char* blocker = !index.buffer ? "no Metal index buffer"
                               : o.graphics && o.graphics->rect_list ? "an indexed rect list"
@@ -2376,14 +2726,14 @@ void CmdDrawIndexed(Owned& o, uint32_t index_count, uint32_t instance_count, uin
                                   : nullptr;
         Draw(
             o, blocker,
-            [&](id<MTL4RenderCommandEncoder> enc) {
+            [&](id<MTLRenderCommandEncoder> enc) {
                 const u32 size = o.index_type == VK_INDEX_TYPE_UINT32 ? 4 : 2;
                 const u64 start = index.offset + o.index_offset + u64(first_index) * size;
                 [enc drawIndexedPrimitives:PrimitiveOf(o)
                                 indexCount:index_count
                                  indexType:size == 4 ? MTLIndexTypeUInt32 : MTLIndexTypeUInt16
-                               indexBuffer:index.buffer.gpuAddress + start
-                         indexBufferLength:index.buffer.length - start
+                               indexBuffer:index.buffer
+                         indexBufferOffset:start
                              instanceCount:instance_count
                                 baseVertex:vertex_offset
                               baseInstance:first_instance];
@@ -2400,7 +2750,8 @@ void CmdDrawIndirect(Owned& o, VkBuffer buffer, VkDeviceSize offset, uint32_t co
     @autoreleasepool {
         const BufferRef args = ResolveBuffer(buffer);
         const BufferRef index = indexed ? ResolveBuffer(o.index_buffer) : BufferRef{};
-        const char* blocker = !args.buffer                  ? "no Metal indirect buffer"
+        const char* blocker = o.graphics && o.graphics->tess ? "an indirect tessellated draw"
+                              : !args.buffer                ? "no Metal indirect buffer"
                               : indexed && !index.buffer    ? "no Metal index buffer"
                               : o.graphics && o.graphics->rect_list ? "an indirect rect list"
                               : indexed && o.graphics && o.graphics->render && RestartDiffers(o)
@@ -2408,21 +2759,23 @@ void CmdDrawIndirect(Owned& o, VkBuffer buffer, VkDeviceSize offset, uint32_t co
                                   : nullptr;
         Draw(
             o, blocker,
-            [&](id<MTL4RenderCommandEncoder> enc) {
+            [&](id<MTLRenderCommandEncoder> enc) {
                 for (u32 i = 0; i < count; ++i) {
-                    const MTLGPUAddress at =
-                        args.buffer.gpuAddress + args.offset + offset + u64(i) * stride;
+                    const u64 at = args.offset + offset + u64(i) * stride;
                     if (indexed) {
                         const u32 size = o.index_type == VK_INDEX_TYPE_UINT32 ? 4 : 2;
                         const u64 start = index.offset + o.index_offset;
                         [enc drawIndexedPrimitives:PrimitiveOf(o)
                                          indexType:size == 4 ? MTLIndexTypeUInt32
                                                              : MTLIndexTypeUInt16
-                                       indexBuffer:index.buffer.gpuAddress + start
-                                 indexBufferLength:index.buffer.length - start
-                                    indirectBuffer:at];
+                                       indexBuffer:index.buffer
+                                 indexBufferOffset:start
+                                    indirectBuffer:args.buffer
+                              indirectBufferOffset:at];
                     } else {
-                        [enc drawPrimitives:PrimitiveOf(o) indirectBuffer:at];
+                        [enc drawPrimitives:PrimitiveOf(o)
+                                  indirectBuffer:args.buffer
+                            indirectBufferOffset:at];
                     }
                 }
             },
@@ -2438,7 +2791,7 @@ void CmdDrawIndirectCount(Owned& o, VkBuffer buffer, VkDeviceSize offset, VkBuff
                           bool indexed) {
     @autoreleasepool {
         Draw(
-            o, "a draw count from the GPU", [&](id<MTL4RenderCommandEncoder>) {},
+            o, "a draw count from the GPU", [&](id<MTLRenderCommandEncoder>) {},
             [&](VkCommandBuffer cb) {
                 (indexed ? driver.vkCmdDrawIndexedIndirectCount : driver.vkCmdDrawIndirectCount)(
                     cb, buffer, offset, count_buffer, count_offset, max_count, stride);
@@ -2450,7 +2803,7 @@ void CmdDispatch(Owned& o, uint32_t x, uint32_t y, uint32_t z) {
     @autoreleasepool {
         Dispatch(
             o,
-            [&](id<MTL4ComputeCommandEncoder> enc, MTLSize threads) {
+            [&](id<MTLComputeCommandEncoder> enc, MTLSize threads) {
                 [enc dispatchThreadgroups:MTLSizeMake(x, y, z) threadsPerThreadgroup:threads];
             },
             [&](VkCommandBuffer cb) { driver.vkCmdDispatch(cb, x, y, z); });
@@ -2470,9 +2823,9 @@ void CmdDispatchIndirect(Owned& o, VkBuffer buffer, VkDeviceSize offset) {
         }
         Dispatch(
             o,
-            [&](id<MTL4ComputeCommandEncoder> enc, MTLSize threads) {
-                [enc dispatchThreadgroupsWithIndirectBuffer:args.buffer.gpuAddress + args.offset +
-                                                            offset
+            [&](id<MTLComputeCommandEncoder> enc, MTLSize threads) {
+                [enc dispatchThreadgroupsWithIndirectBuffer:args.buffer
+                                       indirectBufferOffset:args.offset + offset
                                       threadsPerThreadgroup:threads];
             },
             [&](VkCommandBuffer cb) { driver.vkCmdDispatchIndirect(cb, buffer, offset); });
@@ -2686,7 +3039,7 @@ bool BufferImageCopies(Owned& o, VkBuffer buffer, VkImage image, u32 count,
             return false;
         }
     }
-    id<MTL4ComputeCommandEncoder> enc = ComputeEncoder(o);
+    id<MTLBlitCommandEncoder> enc = BlitEncoder(o);
     for (u32 i = 0; i < count; ++i) {
         const VkBufferImageCopy& r = regions[i];
         const MTLSize size = MTLSizeMake(r.imageExtent.width, r.imageExtent.height,
@@ -2763,11 +3116,12 @@ bool ClearableTexture(id<MTLTexture> t) {
 }
 
 /// A render pass of its own that only clears (ending what is open).
-void ClearPass(Owned& o, MTL4RenderPassDescriptor* rp) {
-    id<MTL4CommandBuffer> cmd = Metal(o);
+void ClearPass(Owned& o, MTLRenderPassDescriptor* rp) {
+    id<MTLCommandBuffer> cmd = Metal(o);
     EndEncoders(o);
-    id<MTL4RenderCommandEncoder> enc = [cmd renderCommandEncoderWithDescriptor:rp];
-    ProducerBarrier(enc);
+    id<MTLRenderCommandEncoder> enc = [cmd renderCommandEncoderWithDescriptor:rp];
+    WaitChain(enc);
+    UpdateChain(enc);
     [enc endEncoding];
 }
 
@@ -2783,7 +3137,7 @@ void CmdCopyBuffer(Owned& o, VkBuffer src, VkBuffer dst, uint32_t count,
             }
             return;
         }
-        id<MTL4ComputeCommandEncoder> enc = ComputeEncoder(o);
+        id<MTLBlitCommandEncoder> enc = BlitEncoder(o);
         for (u32 i = 0; i < count; ++i) {
             [enc copyFromBuffer:s.buffer
                      sourceOffset:s.offset + regions[i].srcOffset
@@ -2810,8 +3164,8 @@ void CmdFillBuffer(Owned& o, VkBuffer dst, VkDeviceSize offset, VkDeviceSize siz
         const u64 rest = d.size > offset ? (d.size - offset) & ~u64(3) : 0;
         const u64 length = size == VK_WHOLE_SIZE ? rest : size;
         if (length) {
-            [ComputeEncoder(o) fillBuffer:d.buffer range:NSMakeRange(d.offset + offset, length)
-                                    value:byte];
+            [BlitEncoder(o) fillBuffer:d.buffer range:NSMakeRange(d.offset + offset, length)
+                                 value:byte];
         }
         ++counters.metal_transfers;
     }
@@ -2830,11 +3184,11 @@ void CmdUpdateBuffer(Owned& o, VkBuffer dst, VkDeviceSize offset, VkDeviceSize s
         id<MTLBuffer> staging;
         u64 at = 0;
         Scratch(o, data, size, &staging, &at);
-        [ComputeEncoder(o) copyFromBuffer:staging
-                             sourceOffset:at
-                                 toBuffer:d.buffer
-                        destinationOffset:d.offset + offset
-                                     size:size];
+        [BlitEncoder(o) copyFromBuffer:staging
+                          sourceOffset:at
+                              toBuffer:d.buffer
+                     destinationOffset:d.offset + offset
+                                  size:size];
         ++counters.metal_transfers;
     }
 }
@@ -2891,7 +3245,7 @@ void CmdCopyImage(Owned& o, VkImage src, VkImageLayout src_layout, VkImage dst,
             }
             return;
         }
-        id<MTL4ComputeCommandEncoder> enc = ComputeEncoder(o);
+        id<MTLBlitCommandEncoder> enc = BlitEncoder(o);
         for (u32 i = 0; i < count; ++i) {
             const VkImageCopy& r = regions[i];
             const u32 layers = LayerCount(s, r.srcSubresource);
@@ -2931,7 +3285,7 @@ void CmdClearColorImage(Owned& o, VkImage image, VkImageLayout layout,
             return;
         }
         ForEachSubresource(texture, count, ranges, [&](u32, u32 level, u32 layer) {
-            MTL4RenderPassDescriptor* rp = [MTL4RenderPassDescriptor new];
+            MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
             rp.colorAttachments[0].texture = texture;
             rp.colorAttachments[0].level = level;
             rp.colorAttachments[0].slice = layer;
@@ -2961,7 +3315,7 @@ void CmdClearDepthStencilImage(Owned& o, VkImage image, VkImageLayout layout,
         }
         const bool has_stencil = Metal::VkToMtl::HasStencilPixelFormat(u32(texture.pixelFormat));
         ForEachSubresource(texture, count, ranges, [&](u32 aspects, u32 level, u32 layer) {
-            MTL4RenderPassDescriptor* rp = [MTL4RenderPassDescriptor new];
+            MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
             // The aspect not cleared is loaded and stored as it is.
             rp.depthAttachment.texture = texture;
             rp.depthAttachment.level = level;
@@ -3041,14 +3395,14 @@ void Report(double seconds) {
     Print("Metal frame: per second %.0f draws, %.0f dispatches and %.0f transfers in Metal, %.0f "
           "draws and %.0f dispatches and %.0f other commands to KosmicKrisp (%.0f segments, %.0f "
           "switches); %.0f Metal command buffers; render passes ended in Metal %.0f, split %.0f "
-          "times in Metal, reopened %.0f times on KosmicKrisp; GPU errors so far %llu; to "
-          "KosmicKrisp because: %s\n",
+          "times in Metal, reopened %.0f times on KosmicKrisp; %.0f tessellated draws in Metal; GPU "
+          "errors so far %llu; to KosmicKrisp because: %s\n",
           take(counters.metal_draws), take(counters.metal_dispatches),
           take(counters.metal_transfers),
           take(counters.fallback_draws), take(counters.fallback_dispatches),
           take(counters.fallback_other), take(counters.kk_segments), take(counters.switches),
           take(counters.metal_buffers), take(counters.metal_passes), take(counters.pass_breaks),
-          take(counters.kk_reopens), counters.gpu_errors.load(),
+          take(counters.kk_reopens), take(counters.tess_draws), counters.gpu_errors.load(),
           top.empty() ? "-" : top.c_str());
 }
 

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport (macOS): the Metal command path's frame encoder (docs/MACOS_METAL_RENDERER.md, stage 3b).
 // The command layer (mtl_layer.cpp) hands it every command of a command buffer it owns
-// (BB_METAL_FRAME=1); it encodes what it can in Metal 4 command buffers for KosmicKrisp's own
-// queue, and records the rest into KosmicKrisp command buffers of its own, replaying the state
-// they need (the "fallback"), so that the picture stays whole while the Metal coverage grows. At
-// submission the segments go to the queue in recording order. After Wooloomooloo2/
-// bloodborne_mac_port's mtl_frame.mm (78b59f5, GPL-2.0-or-later), rewritten for Metal 4 and
-// KosmicKrisp. Plain C++ interface; the implementation (mtl_frame.mm) is Objective-C++ and is
+// (BB_METAL_FRAME=1); it encodes what it can in classic Metal command buffers on a queue of its
+// own, and records the rest into KosmicKrisp command buffers of its own, replaying the state they
+// need (the "fallback"), so that the picture stays whole while the Metal coverage grows. At
+// submission the segments go to the two queues in recording order, ordered between them by shared
+// events (docs/MACOS_METAL_RENDERER.md, stage 5). After Wooloomooloo2/bloodborne_mac_port's
+// mtl_frame.mm (78b59f5, GPL-2.0-or-later), on KosmicKrisp's objects. Plain C++ interface; the implementation (mtl_frame.mm) is Objective-C++ and is
 // built with BB_METAL_BACKEND only.
 
 #pragma once
@@ -20,9 +20,9 @@ namespace MetalFrame {
 struct Owned;
 
 /// Sets the encoder up with the driver's own entry points (`driver_proc`: KosmicKrisp's
-/// vkGetDeviceProcAddr, not the layer's), right after the device is made. Each queue's Metal 4
-/// queue is exported at its first submission. False (logged) when something is missing: the
-/// layer then stays a counting one.
+/// vkGetDeviceProcAddr, not the layer's), right after the device is made: our queue with
+/// KosmicKrisp's residency set (patch 0009), the shared events between the queues. False (logged)
+/// when something is missing: the layer then stays a counting one.
 bool Init(VkDevice device, PFN_vkGetDeviceProcAddr driver_proc);
 
 /// A command buffer begins (vkBeginCommandBuffer, after the driver's): its encoding state.
@@ -44,10 +44,11 @@ struct Batch {
     uint32_t signal_count{};
 };
 
-/// Submits the batches in order through the driver's vkQueueSubmit2: per batch its waits, then
-/// its command buffers (an owned one as its segments: Metal command buffers committed to the
-/// queue, KosmicKrisp ones submitted), then its signals; the fence with the last. Consumes the
-/// owned states. Called with the queue's submissions serialized (the renderer's lock).
+/// Submits the batches in order: per batch its waits (a driver submission), then its command
+/// buffers (an owned one as its segments: Metal command buffers committed to our queue,
+/// KosmicKrisp ones submitted through the driver's vkQueueSubmit2), then its signals; the fence
+/// with the last, and a driver submission after our last command buffer. Consumes the owned
+/// states. Called with the queue's submissions serialized (the renderer's lock).
 VkResult Submit(VkQueue queue, const Batch* batches, uint32_t count, VkFence fence);
 
 // Objects the encoder keeps Metal counterparts for.

@@ -114,6 +114,10 @@ void EncodeKernels(void* compute_encoder, const TessellationPipeline& pipeline,
     EncodeVertexKernel(compute_encoder, pipeline.vertex, draw, vertex_buffers, scratch,
                        scratch_offset + plan.vertex_offset, bind_vertex);
 
+    // bbport: the control kernel reads what the vertex kernel wrote (the encoder may be a
+    // concurrent one).
+    [enc memoryBarrierWithScope:MTLBarrierScopeBuffers];
+
     // 2. The control shader: one thread per output control point of every patch.
     {
         const TessKernel& kernel = pipeline.control;

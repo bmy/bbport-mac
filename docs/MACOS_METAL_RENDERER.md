@@ -1,6 +1,6 @@
 # A Metal command path for the macOS port
 
-Branch `macos-native-0.6-metal`. Status (2026-10-25): stage 1 passed; **stage 2, the shadow build**.
+Branches `macos-native-0.6-metal`, then `macos-native-0.6-mtl` (2026-10-26). Status: **stage 5, classic Metal on a queue of our own**.
 
 ## Why
 
@@ -240,6 +240,39 @@ everywhere. The MSL of each mode has its own cache file (`_np`). Checked on the 
 pass `spirv-val` after the strip, and the translation has no helper calls left. Not exact any more:
 a pixel shader writing its own depth, and positions a compute shader computes; the other port
 ships the same split.
+
+## Stage 5: classic Metal on a queue of our own (the backend at the Vulkan-call boundary)
+
+Decided 2026-10-26: the Metal backend sits under the renderer at the Vulkan calls it makes (the
+layer), not behind a new interface in the renderer; upstream's renderer stays as it is. Metal 4
+has no tessellator, so the frame encoder (`BB_METAL_FRAME=1`) now encodes classic Metal on a
+`MTLCommandQueue` of its own instead of Metal 4 on KosmicKrisp's queue:
+
+- **Residency.** KosmicKrisp patch 0009 exports the device's residency set (every allocation it
+  makes, committed at each submission); our queue has it, and ours (scratch, the stand-ins).
+- **Binding.** Directly on the encoders (`setVertexBuffer:offset:atIndex:` and the like, push
+  constants and buffer sizes as inline bytes); command buffers retain nothing
+  (`commandBufferWithUnretainedReferences`): KosmicKrisp's objects live as their Vulkan objects,
+  ours until the segment's command buffers complete.
+- **Order on our queue.** Every encoder waits for one fence when it begins and updates it when it
+  ends, so each runs after the one before it in commit order, as KosmicKrisp puts a full barrier
+  after each of its encoders. Compute encoders are concurrent, with a memory barrier at each
+  Vulkan barrier; copies, fills and updates go to blit encoders.
+- **Between the queues.** Two KosmicKrisp timeline semaphores and their shared events: every
+  KosmicKrisp submission signals `to_metal`, and waits for `to_kk` when our command buffers ran
+  since the last one; a run of our command buffers first waits for `to_metal` (a small command
+  buffer that passes the fence on) when KosmicKrisp ran since, and its last command buffer
+  signals `to_kk` after the fence. Each `vkQueueSubmit` ends with a KosmicKrisp submission
+  after our work, so the renderer's fences, semaphores and `vkQueueWaitIdle` cover it.
+- **Tessellation in Metal.** A draw with the game's tessellation (direct, one instance) runs its
+  vertex and control shaders as compute kernels into private scratch memory, then
+  `drawPatches` with the evaluation and fragment shaders in the pass (reopened, loading): the
+  pipelines of stage 2 (`mtl_tessellation.h`). Indirect and instanced ones still go to
+  KosmicKrisp. The report counts them (`tessellated draws in Metal`).
+- Not yet: geometry-shader draws in Metal, ordering by the renderer's barriers instead of the
+  fence chain, batched tessellation, a KosmicKrisp-free frame. The classic device and encoder of
+  Wooloomooloo2's native renderer are in the tree (`mtl_device`, `mtl_encoder`, `mtl_order`) for
+  that ordering; the frame encoder does not use them yet.
 
 ## Results so far (M5 Max, 2560x1600, MetalFX native AA)
 

@@ -796,6 +796,16 @@ bool MetalFxUpscaler::Run(const Frame& frame) {
     if (mode == Mode::Events || mode == Mode::Worker) {
         // The copy back (and, in queue order, everything after it) waits for MetalFX on the GPU.
         ++done_value;
+        {
+            // Before the worker can have the job (it stamps this entry when it hands the frame
+            // to MetalFX; an entry pushed after that would never be stamped, and the stall
+            // cutoff never fire for it).
+            std::scoped_lock lock{pending_mutex};
+            if (pending.size() >= 256) {
+                pending.pop_front();
+            }
+            pending.push_back({done_value, copies_tick, NowNs()});
+        }
         if (mode == Mode::Worker) {
             metal.signal_event = done_event;
             metal.signal_value = done_value;
@@ -811,13 +821,6 @@ bool MetalFxUpscaler::Run(const Frame& frame) {
                 jobs.push_back(std::make_unique<Job>(Job{metal, copies_tick}));
             }
             job_cv.notify_all();
-        }
-        {
-            std::scoped_lock lock{pending_mutex};
-            if (pending.size() >= 256) {
-                pending.pop_front();
-            }
-            pending.push_back({done_value, copies_tick, NowNs()});
         }
         SubmitInfo info{};
         info.AddWait(done_semaphore, done_value, "MetalFX");

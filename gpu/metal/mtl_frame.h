@@ -177,6 +177,9 @@ void Fallback(Owned& o, const char* name, bool in_pass, Record&& record) {
 void QueryBegun(Owned& o);
 void QueryEnded(Owned& o);
 
+/// Transfers encoded in Metal so far (never reset; the frame self-test).
+unsigned long long TransfersTotal();
+
 /// Every 5 s from a submission (the layer's report): Metal and fallback counts per second.
 void Report(double seconds);
 

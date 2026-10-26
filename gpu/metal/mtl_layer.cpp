@@ -643,6 +643,14 @@ bool FrameActive() {
     return frame;
 }
 
+unsigned long long MetalTransfers() {
+#ifdef BB_METAL_BACKEND
+    return frame ? MetalFrame::TransfersTotal() : 0;
+#else
+    return 0;
+#endif
+}
+
 void InstallIfAsked(VkDevice device) {
     const char* trace_env = std::getenv("BB_METAL_TRACE");
     const char* frame_env = std::getenv("BB_METAL_FRAME");

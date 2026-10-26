@@ -24,6 +24,7 @@
 #include <vulkan/vulkan_metal.h>
 #include "metal/kk_exports.h"
 #include "metal/metal_interop.h"
+#include "metal/mtl_layer.h"
 #endif
 
 namespace BbMetal {
@@ -436,8 +437,7 @@ void RunFrameTestIfAsked(const Vulkan::Instance& instance) {
     if (!env || env[0] != '1') {
         return;
     }
-    const char* frame = std::getenv("BB_METAL_FRAME");
-    const bool frame_on = frame && frame[0] == '1';
+    const bool frame_on = MetalLayer::FrameActive();
     if (EmulatorSettings.IsVkValidationEnabled()) {
         Report("Metal frame test: skipped (the Vulkan validation layers are on)\n");
         return;
@@ -454,11 +454,14 @@ void RunFrameTestIfAsked(const Vulkan::Instance& instance) {
     constexpr u32 Quarter = Bytes / 4;
     const auto* data = static_cast<const uint8_t*>(test.readback_info.pMappedData);
     u32 passed = 0;
+    const unsigned long long metal_before = MetalLayer::MetalTransfers();
+    unsigned long long metal_expected = 0;
     for (u32 round = 0; round < Rounds; ++round) {
         const u32 x = 0x11223344u ^ (round << 8);                // KosmicKrisp
         const u8 y = u8(round * 7 + 1);                          // Metal
         const u32 z = 0x55667700u | (round & 0xffu);             // KosmicKrisp
         const bool split = round % 2 == 1; // the second half in a submission of its own
+        metal_expected += 2;               // the y fill and the copy
         {
             std::scoped_lock lock{Vulkan::Scheduler::submit_mutex};
             vk::CommandBuffer cmd = test.Begin();
@@ -499,10 +502,13 @@ void RunFrameTestIfAsked(const Vulkan::Instance& instance) {
                 return;
             }
         }
-        if (test.device.waitForFences(test.fence, true, 5'000'000'000ull) != vk::Result::eSuccess) {
-            Report("Metal frame test: FAIL (round %u: the GPU did not finish in 5 s: a wait "
-                   "between the queues that is never signalled?)\n",
-                   round);
+        if (const vk::Result r = test.device.waitForFences(test.fence, true, 5'000'000'000ull);
+            r != vk::Result::eSuccess) {
+            Report("Metal frame test: FAIL (round %u: %s)\n", round,
+                   r == vk::Result::eTimeout
+                       ? "the GPU did not finish in 5 s: a wait between the queues that is never "
+                         "signalled?"
+                       : vk::to_string(r).c_str());
             return;
         }
         (void)test.device.resetFences(test.fence);
@@ -517,12 +523,18 @@ void RunFrameTestIfAsked(const Vulkan::Instance& instance) {
             const u32 want = i < Quarter / 4 ? z : u32(y) * 0x01010101u;
             const u32 got = word(i);
             if (got != want) {
-                const char* what = got == x ? "the first fill (KosmicKrisp) after the second (Metal)"
-                                   : i < Quarter / 4 && got == u32(y) * 0x01010101u
-                                       ? "the second fill (Metal) after the third (KosmicKrisp)"
-                                       : "a value of no fill of this round (the copy before the "
-                                         "fills, or the readback before the copy)";
-                Report("Metal frame test: FAIL (round %u%s: word %u is %#010x, expected %#010x: "
+                const char* what =
+                    got == x ? (i < Quarter / 4
+                                    ? "the first fill (KosmicKrisp) last: the later fills lost, "
+                                      "or the copy before them (Metal after KosmicKrisp)"
+                                    : "the first fill (KosmicKrisp) after the second (Metal), or "
+                                      "the copy before the second")
+                    : i < Quarter / 4 && got == u32(y) * 0x01010101u
+                        ? "the Metal fill after the third (KosmicKrisp), or the copy (Metal) "
+                          "before the third"
+                        : "a value of no fill of this round (the copy before the fills, or the "
+                          "readback before the copy)";
+                Report("Metal frame test: FAIL (round %u%s: word %u is 0x%08x, expected 0x%08x: "
                        "%s)\n",
                        round, split ? ", split" : "", i, got, want, what);
                 return;
@@ -530,12 +542,19 @@ void RunFrameTestIfAsked(const Vulkan::Instance& instance) {
         }
         ++passed;
     }
+    const unsigned long long in_metal = MetalLayer::MetalTransfers() - metal_before;
+    if (frame_on && in_metal < metal_expected) {
+        Report("Metal frame test: FAIL (the data came back right, but only %llu of its %llu Metal "
+               "transfers were encoded in Metal: BB_METAL_TRANSFERS, or the buffers not exported)\n",
+               in_metal, metal_expected);
+        return;
+    }
     Report("Metal frame test: PASS (%u rounds on a 16 MB buffer: fills alternating between "
            "KosmicKrisp and %s, a copy and the readback, in one submission and split in two)\n",
            passed,
-           frame_on ? "our Metal queue (BB_METAL_FRAME=1)"
-                    : "KosmicKrisp again (BB_METAL_FRAME is off: the test then checks nothing of "
-                      "the Metal path)");
+           frame_on ? "our Metal queue (the frame encoder)"
+                    : "KosmicKrisp again (the frame encoder is off: the test then checks nothing "
+                      "of the Metal path)");
 }
 
 #else

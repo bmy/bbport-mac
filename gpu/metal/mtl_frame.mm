@@ -70,6 +70,7 @@ struct Counters {
         metal_passes{}, pass_breaks{}, kk_reopens{}, gpu_errors{}, tess_draws{}, geometry_draws{};
 };
 Counters counters;
+std::atomic<unsigned long long> transfers_total{0}; ///< TransfersTotal
 
 /// Where a slow submission's time went (Submit): logged when one takes 100 ms or more.
 struct SubmitTimes {
@@ -3350,6 +3351,7 @@ void CmdCopyBuffer(Owned& o, VkBuffer src, VkBuffer dst, uint32_t count,
                              size:regions[i].size];
         }
         ++counters.metal_transfers;
+        transfers_total.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -3372,6 +3374,7 @@ void CmdFillBuffer(Owned& o, VkBuffer dst, VkDeviceSize offset, VkDeviceSize siz
                                  value:byte];
         }
         ++counters.metal_transfers;
+        transfers_total.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -3394,6 +3397,7 @@ void CmdUpdateBuffer(Owned& o, VkBuffer dst, VkDeviceSize offset, VkDeviceSize s
                      destinationOffset:d.offset + offset
                                   size:size];
         ++counters.metal_transfers;
+        transfers_total.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -3408,6 +3412,7 @@ void CmdCopyBufferToImage(Owned& o, VkBuffer src, VkImage dst, VkImageLayout lay
             return;
         }
         ++counters.metal_transfers;
+        transfers_total.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -3422,6 +3427,7 @@ void CmdCopyImageToBuffer(Owned& o, VkImage src, VkImageLayout layout, VkBuffer 
             return;
         }
         ++counters.metal_transfers;
+        transfers_total.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -3466,6 +3472,7 @@ void CmdCopyImage(Owned& o, VkImage src, VkImageLayout src_layout, VkImage dst,
             }
         }
         ++counters.metal_transfers;
+        transfers_total.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -3499,6 +3506,7 @@ void CmdClearColorImage(Owned& o, VkImage image, VkImageLayout layout,
             ClearPass(o, rp);
         });
         ++counters.metal_transfers;
+        transfers_total.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -3542,6 +3550,7 @@ void CmdClearDepthStencilImage(Owned& o, VkImage image, VkImageLayout layout,
             ClearPass(o, rp);
         });
         ++counters.metal_transfers;
+        transfers_total.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -3574,6 +3583,10 @@ void QueryEnded(Owned& o) {
     if (o.active_queries) {
         --o.active_queries;
     }
+}
+
+unsigned long long TransfersTotal() {
+    return transfers_total.load(std::memory_order_relaxed);
 }
 
 void Report(double seconds) {

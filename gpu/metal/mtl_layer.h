@@ -32,4 +32,8 @@ void InstallIfAsked(VkDevice device);
 /// v07) cannot be used (their commands would miss the owned command buffers).
 bool FrameActive();
 
+/// Transfers the frame encoder has encoded in Metal so far (0 without frame mode): the frame
+/// self-test checks that its commands took the Metal path.
+unsigned long long MetalTransfers();
+
 } // namespace MetalLayer

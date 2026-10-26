@@ -68,7 +68,8 @@ struct Counters {
     std::atomic<unsigned long long> metal_draws{}, metal_dispatches{}, metal_transfers{},
         fallback_draws{},
         fallback_dispatches{}, fallback_other{}, metal_buffers{}, kk_segments{}, switches{},
-        metal_passes{}, pass_breaks{}, kk_reopens{}, gpu_errors{}, tess_draws{}, geometry_draws{};
+        metal_passes{}, pass_breaks{}, kk_reopens{}, gpu_errors{}, tess_draws{}, geometry_draws{},
+        encoders{}, epochs{}; ///< bbport: Metal encoders; barrier groups (BB_METAL_ORDER=barriers)
 };
 Counters counters;
 std::atomic<unsigned long long> transfers_total{0}; ///< TransfersTotal
@@ -616,6 +617,7 @@ struct Owned {
     std::vector<id<MTLFence>> waits, epoch;
     bool wait_chain{true};
     bool compute_spans_barrier{}; ///< the open compute encoder took a barrier as memoryBarrier
+    bool draw_kernels{}; ///< a draw's kernels were just encoded: its render encoder waits for them
     id<MTLFence> last, pass_part;
     MTLRenderPassDescriptor* pass_first;  ///< as begun (its clears)
     MTLRenderPassDescriptor* pass_reopen; ///< loading
@@ -666,7 +668,7 @@ void OrderStart(Owned& o, Encoder e, bool reopen) {
     for (id<MTLFence> f : o.waits) {
         wait(f);
     }
-    if (reopen) {
+    if (reopen) { // (also a draw's render encoder after its kernels)
         if (o.last) {
             wait(o.last);
         }
@@ -679,6 +681,7 @@ void OrderStart(Owned& o, Encoder e, bool reopen) {
 /// An encoder's end: its fence (for the encoders after the next barrier).
 template <typename Encoder>
 void OrderEnd(Owned& o, Encoder e) {
+    ++counters.encoders;
     if (!OrderByBarriers()) {
         UpdateChain(e);
         return;
@@ -714,6 +717,7 @@ void OrderBarrier(Owned& o) {
     o.waits = std::move(o.epoch);
     o.epoch.clear();
     o.wait_chain = false;
+    ++counters.epochs;
 }
 
 /// The segment's end: the chain passed on after all of its encoders (the next segment, and the
@@ -737,6 +741,7 @@ void OrderSegmentEnd(Owned& o, id<MTLCommandBuffer> cmd) {
     o.epoch.clear();
     o.wait_chain = true;
     o.compute_spans_barrier = false;
+    o.draw_kernels = false;
     o.last = nil;
     o.pass_part = nil;
 }
@@ -1086,7 +1091,10 @@ id<MTLRenderCommandEncoder> RenderEncoder(Owned& o) {
     id<MTLCommandBuffer> cmd = Metal(o);
     EndCompute(o);
     EndBlit(o);
-    const bool reopen = o.pass_begun;
+    // A reopened pass, or a draw's render encoder after its kernels (EncodeTessellated,
+    // EncodeGeometry), even as the pass's first.
+    const bool reopen = o.pass_begun || o.draw_kernels;
+    o.draw_kernels = false;
     o.render = [cmd renderCommandEncoderWithDescriptor:o.pass_begun ? o.pass_reopen : o.pass_first];
     o.pass_begun = true;
     if (o.render) {
@@ -1957,6 +1965,7 @@ bool EncodeTessellated(Owned& o, const TessArgs& a, const char*& why) {
     u64 at = 0;
     GpuScratch(o, plan.total, &scratch, &at);
     id<MTLComputeCommandEncoder> enc = ComputeEncoder(o);
+    o.draw_kernels = true;
     // Every resource was found above (StageResolvable), so the binding succeeds.
     const auto bind = [&](const Metal::CompiledShader& shader) {
         const char* bind_why = nullptr;
@@ -2071,6 +2080,7 @@ bool EncodeGeometry(Owned& o, const TessArgs& a, const char*& why) {
             draw.first_vertex = params.first_vertex + u32(first_vertex);
         }
         id<MTLComputeCommandEncoder> enc = ComputeEncoder(o);
+        o.draw_kernels = true;
         Metal::Geometry::EncodeKernels((__bridge void*)enc, g, draw, at, streams.Span(),
                                        (__bridge void*)c.buffer, c.offset, c.plan, bind, bind);
         chunks.push_back(c);
@@ -4142,14 +4152,15 @@ void Report(double seconds) {
           "draws and %.0f dispatches and %.0f other commands to KosmicKrisp (%.0f segments, %.0f "
           "switches); %.0f Metal command buffers; render passes ended in Metal %.0f, split %.0f "
           "times in Metal, reopened %.0f times on KosmicKrisp; %.0f tessellated and %.0f "
-          "geometry-shader draws in Metal; GPU errors so far %llu; to KosmicKrisp because: %s\n",
+          "geometry-shader draws in Metal; %.0f Metal encoders, %.0f barrier groups; GPU errors "
+          "so far %llu; to KosmicKrisp because: %s\n",
           take(counters.metal_draws), take(counters.metal_dispatches),
           take(counters.metal_transfers),
           take(counters.fallback_draws), take(counters.fallback_dispatches),
           take(counters.fallback_other), take(counters.kk_segments), take(counters.switches),
           take(counters.metal_buffers), take(counters.metal_passes), take(counters.pass_breaks),
           take(counters.kk_reopens), take(counters.tess_draws), take(counters.geometry_draws),
-          counters.gpu_errors.load(),
+          take(counters.encoders), take(counters.epochs), counters.gpu_errors.load(),
           top.empty() ? "-" : top.c_str());
 }
 

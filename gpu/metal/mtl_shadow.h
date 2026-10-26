@@ -70,6 +70,9 @@ struct GraphicsEntry {
     /// and its fragment shader has flat inputs: Metal takes them from the first, so its draws
     /// go to KosmicKrisp.
     bool flat_from_last{};
+    /// bbport: the guest shaders' hashes (vertex, hull, domain, geometry, pixel; 0: none) as
+    /// the renderer logs them (BB_METAL_GPU_DIAG's draw notes).
+    std::array<u64, 5> hashes{};
     /// bbport: a plain game pipeline's build inputs, for its variants with a pass's depth and
     /// stencil formats (FormatVariant); null for the others.
     std::shared_ptr<const VariantSource> source;

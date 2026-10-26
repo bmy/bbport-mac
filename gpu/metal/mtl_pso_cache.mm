@@ -649,6 +649,7 @@ const ComputePipeline* PsoCache::GetComputePipeline(const Vulkan::ComputePipelin
 
     auto pipeline = std::make_unique<ComputePipeline>();
     pipeline->shader = cs;
+    pipeline->key_value = key.value;
     pipeline->threads_per_group = cs->local_size;
     pipeline->function = (__bridge_retained void*)(__bridge id)cs->function;
     std::string error;

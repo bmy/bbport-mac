@@ -312,7 +312,16 @@ has no tessellator, so the frame encoder (`BB_METAL_FRAME=1`) now encodes classi
   vertex; a game pipeline whose key asks for the last (and whose fragment shader has flat
   inputs) has its draws go to KosmicKrisp. `BB_METAL_FLAT_LAST=1` keeps them in Metal (wrong
   flat values where the vertices differ; for measuring).
-- **Switches for bisecting:** `BB_METAL_TESS=0`, `BB_METAL_GEOMETRY=0`,
+- **After a GPU error, Metal is off:** a Metal command buffer that fails on the GPU (a fault, a
+  timeout) turns the Metal path off for everything recorded after it (it all goes to
+  KosmicKrisp): each hang makes macOS reset the GPU, and repeated resets have taken the
+  WindowServer (the user's session) down. `BB_METAL_KEEP_AFTER_ERROR=1` goes on in Metal.
+- **GPU diagnostics (`BB_METAL_GPU_DIAG=1`):** command buffers report each encoder's execution
+  status on an error; encoders are labelled, and every draw and dispatch leaves a signpost with
+  its guest shader hashes (as the renderer's "pipeline with the game's tessellation drawn" lines
+  give them), so the log names the encoder that faulted or hung and its last work.
+- **Switches for bisecting:** `BB_METAL_GENERIC=0` keeps the renderer's own pipelines on
+  KosmicKrisp; `BB_METAL_TESS=0`, `BB_METAL_GEOMETRY=0`,
   `BB_METAL_FORMAT_VARIANTS=0` and `BB_METAL_DESCRIPTOR_SETS=0` keep those draws on KosmicKrisp (with `BB_METAL_PRECISE=all` and
   `BB_METAL_TRANSFERS`).
 - **Self-test:** `BB_METAL_FRAME_TEST=1` (with `BB_METAL_FRAME=1`) runs 32 rounds of fills on a

@@ -214,6 +214,7 @@ struct ComputePipeline {
     u32 max_total_threads{}; ///< the state's limit; threads_per_group never exceeds it
     u32 thread_execution_width{};
     const CompiledShader* shader{};
+    u64 key_value{}; ///< bbport: the key's value (the guest shader's hash; BB_METAL_GPU_DIAG)
 };
 
 /// The depth/stencil part that Vulkan sets dynamically (vk_rasterizer.cpp UpdateDepthStencilState):

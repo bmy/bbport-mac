@@ -449,6 +449,11 @@ void BuildGraphics(const Vulkan::GraphicsPipelineKey& key, const ModuleRefs& mod
     const auto publish = [&](const GraphicsEntry& built) {
         GraphicsEntry entry = built;
         entry.flat_from_last = flat_from_last;
+        entry.hashes = {u64(key.stage_hashes[u32(Stage::Vertex)]),
+                        u64(key.stage_hashes[u32(Stage::TessellationControl)]),
+                        u64(key.stage_hashes[u32(Stage::TessellationEval)]),
+                        u64(key.stage_hashes[u32(Stage::Geometry)]),
+                        u64(key.stage_hashes[u32(Stage::Fragment)])};
         s.PublishGraphics(vk_pipeline, id, entry);
         published = true;
     };
@@ -892,7 +897,16 @@ void NoteGeneric(bool ok, const std::string& why) {
 }
 
 bool GenericWanted(VkPipeline pipeline) {
-    return pipeline && !game_build_depth && Enabled();
+    static const bool off = [] {
+        const char* env = std::getenv("BB_METAL_GENERIC");
+        const bool no = env && env[0] == '0';
+        if (no) {
+            Print("Metal shadow: the renderer's own pipelines stay on KosmicKrisp "
+                  "(BB_METAL_GENERIC=0)\n");
+        }
+        return no;
+    }();
+    return pipeline && !game_build_depth && !off && Enabled();
 }
 } // namespace
 

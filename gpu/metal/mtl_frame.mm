@@ -74,6 +74,72 @@ struct Counters {
 Counters counters;
 std::atomic<unsigned long long> transfers_total{0}; ///< TransfersTotal
 
+/// bbport: a Metal command buffer failed on the GPU (a fault or a timeout): what is recorded
+/// from then on goes to KosmicKrisp (KkOnly), so that one hang is not followed by more (each GPU
+/// reset can take the WindowServer down). BB_METAL_KEEP_AFTER_ERROR=1: Metal goes on.
+std::atomic<bool> gpu_failed{false};
+
+/// bbport, BB_METAL_GPU_DIAG=1: command buffers report each encoder's execution status on an
+/// error; encoders are labelled and every draw and dispatch leaves a signpost (the guest shader
+/// hashes as the renderer logs them), so a failure names the encoder and the work in it.
+bool GpuDiag() {
+    static const bool on = [] {
+        const char* env = std::getenv("BB_METAL_GPU_DIAG");
+        const bool yes = env && env[0] == '1';
+        if (yes) {
+            Print("Metal frame: GPU diagnostics: encoder status on errors, labels and a signpost "
+                  "per draw and dispatch (BB_METAL_GPU_DIAG=1)\n");
+        }
+        return yes;
+    }();
+    return on;
+}
+
+__attribute__((format(printf, 2, 3))) void Signpost(id<MTLCommandEncoder> enc, const char* format,
+                                                    ...) {
+    if (!enc) {
+        return;
+    }
+    char text[256];
+    va_list args;
+    va_start(args, format);
+    std::vsnprintf(text, sizeof text, format, args);
+    va_end(args);
+    [enc insertDebugSignpost:[NSString stringWithUTF8String:text]];
+}
+
+/// The failed command buffer's encoders that did not complete, with their last signposts.
+void PrintEncoderStatus(id<MTLCommandBuffer> done) {
+    NSArray* infos = done.error.userInfo[MTLCommandBufferEncoderInfoErrorKey];
+    if (![infos isKindOfClass:[NSArray class]]) {
+        Print("Metal frame:   (no encoder status: BB_METAL_GPU_DIAG=1 gives it)\n");
+        return;
+    }
+    u32 completed = 0, printed = 0;
+    for (id<MTLCommandBufferEncoderInfo> info in infos) {
+        if (info.errorState == MTLCommandEncoderErrorStateCompleted) {
+            ++completed;
+            continue;
+        }
+        if (printed++ >= 8) {
+            continue;
+        }
+        const char* state = info.errorState == MTLCommandEncoderErrorStateFaulted ? "FAULTED"
+                            : info.errorState == MTLCommandEncoderErrorStateAffected ? "affected"
+                            : info.errorState == MTLCommandEncoderErrorStatePending  ? "pending"
+                                                                                     : "unknown";
+        NSArray<NSString*>* posts = info.debugSignposts;
+        Print("Metal frame:   encoder \"%s\": %s; %lu signposts%s\n",
+              info.label ? info.label.UTF8String : "?", state, (unsigned long)posts.count,
+              posts.count ? ", the last ones:" : "");
+        const NSUInteger first = posts.count > 12 ? posts.count - 12 : 0;
+        for (NSUInteger i = first; i < posts.count; ++i) {
+            Print("Metal frame:     %s\n", posts[i].UTF8String);
+        }
+    }
+    Print("Metal frame:   %u encoders completed, %u did not\n", completed, printed);
+}
+
 /// Where a slow submission's time went (Submit): logged when one takes 100 ms or more.
 struct SubmitTimes {
     using Clock = std::chrono::steady_clock;
@@ -729,6 +795,9 @@ void OrderSegmentEnd(Owned& o, id<MTLCommandBuffer> cmd) {
     }
     if (!o.epoch.empty() || !o.waits.empty()) {
         id<MTLBlitCommandEncoder> blit = [cmd blitCommandEncoder];
+        if (GpuDiag()) {
+            blit.label = @"segment end";
+        }
         for (id<MTLFence> f : o.waits) {
             [blit waitForFence:f];
         }
@@ -838,7 +907,14 @@ id<MTLCommandBuffer> Metal(Owned& o) {
     }
     // Retains nothing: KosmicKrisp's objects live as their Vulkan objects (in use until the
     // submission's fence), ours (scratch) until the Retire is released.
-    o.cmd = [queue commandBufferWithUnretainedReferences];
+    if (GpuDiag()) {
+        MTLCommandBufferDescriptor* d = [MTLCommandBufferDescriptor new];
+        d.retainedReferences = NO;
+        d.errorOptions = MTLCommandBufferErrorOptionEncoderExecutionStatus;
+        o.cmd = [queue commandBufferWithDescriptor:d];
+    } else {
+        o.cmd = [queue commandBufferWithUnretainedReferences];
+    }
     o.cmd.label = @"bbport Metal frame";
     ++o.metal_segments;
     return o.cmd;
@@ -852,6 +928,13 @@ constexpr u32 MaxMetalSegments = 64;
 /// Why this command must stay in KosmicKrisp (null: it may go to Metal): an occlusion query is
 /// active, or the owned command buffer has had its Metal segments.
 const char* KkOnly(const Owned& o) {
+    static const bool keep = [] {
+        const char* env = std::getenv("BB_METAL_KEEP_AFTER_ERROR");
+        return env && env[0] == '1';
+    }();
+    if (gpu_failed.load(std::memory_order_relaxed) && !keep) {
+        return "a GPU error earlier (Metal is off from then on)";
+    }
     if (o.active_queries) {
         return "an occlusion query";
     }
@@ -1114,6 +1197,9 @@ id<MTLRenderCommandEncoder> RenderEncoder(Owned& o) {
     o.pass_begun = true;
     if (o.render) {
         OrderStart(o, o.render, reopen);
+        if (GpuDiag()) {
+            o.render.label = reopen ? @"render pass (continued)" : @"render pass";
+        }
     }
     return o.render;
 }
@@ -1128,6 +1214,9 @@ id<MTLComputeCommandEncoder> ComputeEncoder(Owned& o) {
     // Concurrent: Vulkan orders dispatches only through barriers (CmdPipelineBarrier).
     o.compute = [cmd computeCommandEncoderWithDispatchType:MTLDispatchTypeConcurrent];
     OrderStart(o, o.compute, false);
+    if (GpuDiag()) {
+        o.compute.label = @"compute";
+    }
     return o.compute;
 }
 
@@ -1140,6 +1229,9 @@ id<MTLBlitCommandEncoder> BlitEncoder(Owned& o) {
     EndCompute(o);
     o.blit = [cmd blitCommandEncoder];
     OrderStart(o, o.blit, false);
+    if (GpuDiag()) {
+        o.blit.label = @"transfers";
+    }
     return o.blit;
 }
 
@@ -1830,6 +1922,11 @@ void Draw(Owned& o, const char* extra_blocker, Encode&& encode, KkRecord&& kk) {
         why = "culling front and back"; // Metal has no such mode (points and lines still draw)
     }
     if (!why && PrepareDraw(o, why)) {
+        if (GpuDiag()) {
+            const auto& h = o.graphics->hashes;
+            Signpost(o.render, "draw: vertex %#llx pixel %#llx%s", (unsigned long long)h[0],
+                     (unsigned long long)h[4], o.graphics->generic ? " (the renderer's own)" : "");
+        }
         encode(o.render);
         ++counters.metal_draws;
         return;
@@ -1856,6 +1953,10 @@ void Dispatch(Owned& o, Encode&& encode, KkRecord&& kk) {
             [enc setComputePipelineState:(__bridge id<MTLComputePipelineState>)
                                              o.compute_metal->state];
             const auto& t = o.compute_metal->threads_per_group;
+            if (GpuDiag()) {
+                Signpost(enc, "dispatch: compute %#llx (%ux%ux%u threads a group)",
+                         (unsigned long long)o.compute_metal->key_value, t[0], t[1], t[2]);
+            }
             encode(enc, MTLSizeMake(t[0], t[1], t[2]));
             ++counters.metal_dispatches;
             return;
@@ -1993,6 +2094,12 @@ bool EncodeTessellated(Owned& o, const TessArgs& a, const char*& why) {
     GpuScratch(o, plan.total, &scratch, &at);
     id<MTLComputeCommandEncoder> enc = ComputeEncoder(o);
     o.draw_kernels = true;
+    if (GpuDiag()) {
+        const auto& h = o.graphics->hashes;
+        Signpost(enc, "tessellation kernels: vertex %#llx hull %#llx, %u patches x %u instances, "
+                 "%llu scratch bytes", (unsigned long long)h[0], (unsigned long long)h[1],
+                 patches, a.instances, (unsigned long long)plan.total);
+    }
     // Every resource was found above (StageResolvable), so the binding succeeds.
     const auto bind = [&](const Metal::CompiledShader& shader) {
         const char* bind_why = nullptr;
@@ -2005,6 +2112,11 @@ bool EncodeTessellated(Owned& o, const TessArgs& a, const char*& why) {
         return false; // the kernels' output goes unused
     }
     id<MTLRenderCommandEncoder> r = o.render;
+    if (GpuDiag()) {
+        const auto& h = o.graphics->hashes;
+        Signpost(r, "tessellated draw: domain %#llx pixel %#llx, %u patches", (unsigned long long)h[2],
+                 (unsigned long long)h[4], patches);
+    }
     [r setTessellationFactorBuffer:scratch offset:at + plan.factor_offset instanceStride:0];
     [r setVertexBuffer:scratch offset:at + plan.control_offset atIndex:Metal::kTessInputBuffer];
     [r setVertexBuffer:scratch offset:at + plan.patch_offset atIndex:Metal::kTessPatchBuffer];
@@ -2108,6 +2220,11 @@ bool EncodeGeometry(Owned& o, const TessArgs& a, const char*& why) {
         }
         id<MTLComputeCommandEncoder> enc = ComputeEncoder(o);
         o.draw_kernels = true;
+        if (GpuDiag()) {
+            const auto& h = o.graphics->hashes;
+            Signpost(enc, "geometry kernels: vertex %#llx geometry %#llx", (unsigned long long)h[0],
+                     (unsigned long long)h[3]);
+        }
         Metal::Geometry::EncodeKernels((__bridge void*)enc, g, draw, at, streams.Span(),
                                        (__bridge void*)c.buffer, c.offset, c.plan, bind, bind);
         chunks.push_back(c);
@@ -2611,10 +2728,15 @@ VkResult Submit(VkQueue vkqueue, const Batch* batches, uint32_t count, VkFence f
                 // committed one, alive for its handlers (they run once it completed).
                 [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {
                   if (done.status == MTLCommandBufferStatusError) {
+                      if (!gpu_failed.exchange(true)) {
+                          Print("Metal frame: after this GPU error the rest goes to KosmicKrisp "
+                                "(BB_METAL_KEEP_AFTER_ERROR=1: Metal goes on)\n");
+                      }
                       if (counters.gpu_errors++ < 4) {
                           Print("Metal frame: a Metal command buffer failed on the GPU: %s\n",
                                 done.error ? done.error.localizedDescription.UTF8String
                                            : "unknown error");
+                          PrintEncoderStatus(done);
                       }
                   }
                 }];
@@ -3904,6 +4026,9 @@ void ClearPass(Owned& o, MTLRenderPassDescriptor* rp) {
     id<MTLCommandBuffer> cmd = Metal(o);
     EndEncoders(o);
     id<MTLRenderCommandEncoder> enc = [cmd renderCommandEncoderWithDescriptor:rp];
+    if (GpuDiag()) {
+        enc.label = @"color clear";
+    }
     OrderStart(o, enc, false);
     OrderEnd(o, enc);
     o.pass_part = nil; // (not the open pass's)

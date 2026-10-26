@@ -312,6 +312,12 @@ has no tessellator, so the frame encoder (`BB_METAL_FRAME=1`) now encodes classi
   vertex; a game pipeline whose key asks for the last (and whose fragment shader has flat
   inputs) has its draws go to KosmicKrisp. `BB_METAL_FLAT_LAST=1` keeps them in Metal (wrong
   flat values where the vertices differ; for measuring).
+- **Tessellated and geometry-shader draws wait for their Metal pipeline:** a draw whose Metal
+  pipeline is still being built went to KosmicKrisp, whose emulation of those stages generates
+  the geometry into a fixed driver heap; up close the game's tessellation outgrew it and the
+  overflowing draw hung the GPU (KosmicKrisp patch 0010 handles that side). Binding such a
+  pipeline now waits for its Metal build (queued first) up to `BB_METAL_EMULATED_WAIT_MS`
+  (5000 by default; 0: no wait); a build that fails still falls back.
 - **After a GPU error, Metal is off:** a Metal command buffer that fails on the GPU (a fault, a
   timeout) turns the Metal path off for everything recorded after it (it all goes to
   KosmicKrisp): each hang makes macOS reset the GPU, and repeated resets have taken the

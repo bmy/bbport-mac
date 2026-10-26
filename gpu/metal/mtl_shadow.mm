@@ -23,6 +23,8 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
+#include <chrono>
 #include <vector>
 #include <xxhash.h>
 #include "common/path_util.h"
@@ -187,12 +189,19 @@ struct State {
     /// The build each pipeline handle is waiting for; a result is kept only while it still is.
     std::unordered_map<VkPipeline, u64> pending;
     u64 next_build = 0;
+    /// bbport: pending builds a draw waits for rather than falling back (FindGraphicsWaiting):
+    /// tessellated and geometry-shader pipelines, whose fallback is KosmicKrisp's emulation.
+    std::unordered_set<VkPipeline> waitable;
+    std::condition_variable built_cv; ///< a waitable build was published, abandoned or dropped
 
     /// Starts a build for `pipeline` (under pipelines_mutex): what an earlier pipeline with the
     /// handle left is dropped.
     u64 Expect(VkPipeline pipeline) {
         graphics.erase(pipeline);
         compute.erase(pipeline);
+        if (waitable.erase(pipeline)) {
+            built_cv.notify_all(); // (a waiter for the handle's earlier pipeline)
+        }
         const u64 id = ++next_build;
         pending[pipeline] = id;
         return id;
@@ -203,6 +212,9 @@ struct State {
             return false; // destroyed (Forget) or created again since
         }
         pending.erase(it);
+        if (waitable.erase(pipeline)) {
+            built_cv.notify_all();
+        }
         return true;
     }
     void PublishGraphics(VkPipeline pipeline, u64 id, const GraphicsEntry& entry) {
@@ -227,10 +239,15 @@ struct State {
     std::deque<std::function<void()>> queue;
     std::vector<std::thread> workers;
 
-    void Post(std::function<void()> task) {
+    /// `first`: ahead of the queued builds (one a draw waits for).
+    void Post(std::function<void()> task, bool first = false) {
         {
             std::scoped_lock lock{queue_mutex};
-            queue.push_back(std::move(task));
+            if (first) {
+                queue.push_front(std::move(task));
+            } else {
+                queue.push_back(std::move(task));
+            }
             if (workers.empty()) {
                 // Two: the Metal compiler runs its own threads; more only add memory.
                 for (int i = 0; i < 2; ++i) {
@@ -347,6 +364,9 @@ void Forget(vk::Pipeline vk_pipeline) {
     s.graphics.erase(pipeline);
     s.compute.erase(pipeline);
     s.pending.erase(pipeline); // a build still running for it is dropped when done
+    if (s.waitable.erase(pipeline)) {
+        s.built_cv.notify_all();
+    }
 }
 
 void RegisterModule(vk::ShaderModule module, std::span<const u32> spirv) {
@@ -674,15 +694,36 @@ void Graphics(const Vulkan::GraphicsPipelineKey& key, std::span<const vk::Shader
     std::vector<VertexInput> input_list(inputs.begin(), inputs.end());
     std::vector<vk::PipelineColorBlendAttachmentState> blend_list(blend.begin(), blend.end());
     const VkPipeline pipeline = vk_pipeline;
+    using Stage = ::Shader::SwStage;
+    const bool emulated = stages[u32(Stage::TessellationControl)] ||
+                          stages[u32(Stage::TessellationEval)] || stages[u32(Stage::Geometry)];
     u64 id;
     {
         std::scoped_lock lock{s.pipelines_mutex};
         id = s.Expect(pipeline);
+        if (emulated) {
+            s.waitable.insert(pipeline);
+        } else {
+            s.waitable.erase(pipeline);
+        }
     }
-    s.Post([key, refs, stages, input_list = std::move(input_list),
-            blend_list = std::move(blend_list), aux_fragment, pipeline, id] {
-        BuildGraphics(key, refs, stages, input_list, blend_list, aux_fragment, pipeline, id);
-    });
+    s.Post(
+        [key, refs, stages, input_list = std::move(input_list),
+         blend_list = std::move(blend_list), aux_fragment, pipeline, id] {
+            BuildGraphics(key, refs, stages, input_list, blend_list, aux_fragment, pipeline, id);
+        },
+        emulated);
+}
+
+const GraphicsEntry* FindGraphicsWaiting(VkPipeline pipeline, u32 timeout_ms) {
+    auto& s = Get();
+    std::unique_lock lock{s.pipelines_mutex};
+    if (timeout_ms && s.waitable.contains(pipeline)) {
+        s.built_cv.wait_for(lock, std::chrono::milliseconds(timeout_ms),
+                            [&] { return !s.waitable.contains(pipeline); });
+    }
+    const auto it = s.graphics.find(pipeline);
+    return it == s.graphics.end() ? nullptr : &it->second;
 }
 
 namespace {

@@ -2265,9 +2265,30 @@ bool TessInMetal() {
     static const bool on = KindInMetal("BB_METAL_TESS", "tessellated");
     return on;
 }
+/// bbport: how long a draw's recording waits for a tessellated or geometry-shader pipeline's
+/// Metal build still pending (MetalShadow::FindGraphicsWaiting) rather than sending its draws to
+/// KosmicKrisp's emulation of those stages, which a heavy scene can hang the GPU with (its
+/// generated geometry outgrows the driver's heap; patch 0010). BB_METAL_EMULATED_WAIT_MS (0: no
+/// wait), 5000 by default; none when both kinds stay on KosmicKrisp anyway.
+u32 EmulatedWaitMs();
+
 bool GeometryInMetal() {
     static const bool on = KindInMetal("BB_METAL_GEOMETRY", "geometry-shader");
     return on;
+}
+
+u32 EmulatedWaitMs() {
+    static const u32 ms = [] {
+        if (!TessInMetal() && !GeometryInMetal()) {
+            return 0u;
+        }
+        const char* env = std::getenv("BB_METAL_EMULATED_WAIT_MS");
+        const u32 value = env ? u32(std::strtoul(env, nullptr, 10)) : 5000u;
+        Print("Metal frame: a tessellated or geometry-shader draw waits up to %u ms for its Metal "
+              "pipeline (BB_METAL_EMULATED_WAIT_MS)\n", value);
+        return value;
+    }();
+    return ms;
 }
 
 /// A tessellated or geometry-shader draw in Metal if it can be, else in a KosmicKrisp segment.
@@ -3200,7 +3221,7 @@ void CmdBindPipeline(Owned& o, VkPipelineBindPoint point, VkPipeline pipeline) {
         o.compute_metal = MetalShadow::FindCompute(pipeline);
     } else {
         o.graphics_pipeline = pipeline;
-        o.graphics = MetalShadow::FindGraphics(pipeline);
+        o.graphics = MetalShadow::FindGraphicsWaiting(pipeline, EmulatedWaitMs());
     }
     Mirror(o, [&](VkCommandBuffer cb) { driver.vkCmdBindPipeline(cb, point, pipeline); });
 }

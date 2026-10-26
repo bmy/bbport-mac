@@ -86,6 +86,10 @@ const Metal::RenderPipeline* FormatVariant(const GraphicsEntry& entry, u32 depth
 
 /// Null when the Vulkan pipeline has no Metal counterpart (yet).
 const GraphicsEntry* FindGraphics(VkPipeline pipeline);
+/// bbport: as FindGraphics, but a tessellated or geometry-shader game pipeline whose Metal build
+/// is still pending is waited for (at most `timeout_ms`; its build is queued first): otherwise
+/// its draws would go to KosmicKrisp's emulation of those stages.
+const GraphicsEntry* FindGraphicsWaiting(VkPipeline pipeline, u32 timeout_ms);
 const Metal::ComputePipeline* FindCompute(VkPipeline pipeline);
 /// id<MTLDepthStencilState> for the key (the pipeline cache's), null on failure.
 void* DepthStencil(const Metal::DepthStencilKey& key);

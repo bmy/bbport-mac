@@ -359,6 +359,21 @@ void RegisterModule(vk::ShaderModule module, std::span<const u32> spirv) {
 
 namespace {
 using ModuleRefs = std::array<std::shared_ptr<ShaderEntry>, Vulkan::MaxShaderStages>;
+} // namespace
+
+/// bbport: a plain game pipeline's build inputs (GraphicsEntry::source); the module entries keep
+/// the compiled shaders alive.
+struct VariantSource {
+    Vulkan::GraphicsPipelineKey key;
+    ModuleRefs modules;
+    const Metal::CompiledShader* vs{};
+    const Metal::CompiledShader* fs{};
+    std::vector<Metal::VertexAttribute> attributes;
+    std::vector<vk::PipelineColorBlendAttachmentState> blend;
+    bool rect_list{};
+};
+
+namespace {
 
 /// One graphics pipeline's build (a worker thread): what Graphics was given, kept.
 void BuildGraphics(const Vulkan::GraphicsPipelineKey& key, const ModuleRefs& modules,
@@ -552,7 +567,15 @@ void BuildGraphics(const Vulkan::GraphicsPipelineKey& key, const ModuleRefs& mod
                 key, vs, fs, {.vertex_attributes = attributes, .blend = blend, .rect_list_triangles = rect_list});
             ok = render != nullptr;
             if (ok) {
-                publish({.render = render, .rect_list = rect_list});
+                auto source = std::make_shared<VariantSource>();
+                source->key = key;
+                source->modules = modules;
+                source->vs = vs;
+                source->fs = fs;
+                source->attributes = std::move(attributes);
+                source->blend.assign(blend.begin(), blend.end());
+                source->rect_list = rect_list;
+                publish({.render = render, .rect_list = rect_list, .source = std::move(source)});
             }
         }
         if (rect_list) {
@@ -590,6 +613,79 @@ void Graphics(const Vulkan::GraphicsPipelineKey& key, std::span<const vk::Shader
             blend_list = std::move(blend_list), aux_fragment, pipeline, id] {
         BuildGraphics(key, refs, stages, input_list, blend_list, aux_fragment, pipeline, id);
     });
+}
+
+namespace {
+/// FormatVariant's builds, by (base pipeline, depth format, stencil format); never dropped (the
+/// pipeline cache keeps the pipelines too).
+struct VariantKey {
+    const Metal::RenderPipeline* base;
+    u32 depth, stencil;
+    bool operator==(const VariantKey&) const = default;
+};
+struct VariantKeyHash {
+    size_t operator()(const VariantKey& k) const noexcept {
+        return std::hash<const void*>{}(k.base) ^ (size_t(k.depth) * 0x9e3779b97f4a7c15ull) ^
+               (size_t(k.stencil) << 17);
+    }
+};
+struct VariantSlot {
+    std::atomic<bool> done{};
+    const Metal::RenderPipeline* pipeline{}; ///< written before done
+};
+/// Never destroyed (as State): the detached workers may still finish a build while the process
+/// exits.
+std::mutex& variants_mutex = *new std::mutex;
+auto& variants = *new std::unordered_map<VariantKey, std::unique_ptr<VariantSlot>, VariantKeyHash>;
+std::atomic<u32> variant_ok{0}, variant_failed{0};
+} // namespace
+
+const Metal::RenderPipeline* FormatVariant(const GraphicsEntry& entry, u32 depth, u32 stencil,
+                                           bool& building) {
+    building = false;
+    if (!entry.render || !entry.source) {
+        return nullptr;
+    }
+    VariantSlot* slot;
+    bool post = false;
+    {
+        std::scoped_lock lock{variants_mutex};
+        auto& owned = variants[{entry.render, depth, stencil}];
+        if (!owned) {
+            owned = std::make_unique<VariantSlot>();
+            post = true;
+        }
+        slot = owned.get();
+    }
+    if (slot->done.load(std::memory_order_acquire)) {
+        return slot->pipeline;
+    }
+    building = true;
+    if (post) {
+        Get().Post([source = entry.source, slot, depth, stencil] {
+            auto& s = Get();
+            const Metal::RenderPipeline* p = nullptr;
+            try {
+                p = s.pso.GetRenderPipeline(source->key, source->vs, source->fs,
+                                            {.vertex_attributes = source->attributes,
+                                             .blend = source->blend,
+                                             .rect_list_triangles = source->rect_list,
+                                             .formats_override = true,
+                                             .depth_format = depth,
+                                             .stencil_format = stencil});
+            } catch (...) {
+                p = nullptr;
+            }
+            slot->pipeline = p;
+            slot->done.store(true, std::memory_order_release);
+            const u32 n = ++(p ? variant_ok : variant_failed);
+            if (n == 1 || n % 50 == 0) {
+                Print("Metal shadow: depth/stencil format variants %u ok / %u failed\n",
+                      variant_ok.load(), variant_failed.load());
+            }
+        });
+    }
+    return nullptr;
 }
 
 void Compute(const Vulkan::ComputePipelineKey& key, vk::ShaderModule module,

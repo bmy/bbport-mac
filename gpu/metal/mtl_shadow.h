@@ -6,6 +6,7 @@
 #pragma once
 
 #include <array>
+#include <memory>
 
 #include "common/types.h"
 #include "vulkan/vk_common.h"
@@ -53,6 +54,8 @@ struct FixedState {
     bool strides{};
 };
 
+struct VariantSource; ///< what a plain game pipeline was built from (mtl_shadow.mm)
+
 struct GraphicsEntry {
     const Metal::RenderPipeline* render{};     ///< null: no Metal pipeline (the draw is skipped)
     const Metal::TessellationPipeline* tess{}; ///< a tessellated draw's pipelines
@@ -63,7 +66,16 @@ struct GraphicsEntry {
     bool generic{};
     FixedState fixed;
     std::array<u32, 32> strides{};
+    /// bbport: a plain game pipeline's build inputs, for its variants with a pass's depth and
+    /// stencil formats (FormatVariant); null for the others.
+    std::shared_ptr<const VariantSource> source;
 };
+
+/// bbport: the entry's render pipeline built for a pass's depth and stencil formats
+/// (MTLPixelFormat, 0: none): ready, or null with `building` set while it is being built (posted
+/// on first use) or with `building` clear when it cannot be built.
+const Metal::RenderPipeline* FormatVariant(const GraphicsEntry& entry, u32 depth, u32 stencil,
+                                           bool& building);
 
 /// Null when the Vulkan pipeline has no Metal counterpart (yet).
 const GraphicsEntry* FindGraphics(VkPipeline pipeline);

@@ -67,9 +67,11 @@ struct RenderMapKey {
     bool rect_list_triangles{};
     bool tessellation{};
     bool geometry{};
+    u64 formats{}; ///< bbport: RenderPipelineInput's override (flag, depth, stencil), 0: none
 
     bool operator==(const RenderMapKey& other) const noexcept {
         return vs == other.vs && fs == other.fs && attributes_hash == other.attributes_hash &&
+               formats == other.formats &&
                rect_list_triangles == other.rect_list_triangles &&
                tessellation == other.tessellation && geometry == other.geometry &&
                key == other.key;
@@ -79,9 +81,10 @@ struct RenderMapKey {
 struct RenderMapHash {
     size_t operator()(const RenderMapKey& k) const noexcept {
         u64 h = XXH3_64bits(&k.key, sizeof(k.key));
-        const u64 rest[4] = {reinterpret_cast<u64>(k.vs), reinterpret_cast<u64>(k.fs),
+        const u64 rest[5] = {reinterpret_cast<u64>(k.vs), reinterpret_cast<u64>(k.fs),
                              k.attributes_hash,
-                             u64(k.rect_list_triangles) | (u64(k.tessellation) << 1) | (u64(k.geometry) << 2)};
+                             u64(k.rect_list_triangles) | (u64(k.tessellation) << 1) | (u64(k.geometry) << 2),
+                             k.formats};
         return XXH3_64bits_withSeed(rest, sizeof(rest), h);
     }
 };
@@ -347,6 +350,9 @@ const RenderPipeline* PsoCache::GetRenderPipeline(const Vulkan::GraphicsPipeline
         .rect_list_triangles = input.rect_list_triangles,
         .tessellation = input.tessellation_eval,
         .geometry = input.geometry,
+        .formats = input.formats_override
+                       ? (1ull << 63) | (u64(input.depth_format) << 32) | input.stencil_format
+                       : 0,
     };
     {
         std::shared_lock lock{impl->mutex};
@@ -500,13 +506,26 @@ const RenderPipeline* PsoCache::GetRenderPipeline(const Vulkan::GraphicsPipeline
                                         vk::to_string(depth_format));
                     break;
                 }
-                if (key.z_format != Gcn::DepthBuffer::ZFormat::Invalid) {
-                    pipeline->depth_pixel_format = depth_pixel;
-                    desc.depthAttachmentPixelFormat = static_cast<MTLPixelFormat>(depth_pixel);
-                }
-                if (key.stencil_format != Gcn::DepthBuffer::StencilFormat::Invalid) {
-                    pipeline->stencil_pixel_format = depth_pixel;
-                    desc.stencilAttachmentPixelFormat = static_cast<MTLPixelFormat>(depth_pixel);
+                if (input.formats_override) {
+                    // bbport: the pass's formats; an aspect the key has none of stays unused.
+                    pipeline->depth_pixel_format = input.depth_format;
+                    pipeline->stencil_pixel_format = input.stencil_format;
+                    desc.depthAttachmentPixelFormat = static_cast<MTLPixelFormat>(input.depth_format);
+                    desc.stencilAttachmentPixelFormat =
+                        static_cast<MTLPixelFormat>(input.stencil_format);
+                    pipeline->depth_ignored = key.z_format == Gcn::DepthBuffer::ZFormat::Invalid;
+                    pipeline->stencil_ignored =
+                        key.stencil_format == Gcn::DepthBuffer::StencilFormat::Invalid;
+                } else {
+                    if (key.z_format != Gcn::DepthBuffer::ZFormat::Invalid) {
+                        pipeline->depth_pixel_format = depth_pixel;
+                        desc.depthAttachmentPixelFormat = static_cast<MTLPixelFormat>(depth_pixel);
+                    }
+                    if (key.stencil_format != Gcn::DepthBuffer::StencilFormat::Invalid) {
+                        pipeline->stencil_pixel_format = depth_pixel;
+                        desc.stencilAttachmentPixelFormat =
+                            static_cast<MTLPixelFormat>(depth_pixel);
+                    }
                 }
             }
 

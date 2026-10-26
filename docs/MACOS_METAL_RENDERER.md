@@ -291,8 +291,17 @@ has no tessellator, so the frame encoder (`BB_METAL_FRAME=1`) now encodes classi
   than take from the dynamic state (cull mode, front face, depth and stencil tests, depth bias),
   which the frame encoder applies for their draws. As Wooloomooloo2's MoltenVK layer at 78b59f5.
   Only vertex and fragment stages; render pass objects are not handled (the renderer has none).
-- **Switches for bisecting:** `BB_METAL_TESS=0` and `BB_METAL_GEOMETRY=0` keep those draws on
-  KosmicKrisp (with `BB_METAL_PRECISE=all` and `BB_METAL_TRANSFERS`).
+- **Depth/stencil format variants:** Metal wants a pipeline's depth and stencil attachment
+  formats to be the pass's exactly; Vulkan ignores an attachment the pipeline does not use (a
+  pipeline without stencil drawing into a depth-stencil pass, say). About 1,300 draws a second
+  at the lamp fell back for this. A game pipeline (not tessellated, no geometry shader, not a
+  generic one) is now built again for the pass's formats on first use, on the shadow build's
+  workers (`MetalShadow::FormatVariant`; the draw falls back until it is ready); an aspect its
+  key has none of is declared and never tested or written. `BB_METAL_FORMAT_VARIANTS=0` turns
+  them off.
+- **Switches for bisecting:** `BB_METAL_TESS=0`, `BB_METAL_GEOMETRY=0` and
+  `BB_METAL_FORMAT_VARIANTS=0` keep those draws on KosmicKrisp (with `BB_METAL_PRECISE=all` and
+  `BB_METAL_TRANSFERS`).
 - **Self-test:** `BB_METAL_FRAME_TEST=1` (with `BB_METAL_FRAME=1`) runs 32 rounds of fills on a
   16 MB buffer at the renderer's start, alternating between KosmicKrisp (fills of differing
   bytes) and our queue (fills of one byte value, the copy), in one submission and split in two,

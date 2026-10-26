@@ -516,6 +516,10 @@ struct Owned {
     // ---- The Vulkan state as recorded (Metal encodes from it; the fallback replays it) ----
     VkPipeline graphics_pipeline{}, compute_pipeline{};
     const MetalShadow::GraphicsEntry* graphics{};
+    /// bbport: the draw's render pipeline (DrawBlocker): the entry's, or its variant for the
+    /// pass's depth and stencil formats (`variant_building`: that variant is not ready yet).
+    const Metal::RenderPipeline* draw_render{};
+    bool variant_building{};
     const Metal::ComputePipeline* compute_metal{};
     std::unordered_map<u32, PushSet> push_sets; ///< by bind point << 16 | set
     std::unordered_map<u32, BoundSets> bound_sets; ///< by bind point << 16 | set
@@ -1332,7 +1336,37 @@ u64 VertexStride(const Owned& o, const Owned::VertexBuffer& vb, u32 location) {
 }
 
 /// Why a draw cannot be encoded in Metal (null: it can).
-const char* DrawBlocker(const Owned& o) {
+/// bbport: the render pipeline for the draw (Owned::draw_render): the entry's when its depth and
+/// stencil formats are the pass's, else (a plain game pipeline) its variant for the pass's
+/// (MetalShadow::FormatVariant; built on first use, the draw falls back meanwhile).
+/// BB_METAL_FORMAT_VARIANTS=0 keeps the entry's (for bisecting).
+void SelectRender(Owned& o) {
+    static const bool variants = [] {
+        const char* env = std::getenv("BB_METAL_FORMAT_VARIANTS");
+        const bool on = !(env && env[0] == '0');
+        if (!on) {
+            Print("Metal frame: no depth/stencil format variants (BB_METAL_FORMAT_VARIANTS=0)\n");
+        }
+        return on;
+    }();
+    const auto* entry = o.graphics;
+    o.draw_render = entry ? entry->render : nullptr;
+    o.variant_building = false;
+    const Metal::RenderPipeline* p = o.draw_render;
+    if (!variants || !p || !entry->source || entry->tess || entry->geometry ||
+        (p->depth_pixel_format == o.pass_depth_format &&
+         p->stencil_pixel_format == o.pass_stencil_format)) {
+        return;
+    }
+    bool building = false;
+    if (const Metal::RenderPipeline* variant = MetalShadow::FormatVariant(
+            *entry, o.pass_depth_format, o.pass_stencil_format, building)) {
+        o.draw_render = variant;
+    }
+    o.variant_building = building;
+}
+
+const char* DrawBlocker(Owned& o) {
     if (!o.in_pass) {
         return "a draw outside a render pass";
     }
@@ -1343,7 +1377,7 @@ const char* DrawBlocker(const Owned& o) {
     if (!entry || !entry->render) {
         return "no Metal pipeline";
     }
-    const Metal::RenderPipeline& p = *entry->render;
+    const Metal::RenderPipeline& p = *entry->render; // (a format variant differs in formats only)
     if (p.primitive_emulated && !entry->rect_list) {
         return "a topology Metal lacks";
     }
@@ -1379,11 +1413,16 @@ const char* DrawBlocker(const Owned& o) {
             return "attachment formats other than the pipeline's";
         }
     }
-    if (p.depth_pixel_format != o.pass_depth_format ||
-        p.stencil_pixel_format != o.pass_stencil_format) {
-        return "depth or stencil formats other than the pipeline's";
+    // Last before the formats: a variant is only built for a draw nothing else keeps out of Metal.
+    SelectRender(o);
+    const Metal::RenderPipeline& chosen = *o.draw_render;
+    if (chosen.depth_pixel_format != o.pass_depth_format ||
+        chosen.stencil_pixel_format != o.pass_stencil_format) {
+        return o.variant_building
+                   ? "depth or stencil formats other than the pipeline's (its variant is being built)"
+                   : "depth or stencil formats other than the pipeline's";
     }
-    if (p.sample_count != o.pass_samples) {
+    if (chosen.sample_count != o.pass_samples) {
         return "a sample count other than the pipeline's";
     }
     if (o.index_type == VK_INDEX_TYPE_UINT8_EXT) {
@@ -1406,7 +1445,7 @@ bool RestartDiffers(const Owned& o) {
         }
         return on;
     }();
-    const u32 type = o.graphics->render->primitive_type;
+    const u32 type = o.graphics->render->primitive_type; // (a format variant's is the same)
     return strict && !o.primitive_restart &&
            (type == MTLPrimitiveTypeTriangleStrip || type == MTLPrimitiveTypeLineStrip);
 }
@@ -1415,10 +1454,11 @@ bool RestartDiffers(const Owned& o) {
 Metal::DepthStencilKey DepthStencilKeyOf(const Owned& o, const Metal::RenderPipeline& p) {
     const Effective e = EffectiveState(o);
     Metal::DepthStencilKey ds;
-    ds.depth_test = e.depth_test && p.depth_pixel_format;
-    ds.depth_write = e.depth_write && p.depth_pixel_format;
+    // An aspect the pipeline does not use (a format variant's ignored one) is never tested.
+    ds.depth_test = e.depth_test && p.depth_pixel_format && !p.depth_ignored;
+    ds.depth_write = e.depth_write && p.depth_pixel_format && !p.depth_ignored;
     ds.depth_compare = vk::CompareOp(e.depth_compare);
-    ds.stencil_test = e.stencil_test && p.stencil_pixel_format;
+    ds.stencil_test = e.stencil_test && p.stencil_pixel_format && !p.stencil_ignored;
     const auto face = [](const Owned::Face& f) {
         Metal::DepthStencilKey::Face out;
         out.fail_op = vk::StencilOp(f.fail);
@@ -1437,8 +1477,7 @@ Metal::DepthStencilKey DepthStencilKeyOf(const Owned& o, const Metal::RenderPipe
 /// Encodes the draw state; false with `why` when the draw goes to KosmicKrisp after all
 /// (checked before the encoder opens, so a fallback does not end a KosmicKrisp segment first).
 bool PrepareDraw(Owned& o, const char*& why) {
-    const MetalShadow::GraphicsEntry* entry = o.graphics;
-    const Metal::RenderPipeline& p = *entry->render;
+    const Metal::RenderPipeline& p = *o.draw_render; // DrawBlocker's choice
     if (!StageResolvable(o, VK_PIPELINE_BIND_POINT_GRAPHICS, p.vs, why) ||
         !StageResolvable(o, VK_PIPELINE_BIND_POINT_GRAPHICS, p.fs, why)) {
         return false;
@@ -1515,7 +1554,8 @@ bool PrepareDraw(Owned& o, const char*& why) {
                         backReferenceValue:effective.back.reference];
     }
     // Metal's depth bounds test (macOS 26; on the stored depth, as Vulkan's); [0, 1] turns it off.
-    if (effective.depth_bounds_test && p.depth_pixel_format) { // the test needs a depth attachment
+    if (effective.depth_bounds_test && p.depth_pixel_format &&
+        !p.depth_ignored) { // the test needs a depth attachment the pipeline uses
         [enc setDepthTestMinBound:effective.depth_bounds[0] maxBound:effective.depth_bounds[1]];
     } else {
         [enc setDepthTestMinBound:0.0f maxBound:1.0f];
@@ -1555,7 +1595,7 @@ bool PrepareDraw(Owned& o, const char*& why) {
 
 MTLPrimitiveType PrimitiveOf(const Owned& o) {
     return o.graphics->rect_list ? MTLPrimitiveTypeTriangle
-                                 : MTLPrimitiveType(o.graphics->render->primitive_type);
+                                 : MTLPrimitiveType(o.draw_render->primitive_type);
 }
 
 /// The draw in Metal if it can be, else in a KosmicKrisp segment (`kk` records it there).

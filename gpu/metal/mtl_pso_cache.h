@@ -52,6 +52,12 @@ struct RenderPipelineInput {
     /// and topology class come from `geometry_output`, not from the key's (point list etc.).
     bool geometry{};
     GsOutputPrimitive geometry_output{GsOutputPrimitive::TriangleStrip};
+    /// bbport: the render pass's depth and stencil attachment formats instead of the key's
+    /// (MTLPixelFormat, 0: none): Metal wants the pipeline's to match the pass's exactly, Vulkan
+    /// ignores an attachment a pipeline does not use. An aspect the key has none of stays unused
+    /// (RenderPipeline::depth_ignored, stencil_ignored).
+    bool formats_override{};
+    u32 depth_format{}, stencil_format{};
     // Rasterizer discard (Vulkan: dynamic rasterizerDiscardEnable, regs.clipper_control.
     // dx_rasterization_kill) is not a pipeline option here: Metal accepts rasterizationEnabled =
     // NO only for a vertex function returning void, and the recompiler's vertex shaders return
@@ -99,6 +105,9 @@ struct RenderPipeline {
     bool geometry{};             ///< `vs` is a geometry draw's pass-through function
     u32 patch_control_points{};  ///< tessellation: the patch size of the draw (drawPatches)
     bool clip_minus_w_to_w{}; ///< clip space z in [-w, w] (Metal's is [0, w])
+    /// bbport: built for a pass's formats (RenderPipelineInput::formats_override) where the key
+    /// has no depth / stencil: the attachment is declared, never tested or written.
+    bool depth_ignored{}, stencil_ignored{};
     /// bbport: the vertex function converts it (CompileVariant::clip_fixup).
     bool clip_fixed{};
     u32 sample_count{1};

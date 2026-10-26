@@ -299,6 +299,10 @@ void GiveScratch(std::vector<id<MTLBuffer>>& chunks) {
     for (id<MTLBuffer> b : chunks) {
         if (scratch_pool.size() < 64) {
             scratch_pool.push_back(b);
+        } else {
+            std::scoped_lock residency_lock{residency_mutex}; // freed: out of the set too
+            [residency removeAllocation:b];
+            [residency commit];
         }
     }
     chunks.clear();
@@ -421,7 +425,8 @@ void Release(const std::shared_ptr<Retire>& r) {
 
 /// Every encoder: after the one before it (the chain fence), and before the next.
 void WaitChain(id<MTLRenderCommandEncoder> e) {
-    [e waitForFence:chain beforeStages:MTLRenderStageVertex];
+    // Fragment too: a pass's loads, clears and stores (a pass without draws has nothing else).
+    [e waitForFence:chain beforeStages:MTLRenderStageVertex | MTLRenderStageFragment];
 }
 void WaitChain(id<MTLComputeCommandEncoder> e) {
     [e waitForFence:chain];
@@ -498,6 +503,7 @@ struct Owned {
     bool kk_graphics{}, kk_compute{}; ///< it has the graphics / compute state (replayed)
 
     std::shared_ptr<Retire> retire;
+    u32 metal_segments{}; ///< Metal command buffers made so far (KkOnly)
     id<MTLRenderCommandEncoder> render;
     id<MTLComputeCommandEncoder> compute;
     id<MTLBlitCommandEncoder> blit;
@@ -659,7 +665,25 @@ id<MTLCommandBuffer> Metal(Owned& o) {
     // submission's fence), ours (scratch) until the Retire is released.
     o.cmd = [queue commandBufferWithUnretainedReferences];
     o.cmd.label = @"bbport Metal frame";
+    ++o.metal_segments;
     return o.cmd;
+}
+
+/// Metal command buffers per owned one, at most: each is made when its segment begins and counts
+/// against the queue's limit until it completes, so one that switches between the two without
+/// end must not exhaust the queue (the rest of it then stays on KosmicKrisp).
+constexpr u32 MaxMetalSegments = 64;
+
+/// Why this command must stay in KosmicKrisp (null: it may go to Metal): an occlusion query is
+/// active, or the owned command buffer has had its Metal segments.
+const char* KkOnly(const Owned& o) {
+    if (o.active_queries) {
+        return "an occlusion query";
+    }
+    if (!o.cmd && o.metal_segments >= MaxMetalSegments) {
+        return "too many Metal segments in one command buffer";
+    }
+    return nullptr;
 }
 
 // ---- Replay into a KosmicKrisp segment ----
@@ -1224,7 +1248,7 @@ const char* DrawBlocker(const Owned& o) {
         return "a geometry shader";
     }
     const Metal::RenderPipeline& p = *entry->render;
-    if (p.primitive_emulated && !entry->rect_list && !p.tessellation) {
+    if (p.primitive_emulated && !entry->rect_list) {
         return "a topology Metal lacks";
     }
     if (p.fill_point) {
@@ -1275,6 +1299,28 @@ bool RestartDiffers(const Owned& o) {
     const u32 type = o.graphics->render->primitive_type;
     return !o.primitive_restart &&
            (type == MTLPrimitiveTypeTriangleStrip || type == MTLPrimitiveTypeLineStrip);
+}
+
+/// The depth/stencil state of the draw.
+Metal::DepthStencilKey DepthStencilKeyOf(const Owned& o, const Metal::RenderPipeline& p) {
+    Metal::DepthStencilKey ds;
+    ds.depth_test = o.depth_test && p.depth_pixel_format;
+    ds.depth_write = o.depth_write && p.depth_pixel_format;
+    ds.depth_compare = vk::CompareOp(o.depth_compare);
+    ds.stencil_test = o.stencil_test && p.stencil_pixel_format;
+    const auto face = [](const Owned::Face& f) {
+        Metal::DepthStencilKey::Face out;
+        out.fail_op = vk::StencilOp(f.fail);
+        out.pass_op = vk::StencilOp(f.pass);
+        out.depth_fail_op = vk::StencilOp(f.depth_fail);
+        out.compare_op = vk::CompareOp(f.compare);
+        out.compare_mask = u8(f.compare_mask);
+        out.write_mask = u8(f.write_mask);
+        return out;
+    };
+    ds.front = face(o.front);
+    ds.back = face(o.back);
+    return ds;
 }
 
 /// Encodes the draw state; false with `why` when the draw goes to KosmicKrisp after all
@@ -1345,23 +1391,7 @@ bool PrepareDraw(Owned& o, const char*& why) {
     if (ns) {
         [enc setScissorRects:scissors.data() count:ns];
     }
-    Metal::DepthStencilKey ds;
-    ds.depth_test = o.depth_test && p.depth_pixel_format;
-    ds.depth_write = o.depth_write && p.depth_pixel_format;
-    ds.depth_compare = vk::CompareOp(o.depth_compare);
-    ds.stencil_test = o.stencil_test && p.stencil_pixel_format;
-    const auto face = [](const Owned::Face& f) {
-        Metal::DepthStencilKey::Face out;
-        out.fail_op = vk::StencilOp(f.fail);
-        out.pass_op = vk::StencilOp(f.pass);
-        out.depth_fail_op = vk::StencilOp(f.depth_fail);
-        out.compare_op = vk::CompareOp(f.compare);
-        out.compare_mask = u8(f.compare_mask);
-        out.write_mask = u8(f.write_mask);
-        return out;
-    };
-    ds.front = face(o.front);
-    ds.back = face(o.back);
+    const Metal::DepthStencilKey ds = DepthStencilKeyOf(o, p);
     void* state = MetalShadow::DepthStencil(ds);
     if (!state) {
         why = "no Metal depth/stencil state";
@@ -1418,9 +1448,9 @@ MTLPrimitiveType PrimitiveOf(const Owned& o) {
 /// The draw in Metal if it can be, else in a KosmicKrisp segment (`kk` records it there).
 template <typename Encode, typename KkRecord>
 void Draw(Owned& o, const char* extra_blocker, Encode&& encode, KkRecord&& kk) {
-    const char* why = o.active_queries ? "an occlusion query"
-                      : extra_blocker  ? extra_blocker
-                                       : DrawBlocker(o);
+    const char* why = KkOnly(o)       ? KkOnly(o)
+                      : extra_blocker ? extra_blocker
+                                      : DrawBlocker(o);
     if (!why && o.cull_mode == VK_CULL_MODE_FRONT_AND_BACK) {
         why = "culling front and back"; // Metal has no such mode (points and lines still draw)
     }
@@ -1438,7 +1468,7 @@ void Draw(Owned& o, const char* extra_blocker, Encode&& encode, KkRecord&& kk) {
 
 template <typename Encode, typename KkRecord>
 void Dispatch(Owned& o, Encode&& encode, KkRecord&& kk) {
-    const char* why = o.active_queries ? "an occlusion query"
+    const char* why = KkOnly(o)         ? KkOnly(o)
                       : o.compute_metal ? nullptr
                                         : "no Metal pipeline";
     if (!why) {
@@ -1489,7 +1519,8 @@ bool EmptyScissor(const Owned& o) {
 
 /// The vertex and control shaders as compute kernels writing GPU scratch, then the patch draw of
 /// the evaluation and fragment shaders in the pass (reopened, loading). False with `why` when the
-/// draw goes to KosmicKrisp (checked before anything is encoded, except the draw state itself).
+/// draw goes to KosmicKrisp: checked before the kernels are encoded, except that a render encoder
+/// may still fail to open (the kernels' work is then lost, the draw falls back).
 bool EncodeTessellated(Owned& o, const TessArgs& a, const char*& why) {
     const Metal::TessellationPipeline& t = *o.graphics->tess;
     const Metal::RenderPipeline& p = *t.render;
@@ -1499,6 +1530,10 @@ bool EncodeTessellated(Owned& o, const TessArgs& a, const char*& why) {
     }
     if (a.instances > 1) {
         why = "an instanced tessellated draw";
+        return false;
+    }
+    if (a.indexed && a.vertex_offset < 0) {
+        why = "a tessellated draw with a negative vertex offset"; // the stage-in region's origin
         return false;
     }
     Metal::Tessellation::DrawParams params;
@@ -1529,6 +1564,10 @@ bool EncodeTessellated(Owned& o, const TessArgs& a, const char*& why) {
     }
     if (EmptyScissor(o)) {
         why = "an empty scissor";
+        return false;
+    }
+    if (!MetalShadow::DepthStencil(DepthStencilKeyOf(o, p))) {
+        why = "no Metal depth/stencil state";
         return false;
     }
     std::array<Metal::Tessellation::VertexBinding, Vulkan::MaxVertexBufferCount> streams;
@@ -1585,7 +1624,7 @@ bool EncodeTessellated(Owned& o, const TessArgs& a, const char*& why) {
              patchIndexBuffer:nil
        patchIndexBufferOffset:0
                 instanceCount:1
-                 baseInstance:0];
+                 baseInstance:a.first_instance];
     ++counters.tess_draws;
     return true;
 }
@@ -1593,7 +1632,7 @@ bool EncodeTessellated(Owned& o, const TessArgs& a, const char*& why) {
 /// A tessellated draw in Metal if it can be, else in a KosmicKrisp segment.
 template <typename KkRecord>
 void DrawTessellated(Owned& o, const TessArgs& a, KkRecord&& kk) {
-    const char* why = o.active_queries ? "an occlusion query" : DrawBlocker(o);
+    const char* why = KkOnly(o) ? KkOnly(o) : DrawBlocker(o);
     if (!why && o.cull_mode == VK_CULL_MODE_FRONT_AND_BACK) {
         why = "culling front and back";
     }
@@ -1803,9 +1842,10 @@ bool Init(VkDevice vkdev, PFN_vkGetDeviceProcAddr driver_proc) {
                       error ? error.localizedDescription.UTF8String : "unknown");
                 return false;
             }
-            // Command buffers are made when recording begins and committed at the submission:
-            // room for every recording thread's and a few frames' worth.
-            queue = [device newCommandQueueWithMaxCommandBufferCount:1024];
+            // Command buffers are made when a Metal segment begins and committed at the
+            // submission; uncommitted ones count against the queue's limit, and a recording
+            // thread that reaches it waits: room for many frames' worth of segments.
+            queue = [device newCommandQueueWithMaxCommandBufferCount:8192];
             if (!queue) {
                 Print("Metal frame: no command queue; the frame encoder stays off\n");
                 return false;
@@ -1933,6 +1973,7 @@ VkResult Submit(VkQueue vkqueue, const Batch* batches, uint32_t count, VkFence f
                                 const VkSemaphoreSubmitInfo* signals, u32 signal_count,
                                 VkFence f) {
             std::vector<VkSemaphoreSubmitInfo> all_waits(waits, waits + wait_count);
+            const bool waited_metal = metal_ahead;
             if (metal_ahead) {
                 all_waits.push_back({.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                                      .semaphore = to_kk_sem,
@@ -1953,9 +1994,8 @@ VkResult Submit(VkQueue vkqueue, const Batch* batches, uint32_t count, VkFence f
             }
             all_signals.push_back({.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                                    .semaphore = to_metal_sem,
-                                   .value = ++to_metal_value,
+                                   .value = to_metal_value + 1,
                                    .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT});
-            kk_ahead = true;
             const VkSubmitInfo2 info{
                 .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
                 .waitSemaphoreInfoCount = u32(all_waits.size()),
@@ -1974,8 +2014,16 @@ VkResult Submit(VkQueue vkqueue, const Batch* batches, uint32_t count, VkFence f
             } else {
                 times.Add(times.kk_ms, times.kk_max_ms, times.kk, SubmitTimes::Since(t));
             }
-            if (r != VK_SUCCESS) {
+            if (r == VK_SUCCESS) {
+                ++to_metal_value;
+                kk_ahead = true;
+            } else {
+                // Nothing of it reached the queue: no value to wait for, our work still ahead.
                 result = r;
+                metal_ahead = metal_ahead || waited_metal;
+                for (KkBuffer* b : kk_run_buffers) {
+                    b->done_at.store(1, std::memory_order_release); // reusable
+                }
             }
             kk_run.clear();
             kk_run_buffers.clear();
@@ -2032,7 +2080,14 @@ VkResult Submit(VkQueue vkqueue, const Batch* batches, uint32_t count, VkFence f
                 }];
                 if (is_last) {
                     // The chain orders every encoder of the run before the last one's end.
-                    [cb addCompletedHandler:^(id<MTLCommandBuffer>) {
+                    const u64 signal = to_kk_value;
+                    [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {
+                      if (done.status == MTLCommandBufferStatusError &&
+                          to_kk_event.signaledValue < signal) {
+                          // Its commands stopped at the fault, the signal with them: KosmicKrisp
+                          // would wait for it for ever.
+                          to_kk_event.signaledValue = signal;
+                      }
                       for (auto& r : retires) {
                           Release(r);
                       }
@@ -3131,7 +3186,7 @@ void CmdCopyBuffer(Owned& o, VkBuffer src, VkBuffer dst, uint32_t count,
                    const VkBufferCopy* regions) {
     @autoreleasepool {
         const BufferRef s = ResolveBuffer(src), d = ResolveBuffer(dst);
-        if (!TransfersInMetal(Transfer::Copy) || o.active_queries || !s.buffer || !d.buffer) {
+        if (!TransfersInMetal(Transfer::Copy) || KkOnly(o) || !s.buffer || !d.buffer) {
             if (VkCommandBuffer cb = KkTransfer(o, "a buffer copy KosmicKrisp makes")) {
                 driver.vkCmdCopyBuffer(cb, src, dst, count, regions);
             }
@@ -3153,7 +3208,7 @@ void CmdFillBuffer(Owned& o, VkBuffer dst, VkDeviceSize offset, VkDeviceSize siz
     @autoreleasepool {
         const BufferRef d = ResolveBuffer(dst);
         const u8 byte = u8(data);
-        if (!TransfersInMetal(Transfer::Fill) || o.active_queries || !d.buffer ||
+        if (!TransfersInMetal(Transfer::Fill) || KkOnly(o) || !d.buffer ||
             data != u32(byte) * 0x01010101u) {
             if (VkCommandBuffer cb = KkTransfer(o, "a fill KosmicKrisp makes")) {
                 driver.vkCmdFillBuffer(cb, dst, offset, size, data);
@@ -3175,7 +3230,7 @@ void CmdUpdateBuffer(Owned& o, VkBuffer dst, VkDeviceSize offset, VkDeviceSize s
                      const void* data) {
     @autoreleasepool {
         const BufferRef d = ResolveBuffer(dst);
-        if (!TransfersInMetal(Transfer::Update) || o.active_queries || !d.buffer) {
+        if (!TransfersInMetal(Transfer::Update) || KkOnly(o) || !d.buffer) {
             if (VkCommandBuffer cb = KkTransfer(o, "an update KosmicKrisp makes")) {
                 driver.vkCmdUpdateBuffer(cb, dst, offset, size, data);
             }
@@ -3196,7 +3251,7 @@ void CmdUpdateBuffer(Owned& o, VkBuffer dst, VkDeviceSize offset, VkDeviceSize s
 void CmdCopyBufferToImage(Owned& o, VkBuffer src, VkImage dst, VkImageLayout layout,
                           uint32_t count, const VkBufferImageCopy* regions) {
     @autoreleasepool {
-        if (!TransfersInMetal(Transfer::BufferToImage) || o.active_queries ||
+        if (!TransfersInMetal(Transfer::BufferToImage) || KkOnly(o) ||
             !BufferImageCopies(o, src, dst, count, regions, true)) {
             if (VkCommandBuffer cb = KkTransfer(o, "a buffer to image copy KosmicKrisp makes")) {
                 driver.vkCmdCopyBufferToImage(cb, src, dst, layout, count, regions);
@@ -3210,7 +3265,7 @@ void CmdCopyBufferToImage(Owned& o, VkBuffer src, VkImage dst, VkImageLayout lay
 void CmdCopyImageToBuffer(Owned& o, VkImage src, VkImageLayout layout, VkBuffer dst,
                           uint32_t count, const VkBufferImageCopy* regions) {
     @autoreleasepool {
-        if (!TransfersInMetal(Transfer::ImageToBuffer) || o.active_queries ||
+        if (!TransfersInMetal(Transfer::ImageToBuffer) || KkOnly(o) ||
             !BufferImageCopies(o, dst, src, count, regions, false)) {
             if (VkCommandBuffer cb = KkTransfer(o, "an image to buffer copy KosmicKrisp makes")) {
                 driver.vkCmdCopyImageToBuffer(cb, src, layout, dst, count, regions);
@@ -3225,7 +3280,7 @@ void CmdCopyImage(Owned& o, VkImage src, VkImageLayout src_layout, VkImage dst,
                   VkImageLayout dst_layout, uint32_t count, const VkImageCopy* regions) {
     @autoreleasepool {
         VkFormat src_format{}, dst_format{};
-        id<MTLTexture> s = TransfersInMetal(Transfer::ImageCopy) && !o.active_queries
+        id<MTLTexture> s = TransfersInMetal(Transfer::ImageCopy) && !KkOnly(o)
                                ? ImageTexture(src, src_format)
                                : nil;
         id<MTLTexture> d = s ? ImageTexture(dst, dst_format) : nil;
@@ -3271,7 +3326,7 @@ void CmdClearColorImage(Owned& o, VkImage image, VkImageLayout layout,
     @autoreleasepool {
         VkFormat format{};
         id<MTLTexture> texture =
-            TransfersInMetal(Transfer::Clear) && !o.active_queries ? ImageTexture(image, format)
+            TransfersInMetal(Transfer::Clear) && !KkOnly(o) ? ImageTexture(image, format)
                                                                    : nil;
         // A format stored swizzled (BGRA twins, 4-4-4-4) clears with its channels moved:
         // KosmicKrisp knows how.
@@ -3304,7 +3359,7 @@ void CmdClearDepthStencilImage(Owned& o, VkImage image, VkImageLayout layout,
     @autoreleasepool {
         VkFormat format{};
         id<MTLTexture> texture =
-            TransfersInMetal(Transfer::Clear) && !o.active_queries ? ImageTexture(image, format)
+            TransfersInMetal(Transfer::Clear) && !KkOnly(o) ? ImageTexture(image, format)
                                                                    : nil;
         if (!texture || !ClearableTexture(texture) ||
             !Metal::VkToMtl::IsDepthPixelFormat(u32(texture.pixelFormat))) {

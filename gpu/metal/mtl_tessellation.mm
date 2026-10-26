@@ -45,6 +45,16 @@ NSUInteger ThreadsPerGroup(const TessKernel& kernel) {
     return std::max<NSUInteger>(1, std::min<NSUInteger>(kernel.max_total_threads, 64));
 }
 
+/// bbport: the control kernel's threadgroups hold whole patches (a multiple of the output control
+/// points): its barrier() only reaches the threads of one group, and a patch's invocations read
+/// each other's outputs after it (MoltenVK sizes them by the least common multiple with the
+/// execution width).
+NSUInteger PatchThreadsPerGroup(const TessKernel& kernel, u32 output_control_points) {
+    const NSUInteger points = std::max<u32>(1, output_control_points);
+    const NSUInteger limit = std::max<NSUInteger>(points, std::min<NSUInteger>(kernel.max_total_threads, 64));
+    return std::max<NSUInteger>(1, limit / points) * points;
+}
+
 } // namespace
 
 Plan PlanScratch(const TessellationPipeline& pipeline, u32 patches) {
@@ -135,7 +145,9 @@ void EncodeKernels(void* compute_encoder, const TessellationPipeline& pipeline,
         const u32 params[2] = {pipeline.input_control_points, plan.patches};
         [enc setBytes:params length:sizeof(params) atIndex:kTessParamsBuffer];
         [enc dispatchThreads:MTLSizeMake(u64(plan.patches) * pipeline.output_control_points, 1, 1)
-            threadsPerThreadgroup:MTLSizeMake(ThreadsPerGroup(kernel), 1, 1)];
+            threadsPerThreadgroup:MTLSizeMake(
+                                      PatchThreadsPerGroup(kernel, pipeline.output_control_points),
+                                      1, 1)];
     }
 }
 

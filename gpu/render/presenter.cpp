@@ -107,6 +107,7 @@ Presenter::Presenter(Frontend::WindowSDL& window_, BbCp::CommandProcessor* cp_)
     }
     BbOverlay::Init(instance, swapchain.GetSurfaceFormat().format, count);
     BbMetal::RunInteropTestIfAsked(instance); // BB_METAL_INTEROP_TEST=1 (macOS)
+    BbMetal::RunFrameTestIfAsked(instance);   // BB_METAL_FRAME_TEST=1 (macOS)
 }
 
 Presenter::~Presenter() {

@@ -431,9 +431,117 @@ void RunInteropTestIfAsked(const Vulkan::Instance& instance) {
            barriers ? "" : ", the render pass's barriers off (a negative control)");
 }
 
+void RunFrameTestIfAsked(const Vulkan::Instance& instance) {
+    const char* env = std::getenv("BB_METAL_FRAME_TEST");
+    if (!env || env[0] != '1') {
+        return;
+    }
+    const char* frame = std::getenv("BB_METAL_FRAME");
+    const bool frame_on = frame && frame[0] == '1';
+    if (EmulatorSettings.IsVkValidationEnabled()) {
+        Report("Metal frame test: skipped (the Vulkan validation layers are on)\n");
+        return;
+    }
+    Test test{instance};
+    std::string error;
+    if (!test.Create(error)) {
+        Report("Metal frame test: FAIL (%s)\n", error.c_str());
+        return;
+    }
+    // Fills with bytes that differ go to KosmicKrisp (Metal fills one byte value), fills of one
+    // byte value and copies to Metal: each round alternates the two queues on one 16 MB buffer,
+    // then reads it back.
+    constexpr u32 Quarter = Bytes / 4;
+    const auto* data = static_cast<const uint8_t*>(test.readback_info.pMappedData);
+    u32 passed = 0;
+    for (u32 round = 0; round < Rounds; ++round) {
+        const u32 x = 0x11223344u ^ (round << 8);                // KosmicKrisp
+        const u8 y = u8(round * 7 + 1);                          // Metal
+        const u32 z = 0x55667700u | (round & 0xffu);             // KosmicKrisp
+        const bool split = round % 2 == 1; // the second half in a submission of its own
+        {
+            std::scoped_lock lock{Vulkan::Scheduler::submit_mutex};
+            vk::CommandBuffer cmd = test.Begin();
+            if (!cmd) {
+                Report("Metal frame test: FAIL (round %u: no command buffer)\n", round);
+                return;
+            }
+            Test::Barrier(cmd);
+            cmd.fillBuffer(test.metal_buffer, 0, Bytes, x);
+            Test::Barrier(cmd);
+            cmd.fillBuffer(test.metal_buffer, 0, Bytes, u32(y) * 0x01010101u);
+            Test::Barrier(cmd);
+            if (split) {
+                if (!test.Submit(cmd, {})) {
+                    Report("Metal frame test: FAIL (round %u: the first submission)\n", round);
+                    return;
+                }
+                cmd = test.Begin();
+                if (!cmd) {
+                    Report("Metal frame test: FAIL (round %u: no command buffer)\n", round);
+                    return;
+                }
+                Test::Barrier(cmd);
+            }
+            cmd.fillBuffer(test.metal_buffer, 0, Quarter, z);
+            Test::Barrier(cmd);
+            const vk::BufferCopy copy{.srcOffset = 0, .dstOffset = 0, .size = Bytes};
+            cmd.copyBuffer(test.metal_buffer, test.readback, copy);
+            const vk::MemoryBarrier2 to_host{
+                .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
+                .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+                .dstStageMask = vk::PipelineStageFlagBits2::eHost,
+                .dstAccessMask = vk::AccessFlagBits2::eHostRead,
+            };
+            cmd.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &to_host});
+            if (!test.Submit(cmd, test.fence)) {
+                Report("Metal frame test: FAIL (round %u: the submission)\n", round);
+                return;
+            }
+        }
+        if (test.device.waitForFences(test.fence, true, 5'000'000'000ull) != vk::Result::eSuccess) {
+            Report("Metal frame test: FAIL (round %u: the GPU did not finish in 5 s: a wait "
+                   "between the queues that is never signalled?)\n",
+                   round);
+            return;
+        }
+        (void)test.device.resetFences(test.fence);
+        (void)test.device.resetCommandPool(test.pool);
+        vmaInvalidateAllocation(instance.GetAllocator(), test.readback_allocation, 0, VK_WHOLE_SIZE);
+        const auto word = [&](u32 i) {
+            u32 w;
+            std::memcpy(&w, data + u64(i) * 4, 4);
+            return w;
+        };
+        for (u32 i = 0; i < Bytes / 4; ++i) {
+            const u32 want = i < Quarter / 4 ? z : u32(y) * 0x01010101u;
+            const u32 got = word(i);
+            if (got != want) {
+                const char* what = got == x ? "the first fill (KosmicKrisp) after the second (Metal)"
+                                   : i < Quarter / 4 && got == u32(y) * 0x01010101u
+                                       ? "the second fill (Metal) after the third (KosmicKrisp)"
+                                       : "a value of no fill of this round (the copy before the "
+                                         "fills, or the readback before the copy)";
+                Report("Metal frame test: FAIL (round %u%s: word %u is %#010x, expected %#010x: "
+                       "%s)\n",
+                       round, split ? ", split" : "", i, got, want, what);
+                return;
+            }
+        }
+        ++passed;
+    }
+    Report("Metal frame test: PASS (%u rounds on a 16 MB buffer: fills alternating between "
+           "KosmicKrisp and %s, a copy and the readback, in one submission and split in two)\n",
+           passed,
+           frame_on ? "our Metal queue (BB_METAL_FRAME=1)"
+                    : "KosmicKrisp again (BB_METAL_FRAME is off: the test then checks nothing of "
+                      "the Metal path)");
+}
+
 #else
 
 void RunInteropTestIfAsked(const Vulkan::Instance&) {}
+void RunFrameTestIfAsked(const Vulkan::Instance&) {}
 
 #endif
 

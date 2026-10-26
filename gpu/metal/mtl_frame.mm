@@ -1755,10 +1755,32 @@ bool EncodeGeometry(Owned& o, const TessArgs& a, const char*& why) {
     return true;
 }
 
+/// BB_METAL_TESS=0 / BB_METAL_GEOMETRY=0: those draws stay on KosmicKrisp (for bisecting a broken
+/// picture). Read once, logged once.
+bool KindInMetal(const char* variable, const char* what) {
+    const char* env = std::getenv(variable);
+    const bool off = env && env[0] == '0';
+    if (off) {
+        Print("Metal frame: %s draws stay on KosmicKrisp (%s=0)\n", what, variable);
+    }
+    return !off;
+}
+bool TessInMetal() {
+    static const bool on = KindInMetal("BB_METAL_TESS", "tessellated");
+    return on;
+}
+bool GeometryInMetal() {
+    static const bool on = KindInMetal("BB_METAL_GEOMETRY", "geometry-shader");
+    return on;
+}
+
 /// A tessellated or geometry-shader draw in Metal if it can be, else in a KosmicKrisp segment.
 template <typename KkRecord>
 void DrawTessellated(Owned& o, const TessArgs& a, KkRecord&& kk) {
-    const char* why = KkOnly(o) ? KkOnly(o) : DrawBlocker(o);
+    const char* why = KkOnly(o)                              ? KkOnly(o)
+                      : o.graphics->tess && !TessInMetal()   ? "tessellation (BB_METAL_TESS=0)"
+                      : !o.graphics->tess && !GeometryInMetal() ? "a geometry shader (BB_METAL_GEOMETRY=0)"
+                                                             : DrawBlocker(o);
     if (!why && o.cull_mode == VK_CULL_MODE_FRONT_AND_BACK) {
         why = "culling front and back";
     }

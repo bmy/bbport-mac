@@ -273,6 +273,13 @@ has no tessellator, so the frame encoder (`BB_METAL_FRAME=1`) now encodes classi
   and geometry shaders as compute kernels writing vertex records and strip indices into private
   scratch, then indexed strip draws of the generated pass-through vertex function
   (`mtl_geometry.h`). Indirect and instanced ones still go to KosmicKrisp.
+- **Switches for bisecting:** `BB_METAL_TESS=0` and `BB_METAL_GEOMETRY=0` keep those draws on
+  KosmicKrisp (with `BB_METAL_PRECISE=all` and `BB_METAL_TRANSFERS`).
+- **Self-test:** `BB_METAL_FRAME_TEST=1` (with `BB_METAL_FRAME=1`) runs 32 rounds of fills on a
+  16 MB buffer at the renderer's start, alternating between KosmicKrisp (fills of differing
+  bytes) and our queue (fills of one byte value, the copy), in one submission and split in two,
+  and reads them back: `Metal frame test: PASS`, or which write landed out of order, or that the
+  GPU did not finish (a wait between the queues never signalled).
 - Not yet: ordering by the renderer's barriers instead of the
   fence chain, batched tessellation, a KosmicKrisp-free frame. The classic device and encoder of
   Wooloomooloo2's native renderer are in the tree (`mtl_device`, `mtl_encoder`, `mtl_order`) for

@@ -81,7 +81,7 @@ private:
 
 class Device {
 public:
-    /// `mtl_device`/`mtl_queue`: id<MTLDevice>/id<MTLCommandQueue> to use (MoltenVK's); null: the
+    /// `mtl_device`/`mtl_queue`: id<MTLDevice>/id<MTLCommandQueue> to use (KosmicKrisp's); null: the
     /// system default device and a queue of our own.
     /// `commands` false: only for building pipelines (the shadow build): no queue, event,
     /// residency set, fences or watchdog, and none of the command functions may be used.
@@ -187,6 +187,7 @@ private:
     std::unique_ptr<Impl> impl;
     std::string name;
     Limits limits;
+    std::mutex commit_mutex; ///< bbport: Commit/CommitUntracked reach the queue in tick order
     mutable std::mutex residency_mutex;
     std::unordered_map<void*, u64> resident; ///< buffer -> length (residency_mutex)
     u64 resident_bytes{};                    ///< sum of `resident` (residency_mutex)

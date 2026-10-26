@@ -141,8 +141,16 @@ Device::~Device() {
     if (!impl->queue) {
         return; // pipelines only
     }
+    // bbport: an empty tracked command buffer, so untracked ones committed after the last tick
+    // (one queue completes in order) are done too before the fences and event go.
+    @autoreleasepool {
+        Commit((__bridge void*)[impl->queue commandBuffer]);
+    }
     Finish();
     counters->stop_watchdog.store(true, std::memory_order_release);
+    if (@available(macOS 15.0, *)) {
+        [impl->queue removeResidencySet:impl->residency]; // the queue may be borrowed
+    }
 }
 
 u64 Device::AllocatedSize() const {
@@ -162,6 +170,7 @@ bool Device::IsFree(u64 tick) const {
 }
 
 void Device::Wait(u64 tick) {
+    ASSERT_MSG(impl->queue, "Metal device made for pipelines only (no queue)");
     ASSERT_MSG(tick < CurrentTick(), "Waiting for tick {} that was never committed", tick);
     // Completion handlers raise the known tick and wake waiters (also for failed command buffers).
     for (u64 known = KnownGpuTick(); known < tick; known = KnownGpuTick()) {
@@ -177,6 +186,8 @@ void Device::Finish() {
 }
 
 void Device::CommitUntracked(void* command_buffer) {
+    ASSERT_MSG(impl->queue, "Metal device made for pipelines only (no queue)");
+    std::scoped_lock lock{commit_mutex};
     TrackGpuTime(command_buffer);
     [(__bridge id<MTLCommandBuffer>)command_buffer commit];
 }
@@ -213,6 +224,7 @@ void Device::TrackGpuTime(void* command_buffer) {
 }
 
 void Device::MakeResident(void* buffer) {
+    ASSERT_MSG(impl->queue, "Metal device made for pipelines only (no queue)");
     std::scoped_lock lock{residency_mutex};
     id<MTLBuffer> b = (__bridge id<MTLBuffer>)buffer;
     if (@available(macOS 15.0, *)) {
@@ -225,6 +237,7 @@ void Device::MakeResident(void* buffer) {
 }
 
 void Device::Evict(void* buffer) {
+    ASSERT_MSG(impl->queue, "Metal device made for pipelines only (no queue)");
     std::scoped_lock lock{residency_mutex};
     if (@available(macOS 15.0, *)) {
         [impl->residency removeAllocation:(__bridge id<MTLBuffer>)buffer];
@@ -242,7 +255,11 @@ u64 Device::ResidentBytes() const {
 }
 
 u64 Device::Commit(void* command_buffer) {
+    ASSERT_MSG(impl->queue, "Metal device made for pipelines only (no queue)");
     id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)command_buffer;
+    // bbport: ticks are taken and committed under one lock, so the queue gets them in order
+    // (a later tick completing first would raise the known tick past one still running).
+    std::scoped_lock lock{commit_mutex};
     const u64 tick = current_tick.fetch_add(1, std::memory_order_acq_rel);
     counters->committed.store(tick, std::memory_order_release);
     [cmd encodeSignalEvent:impl->event value:tick];

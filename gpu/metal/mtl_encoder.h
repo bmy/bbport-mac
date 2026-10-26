@@ -143,7 +143,8 @@ public:
     // dispatch. Slots: buffers 0-30, textures 0-127, samplers 0-15.
     // Bindings are unretained pointers that stay bound until replaced, into new Metal encoders
     // (which get every bound slot again) but not across Submit: a new command buffer starts
-    // unbound, as in Vulkan, so objects may be freed once their command buffer was submitted.
+    // unbound, as in Vulkan. Command buffers do not retain what they use: an object must live
+    // until its command buffer completed (KeepAlive, or freed after its tick).
     void SetBuffer(Stage stage, u32 slot, BufferRef buffer);
     /// Copies `size` bytes now. Up to 4 KiB they go inline (setBytes); more go through a
     /// temporary shared buffer kept until the command buffer completes.

@@ -250,7 +250,7 @@ private:
         bool vertex{};         ///< its vertex fence stands for it (a render encoder, not merged)
     };
     struct ClassState {
-        /// Per slot (on the heap: ~0.5 MiB per class).
+        /// Per slot (on the heap: about 1.1 MiB per class).
         std::unique_ptr<Slot[]> slots = std::make_unique<Slot[]>(Slots);
         u64 next{};   ///< the sequence number of the next encoder
         u64 oldest{}; ///< the oldest encoder not known complete

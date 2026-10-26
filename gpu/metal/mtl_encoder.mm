@@ -903,7 +903,9 @@ kernel void fill_u32(device uint* dst [[buffer(0)]], constant uint2& args [[buff
 };
 
 Encoder::Encoder(Device& device, Ordering ordering)
-    : impl{std::make_unique<Impl>(device, ordering)} {}
+    : impl{std::make_unique<Impl>(device, ordering)} {
+    ASSERT_MSG(impl->queue, "Metal encoder on a device made for pipelines only (no queue)");
+}
 
 Encoder::~Encoder() {
     if (impl->in_pass) {
@@ -1272,93 +1274,95 @@ void* Encoder::ComputeEncoder(Access buffers) {
 // ---- Render passes and draws (Task 5) ----
 
 void Encoder::BeginRenderPass(const RenderPassDesc& desc) {
-    ASSERT_MSG(!impl->in_pass, "BeginRenderPass inside a render pass");
-    EndEncoding();
-    MTLRenderPassDescriptor* first = [MTLRenderPassDescriptor renderPassDescriptor];
-    bool clears = false, attachments = false, resolves = false;
-    for (u32 i = 0; i < RenderPassDesc::MaxColors; ++i) {
-        const ColorAttachment& c = desc.colors[i];
-        if (!c.texture) {
-            continue;
-        }
-        attachments = true;
-        MTLRenderPassColorAttachmentDescriptor* a = first.colorAttachments[i];
-        a.texture = (__bridge id<MTLTexture>)c.texture;
-        a.level = c.level;
-        a.slice = c.slice;
-        a.depthPlane = c.depth_plane;
-        a.loadAction = c.clear ? MTLLoadActionClear : MTLLoadActionLoad;
-        a.storeAction = MTLStoreActionStore;
-        a.clearColor = MTLClearColorMake(c.clear_color[0], c.clear_color[1], c.clear_color[2],
-                                         c.clear_color[3]);
-        clears |= c.clear;
-        if (c.resolve_texture) {
-            a.resolveTexture = (__bridge id<MTLTexture>)c.resolve_texture;
-            a.resolveLevel = c.resolve_level;
-            a.resolveSlice = c.resolve_slice;
-            a.storeAction = MTLStoreActionStoreAndMultisampleResolve;
-            resolves = true;
-        }
-    }
-    const DepthAttachment& d = desc.depth;
-    if (d.texture) {
-        attachments = true;
-        id<MTLTexture> dt = (__bridge id<MTLTexture>)d.texture;
-        if (!d.stencil_only) {
-            MTLRenderPassDepthAttachmentDescriptor* a = first.depthAttachment;
-            a.texture = dt;
-            a.level = d.level;
-            a.slice = d.slice;
-            a.loadAction = d.clear_depth ? MTLLoadActionClear : MTLLoadActionLoad;
+    @autoreleasepool { // bbport: the pass descriptors (callers may have no pool)
+        ASSERT_MSG(!impl->in_pass, "BeginRenderPass inside a render pass");
+        EndEncoding();
+        MTLRenderPassDescriptor* first = [MTLRenderPassDescriptor renderPassDescriptor];
+        bool clears = false, attachments = false, resolves = false;
+        for (u32 i = 0; i < RenderPassDesc::MaxColors; ++i) {
+            const ColorAttachment& c = desc.colors[i];
+            if (!c.texture) {
+                continue;
+            }
+            attachments = true;
+            MTLRenderPassColorAttachmentDescriptor* a = first.colorAttachments[i];
+            a.texture = (__bridge id<MTLTexture>)c.texture;
+            a.level = c.level;
+            a.slice = c.slice;
+            a.depthPlane = c.depth_plane;
+            a.loadAction = c.clear ? MTLLoadActionClear : MTLLoadActionLoad;
             a.storeAction = MTLStoreActionStore;
-            a.clearDepth = d.depth;
-            clears |= d.clear_depth;
+            a.clearColor = MTLClearColorMake(c.clear_color[0], c.clear_color[1], c.clear_color[2],
+                                             c.clear_color[3]);
+            clears |= c.clear;
+            if (c.resolve_texture) {
+                a.resolveTexture = (__bridge id<MTLTexture>)c.resolve_texture;
+                a.resolveLevel = c.resolve_level;
+                a.resolveSlice = c.resolve_slice;
+                a.storeAction = MTLStoreActionStoreAndMultisampleResolve;
+                resolves = true;
+            }
         }
-        if (d.has_stencil || d.stencil_only) {
-            MTLRenderPassStencilAttachmentDescriptor* s = first.stencilAttachment;
-            s.texture = dt;
-            s.level = d.level;
-            s.slice = d.slice;
-            s.loadAction = d.clear_stencil ? MTLLoadActionClear : MTLLoadActionLoad;
-            s.storeAction = MTLStoreActionStore;
-            s.clearStencil = d.stencil;
-            clears |= d.clear_stencil;
+        const DepthAttachment& d = desc.depth;
+        if (d.texture) {
+            attachments = true;
+            id<MTLTexture> dt = (__bridge id<MTLTexture>)d.texture;
+            if (!d.stencil_only) {
+                MTLRenderPassDepthAttachmentDescriptor* a = first.depthAttachment;
+                a.texture = dt;
+                a.level = d.level;
+                a.slice = d.slice;
+                a.loadAction = d.clear_depth ? MTLLoadActionClear : MTLLoadActionLoad;
+                a.storeAction = MTLStoreActionStore;
+                a.clearDepth = d.depth;
+                clears |= d.clear_depth;
+            }
+            if (d.has_stencil || d.stencil_only) {
+                MTLRenderPassStencilAttachmentDescriptor* s = first.stencilAttachment;
+                s.texture = dt;
+                s.level = d.level;
+                s.slice = d.slice;
+                s.loadAction = d.clear_stencil ? MTLLoadActionClear : MTLLoadActionLoad;
+                s.storeAction = MTLStoreActionStore;
+                s.clearStencil = d.stencil;
+                clears |= d.clear_stencil;
+            }
         }
+        if (!attachments) {
+            first.renderTargetWidth = desc.width;
+            first.renderTargetHeight = desc.height;
+            first.defaultRasterSampleCount = 1;
+        }
+        // Target size: the first color attachment, else depth, else the declared render area.
+        u32 width = desc.width, height = desc.height;
+        const auto size_of = [&](void* texture, u32 level) {
+            id<MTLTexture> t = (__bridge id<MTLTexture>)texture;
+            width = std::max<u32>(1, u32(t.width) >> level);
+            height = std::max<u32>(1, u32(t.height) >> level);
+        };
+        const auto color = std::find_if(desc.colors.begin(), desc.colors.end(),
+                                        [](const ColorAttachment& c) { return c.texture != nullptr; });
+        if (color != desc.colors.end()) {
+            size_of(color->texture, color->level);
+        } else if (desc.depth.texture) {
+            size_of(desc.depth.texture, desc.depth.level);
+        }
+        impl->target_width = width;
+        impl->target_height = height;
+        MTLRenderPassDescriptor* load = [first copy];
+        for (u32 i = 0; i < RenderPassDesc::MaxColors; ++i) {
+            load.colorAttachments[i].loadAction = MTLLoadActionLoad;
+        }
+        load.depthAttachment.loadAction = MTLLoadActionLoad;
+        load.stencilAttachment.loadAction = MTLLoadActionLoad;
+        impl->pass_first = first;
+        impl->pass_load = load;
+        impl->pass_clears = clears;
+        impl->pass_resolves = resolves;
+        impl->pass_opened = false;
+        impl->pass_vertex_rw = desc.vertex_rw_buffer;
+        impl->in_pass = true;
     }
-    if (!attachments) {
-        first.renderTargetWidth = desc.width;
-        first.renderTargetHeight = desc.height;
-        first.defaultRasterSampleCount = 1;
-    }
-    // Target size: the first color attachment, else depth, else the declared render area.
-    u32 width = desc.width, height = desc.height;
-    const auto size_of = [&](void* texture, u32 level) {
-        id<MTLTexture> t = (__bridge id<MTLTexture>)texture;
-        width = std::max<u32>(1, u32(t.width) >> level);
-        height = std::max<u32>(1, u32(t.height) >> level);
-    };
-    const auto color = std::find_if(desc.colors.begin(), desc.colors.end(),
-                                    [](const ColorAttachment& c) { return c.texture != nullptr; });
-    if (color != desc.colors.end()) {
-        size_of(color->texture, color->level);
-    } else if (desc.depth.texture) {
-        size_of(desc.depth.texture, desc.depth.level);
-    }
-    impl->target_width = width;
-    impl->target_height = height;
-    MTLRenderPassDescriptor* load = [first copy];
-    for (u32 i = 0; i < RenderPassDesc::MaxColors; ++i) {
-        load.colorAttachments[i].loadAction = MTLLoadActionLoad;
-    }
-    load.depthAttachment.loadAction = MTLLoadActionLoad;
-    load.stencilAttachment.loadAction = MTLLoadActionLoad;
-    impl->pass_first = first;
-    impl->pass_load = load;
-    impl->pass_clears = clears;
-    impl->pass_resolves = resolves;
-    impl->pass_opened = false;
-    impl->pass_vertex_rw = desc.vertex_rw_buffer;
-    impl->in_pass = true;
 }
 
 void Encoder::EndRenderPass() {

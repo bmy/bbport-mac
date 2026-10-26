@@ -65,7 +65,7 @@ struct State {
     /// The system's default Metal device: on Apple silicon (one GPU) the same object as
     /// KosmicKrisp's. Building needs no queue. Stage 3, which draws with these pipelines, takes
     /// the device KosmicKrisp exports (patch 0008) and checks it is this one.
-    Metal::Device device{};
+    Metal::Device device{nullptr, nullptr, false}; // pipelines only
     std::filesystem::path dir;
     Metal::ShaderCompiler compiler;
     Metal::PsoCache pso;

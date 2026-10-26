@@ -242,11 +242,12 @@ if (APPLE AND (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64" OR
     endif()
     if (bb_spvc_prefix AND spirv_cross_core_FOUND AND spirv_cross_glsl_FOUND AND
         spirv_cross_msl_FOUND AND BB_SPIRV_CROSS_INCLUDE_DIR)
-        set(BB_METAL_OBJCXX_SOURCES metal/mtl_device.mm metal/mtl_geometry.mm
-            metal/mtl_frame.mm metal/mtl_pso_cache.mm metal/mtl_shader.mm metal/mtl_shadow.mm
-            metal/mtl_tessellation.mm metal/vk_to_mtl.mm)
+        set(BB_METAL_OBJCXX_SOURCES metal/mtl_device.mm metal/mtl_encoder.mm
+            metal/mtl_geometry.mm metal/mtl_frame.mm metal/mtl_pso_cache.mm metal/mtl_shader.mm
+            metal/mtl_shadow.mm metal/mtl_tessellation.mm metal/vk_to_mtl.mm)
         target_sources(bbgpu PRIVATE ${BB_METAL_OBJCXX_SOURCES} metal/mtl_spirv_geometry.cpp
-            metal/mtl_spirv_pervertex.cpp metal/mtl_spirv_rectlist.cpp metal/mtl_spirv_robust.cpp)
+            metal/mtl_spirv_pervertex.cpp metal/mtl_spirv_rectlist.cpp metal/mtl_spirv_robust.cpp
+            metal/mtl_buffer_barriers.cpp metal/mtl_object.cpp metal/mtl_order.cpp)
         set_source_files_properties(${BB_METAL_OBJCXX_SOURCES} PROPERTIES
                                     COMPILE_OPTIONS "-fobjc-arc")
         target_include_directories(bbgpu PRIVATE ${BB_SPIRV_CROSS_INCLUDE_DIR})

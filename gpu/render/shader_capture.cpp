@@ -82,7 +82,7 @@ void Write(const Shader::Info& in_info, const Shader::RuntimeInfo& runtime_info,
     Shader::guest_read_hook = nullptr;
     Out out;
     out.Raw("BBSC", 4);
-    out.Value(u32{3}); // format version (3: Shader::Profile::precise_vertex_stages_only)
+    out.Value(u32{4}); // format version (4: Shader::Profile::tess_factor_cap)
     // Globals the backend reads (object motion vectors).
     out.Value(Shader::MotionVectors::params_address);
     out.Value(Shader::MotionVectors::positions_address);

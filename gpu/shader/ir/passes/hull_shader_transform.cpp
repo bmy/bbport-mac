@@ -26,6 +26,7 @@
 // The hull shader's packed V1 (InvocationId << 8 | PatchIdInVgt) is read with BFEs: the patch id
 // becomes 0, the invocation id the InvocationId attribute (0 in passthrough shaders).
 // Tessellation factor stores (to TessFactorsBufferBase) become the tess level patch outputs.
+#include <cstdlib>
 #include <optional>
 #include <unordered_map>
 #include <vector>
@@ -305,11 +306,19 @@ void LowerTessFactorStore(IR::Block& block, IR::Inst& inst, const RuntimeInfo& r
     const IR::Value data = inst.Arg(IR::StoreBufferArgs::Data);
     const u32 num_dwords = u32(inst.GetOpcode()) - u32(Opcode::StoreBufferU32) + 1;
 
+    // bbport (macOS) experiment, BB_TESS_MAX=n: factors capped at n (Profile::tess_factor_cap).
+    static const f32 cap = [] {
+        const char* env = std::getenv("BB_TESS_MAX");
+        return env ? f32(std::strtoul(env, nullptr, 10)) : 0.0f;
+    }();
     const auto as_float = [&](const IR::Value& value) -> IR::F32 {
+        IR::F32 factor;
         if (const IR::Inst* const cast = InstOf(value, Opcode::BitCastU32F32)) {
-            return IR::F32{cast->Arg(0)};
+            factor = IR::F32{cast->Arg(0)};
+        } else {
+            factor = ir.BitCast<IR::F32, IR::U32>(IR::U32{value});
         }
-        return ir.BitCast<IR::F32, IR::U32>(IR::U32{value});
+        return cap > 0.0f ? IR::F32{ir.FPMin(factor, ir.Imm32(cap))} : factor;
     };
     inst.Invalidate();
     if (num_dwords == 1) {

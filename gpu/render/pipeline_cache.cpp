@@ -241,6 +241,15 @@ Shader::Profile MakeProfile(const Instance& instance, u32 sparse_page_shift) {
             }
             return vertex_only;
         }(),
+        .tess_factor_cap = [] {
+            const char* env = std::getenv("BB_TESS_MAX");
+            const u32 cap = env ? u32(std::strtoul(env, nullptr, 10)) : 0;
+            if (cap) {
+                LOG_WARNING(Render, "Shaders: tessellation factors capped at {} (BB_TESS_MAX, an "
+                                    "experiment: less detail than the game asks for)", cap);
+            }
+            return cap;
+        }(),
         // BB_LAYER_MEMORY: buffers over nearly all memory go through the page table.
         .paged_buffers = VideoCore::BufferCache::LayerPagedActive(),
         // The game's buffer copy shader, from its profile (games/).

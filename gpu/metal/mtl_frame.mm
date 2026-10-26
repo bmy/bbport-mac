@@ -63,7 +63,7 @@ struct Counters {
     std::atomic<unsigned long long> metal_draws{}, metal_dispatches{}, metal_transfers{},
         fallback_draws{},
         fallback_dispatches{}, fallback_other{}, metal_buffers{}, kk_segments{}, switches{},
-        gpu_errors{};
+        metal_passes{}, pass_breaks{}, kk_reopens{}, gpu_errors{};
 };
 Counters counters;
 
@@ -534,12 +534,41 @@ namespace {
 
 // ---- Segments ----
 
-void EndEncoders(Owned& o) {
-    if (o.render) {
-        ProducerBarrier(o.render);
-        [o.render endEncoding];
-        o.render = nil;
+/// Ends the render encoder (every one renders a Vulkan pass, its store actions left to its end):
+/// `pass_end`, at vkCmdEndRendering, stores what Vulkan's store operations keep; any other end
+/// splits the pass (it reopens, loading), so everything is stored.
+void CloseRender(Owned& o, bool pass_end) {
+    if (!o.render) {
+        return;
     }
+    MTL4RenderPassDescriptor* rp = o.pass_first;
+    const auto store = [&](VkAttachmentStoreOp op) {
+        return pass_end && op == VK_ATTACHMENT_STORE_OP_DONT_CARE ? MTLStoreActionDontCare
+                                                                 : MTLStoreActionStore;
+    };
+    for (u32 i = 0; rp && i < o.pass_colors.size(); ++i) {
+        if (rp.colorAttachments[i].texture) {
+            [o.render setColorStoreAction:store(o.pass_colors[i].storeOp) atIndex:i];
+        }
+    }
+    if (rp && rp.depthAttachment.texture) {
+        [o.render setDepthStoreAction:store(o.pass_depth.storeOp)];
+    }
+    if (rp && rp.stencilAttachment.texture) {
+        [o.render setStencilStoreAction:store(o.pass_stencil.storeOp)];
+    }
+    if (pass_end) {
+        ++counters.metal_passes;
+    } else if (o.in_pass) {
+        ++counters.pass_breaks;
+    }
+    ProducerBarrier(o.render);
+    [o.render endEncoding];
+    o.render = nil;
+}
+
+void EndEncoders(Owned& o) {
+    CloseRender(o, false);
     if (o.compute) {
         ProducerBarrier(o.compute);
         [o.compute endEncoding];
@@ -595,6 +624,7 @@ void ReplayPass(Owned& o, VkCommandBuffer cb) {
     std::vector<VkRenderingAttachmentInfo> colors = o.pass_colors;
     VkRenderingAttachmentInfo depth = o.pass_depth, stencil = o.pass_stencil;
     if (o.pass_begun) {
+        ++counters.kk_reopens;
         for (auto& c : colors) {
             c.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
         }
@@ -840,11 +870,7 @@ id<MTL4ComputeCommandEncoder> ComputeEncoder(Owned& o) {
         return o.compute;
     }
     id<MTL4CommandBuffer> cmd = Metal(o);
-    if (o.render) {
-        ProducerBarrier(o.render);
-        [o.render endEncoding];
-        o.render = nil;
-    }
+    CloseRender(o, false);
     o.compute = [cmd computeCommandEncoder];
     if (!o.compute_table) {
         o.compute_table = NewTable(false);
@@ -1350,8 +1376,10 @@ MTLClearColor ClearColor(const VkClearColorValue& c, MTLPixelFormat format) {
 /// The Metal descriptors of the begun pass; false when Metal cannot render into it.
 bool BuildPass(Owned& o) {
     const VkRenderingInfo& info = o.pass_info;
+    // Suspended / resumed passes skip their store / load operations: not modelled here.
     if (info.viewMask || info.layerCount > 1 || o.pass_colors.size() > 8 ||
-        info.renderArea.offset.x || info.renderArea.offset.y) {
+        info.renderArea.offset.x || info.renderArea.offset.y ||
+        (info.flags & (VK_RENDERING_SUSPENDING_BIT | VK_RENDERING_RESUMING_BIT))) {
         return false;
     }
     MTL4RenderPassDescriptor* rp = [MTL4RenderPassDescriptor new];
@@ -1396,9 +1424,9 @@ bool BuildPass(Owned& o) {
         rp.colorAttachments[i].level = t.level;
         rp.colorAttachments[i].slice = t.slice;
         rp.colorAttachments[i].loadAction = Load(a.loadOp);
-        // Stored always: the pass may be split (reopened) before its end, where Vulkan's store
-        // operation has not happened yet.
-        rp.colorAttachments[i].storeAction = MTLStoreActionStore;
+        // Decided at the encoder's end (CloseRender): Vulkan's store operation at the pass's
+        // end, a store where the pass is split (reopened) before it.
+        rp.colorAttachments[i].storeAction = MTLStoreActionUnknown;
         rp.colorAttachments[i].clearColor = ClearColor(a.clearValue.color, t.texture.pixelFormat);
         o.pass_color_formats[i] = u32(t.texture.pixelFormat);
     }
@@ -1415,7 +1443,7 @@ bool BuildPass(Owned& o) {
         rp.depthAttachment.level = t.level;
         rp.depthAttachment.slice = t.slice;
         rp.depthAttachment.loadAction = Load(a.loadOp);
-        rp.depthAttachment.storeAction = MTLStoreActionStore;
+        rp.depthAttachment.storeAction = MTLStoreActionUnknown;
         rp.depthAttachment.clearDepth = a.clearValue.depthStencil.depth;
         o.pass_depth_format = u32(t.texture.pixelFormat);
     }
@@ -1435,7 +1463,7 @@ bool BuildPass(Owned& o) {
         rp.stencilAttachment.level = t.level;
         rp.stencilAttachment.slice = t.slice;
         rp.stencilAttachment.loadAction = Load(a.loadOp);
-        rp.stencilAttachment.storeAction = MTLStoreActionStore;
+        rp.stencilAttachment.storeAction = MTLStoreActionUnknown;
         rp.stencilAttachment.clearStencil = a.clearValue.depthStencil.stencil;
         o.pass_stencil_format = u32(t.texture.pixelFormat);
     }
@@ -1843,12 +1871,9 @@ void BufferDestroyed(VkBuffer buffer) {
 namespace {
 /// Ends a Metal render encoder for something that must come between its draws in Vulkan order
 /// (a barrier, a fallback outside the pass): the pass reopens, loading, at the next draw.
-void BreakPass(Owned& o) {
-    if (o.render) {
-        ProducerBarrier(o.render);
-        [o.render endEncoding];
-        o.render = nil;
-    }
+/// `pass_end`: at vkCmdEndRendering (Vulkan's store operations apply).
+void BreakPass(Owned& o, bool pass_end = false) {
+    CloseRender(o, pass_end);
 }
 } // namespace
 
@@ -1959,7 +1984,7 @@ void CmdEndRendering(Owned& o) {
             driver.vkCmdEndRendering(o.kk->cb);
             o.kk_in_pass = false;
         }
-        BreakPass(o);
+        BreakPass(o, true);
         o.in_pass = false;
         o.pass_first = nil;
         o.pass_reopen = nil;
@@ -3015,13 +3040,15 @@ void Report(double seconds) {
     }
     Print("Metal frame: per second %.0f draws, %.0f dispatches and %.0f transfers in Metal, %.0f "
           "draws and %.0f dispatches and %.0f other commands to KosmicKrisp (%.0f segments, %.0f "
-          "switches); %.0f Metal command buffers; GPU errors so far %llu; to KosmicKrisp "
-          "because: %s\n",
+          "switches); %.0f Metal command buffers; render passes ended in Metal %.0f, split %.0f "
+          "times in Metal, reopened %.0f times on KosmicKrisp; GPU errors so far %llu; to "
+          "KosmicKrisp because: %s\n",
           take(counters.metal_draws), take(counters.metal_dispatches),
           take(counters.metal_transfers),
           take(counters.fallback_draws), take(counters.fallback_dispatches),
           take(counters.fallback_other), take(counters.kk_segments), take(counters.switches),
-          take(counters.metal_buffers), counters.gpu_errors.load(),
+          take(counters.metal_buffers), take(counters.metal_passes), take(counters.pass_breaks),
+          take(counters.kk_reopens), counters.gpu_errors.load(),
           top.empty() ? "-" : top.c_str());
 }
 

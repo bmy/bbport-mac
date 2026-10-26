@@ -474,6 +474,12 @@ struct PushSet {
     std::vector<PushWrite> writes; ///< one per (binding, first array element)
 };
 
+/// bbport: a descriptor set's contents as last updated (vkUpdateDescriptorSets), decoded as push
+/// writes are; a snapshot (an update makes a new one), so a bind keeps what it bound.
+struct SetContents {
+    std::vector<PushWrite> writes; ///< one per (binding, first array element)
+};
+
 struct BoundSets {
     VkPipelineLayout layout{};
     u32 first{};
@@ -523,6 +529,9 @@ struct Owned {
     const Metal::ComputePipeline* compute_metal{};
     std::unordered_map<u32, PushSet> push_sets; ///< by bind point << 16 | set
     std::unordered_map<u32, BoundSets> bound_sets; ///< by bind point << 16 | set
+    /// bbport: the contents of the bound sets whose contents are known (DescriptorSetsUpdated),
+    /// by bind point << 16 | set; a bound set without them makes its draws fall back.
+    std::unordered_map<u32, std::shared_ptr<const SetContents>> set_contents;
     /// Push constants per bind point, as KosmicKrisp keeps them (graphics, compute).
     std::array<std::array<u8, 256>, 2> push{};
     std::vector<PushCall> push_calls;
@@ -1078,13 +1087,31 @@ void Decode(PushWrite& w) {
     }
 }
 
-/// The element of a pushed binding, null when nothing was pushed there.
+/// bbport: descriptor sets' contents by handle (DescriptorSetsAllocated, DescriptorSetsUpdated);
+/// null: not known (written by a copy or a type not decoded). Never destroyed: recording threads
+/// may still look sets up while the process exits.
+std::mutex& set_contents_mutex = *new std::mutex;
+auto& known_sets = *new std::unordered_map<VkDescriptorSet, std::shared_ptr<const SetContents>>;
+
+std::shared_ptr<const SetContents> SetContentsOf(VkDescriptorSet set) {
+    std::scoped_lock lock{set_contents_mutex};
+    const auto it = known_sets.find(set);
+    return it == known_sets.end() ? nullptr : it->second;
+}
+
+/// The element of a pushed binding (or of a bound set's), null when nothing was written there.
 const Bound* FindBound(const Owned& o, VkPipelineBindPoint point, u32 set, u32 binding, u32 e) {
-    const auto it = o.push_sets.find((u32(point) << 16) | set);
-    if (it == o.push_sets.end()) {
+    const std::vector<PushWrite>* writes = nullptr;
+    if (const auto it = o.push_sets.find((u32(point) << 16) | set); it != o.push_sets.end()) {
+        writes = &it->second.writes;
+    } else if (const auto c = o.set_contents.find((u32(point) << 16) | set);
+               c != o.set_contents.end()) {
+        writes = &c->second->writes; // bbport: a bound descriptor set's
+    }
+    if (!writes) {
         return nullptr;
     }
-    for (const PushWrite& w : it->second.writes) {
+    for (const PushWrite& w : *writes) {
         if (w.write.dstBinding == binding && e >= w.write.dstArrayElement &&
             e < w.write.dstArrayElement + w.write.descriptorCount) {
             return &w.bound[e - w.write.dstArrayElement];
@@ -1103,8 +1130,9 @@ bool StageResolvable(const Owned& o, VkPipelineBindPoint point, const Metal::Com
         if (b.kind == Metal::ShaderBinding::Kind::PushConstants) {
             continue;
         }
-        if (o.bound_sets.contains((u32(point) << 16) | b.set)) {
-            why = "a descriptor set (not pushed)";
+        if (o.bound_sets.contains((u32(point) << 16) | b.set) &&
+            !o.set_contents.contains((u32(point) << 16) | b.set)) {
+            why = "a descriptor set (not pushed) whose contents are not known";
             return false;
         }
         for (u32 e = 0; e < b.count; ++e) {
@@ -1188,8 +1216,9 @@ bool BindStage(Owned& o, Stage stage, VkPipelineBindPoint point, const Metal::Co
         if (b.kind == Kind::PushConstants) {
             continue;
         }
-        if (o.bound_sets.contains((u32(point) << 16) | b.set)) {
-            why = "a descriptor set (not pushed)";
+        if (o.bound_sets.contains((u32(point) << 16) | b.set) &&
+            !o.set_contents.contains((u32(point) << 16) | b.set)) {
+            why = "a descriptor set (not pushed) whose contents are not known";
             return false;
         }
         for (u32 e = 0; e < b.count; ++e) {
@@ -2469,6 +2498,106 @@ VkResult Submit(VkQueue vkqueue, const Batch* batches, uint32_t count, VkFence f
     }
 }
 
+void DescriptorSetsAllocated(uint32_t count, const VkDescriptorSet* sets) {
+    std::scoped_lock lock{set_contents_mutex};
+    const auto empty = std::make_shared<const SetContents>();
+    for (u32 i = 0; i < count; ++i) {
+        if (sets[i]) {
+            known_sets[sets[i]] = empty; // a reset pool's handles come back here too
+        }
+    }
+}
+
+void DescriptorSetsUpdated(uint32_t write_count, const VkWriteDescriptorSet* writes,
+                           uint32_t copy_count, const VkCopyDescriptorSet* copies) {
+    if (!write_count && !copy_count) {
+        return;
+    }
+    @autoreleasepool {
+        // The writes decoded outside the lock, by set, in order.
+        std::vector<std::pair<VkDescriptorSet, PushWrite>> decoded;
+        std::vector<VkDescriptorSet> unknown;
+        decoded.reserve(write_count);
+        for (u32 i = 0; i < write_count; ++i) {
+            const VkWriteDescriptorSet& in = writes[i];
+            const u32 n = in.descriptorCount;
+            PushWrite w;
+            w.write = in;
+            w.write.pNext = nullptr;
+            bool ok = true;
+            switch (in.descriptorType) {
+            case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+            case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+                ok = in.pBufferInfo || !n;
+                if (ok) {
+                    w.buffer_infos.assign(in.pBufferInfo, in.pBufferInfo + n);
+                }
+                break;
+            case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
+            case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+                ok = in.pTexelBufferView || !n;
+                if (ok) {
+                    w.texel_views.assign(in.pTexelBufferView, in.pTexelBufferView + n);
+                }
+                break;
+            case VK_DESCRIPTOR_TYPE_SAMPLER:
+            case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
+            case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+            case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+                ok = in.pImageInfo || !n;
+                if (ok) {
+                    w.image_infos.assign(in.pImageInfo, in.pImageInfo + n);
+                }
+                break;
+            default:
+                ok = false; // dynamic buffers (offsets at bind), input attachments, the rest
+                break;
+            }
+            if (!ok) {
+                unknown.push_back(in.dstSet);
+                continue;
+            }
+            Decode(w);
+            decoded.emplace_back(in.dstSet, std::move(w));
+        }
+        for (u32 i = 0; i < copy_count; ++i) {
+            unknown.push_back(copies[i].dstSet); // (not decoded: their draws fall back)
+        }
+        std::scoped_lock lock{set_contents_mutex};
+        std::unordered_map<VkDescriptorSet, std::shared_ptr<SetContents>> updated;
+        for (auto& [set, w] : decoded) {
+            auto& next = updated[set];
+            if (!next) {
+                const auto it = known_sets.find(set);
+                if (it == known_sets.end() || !it->second) {
+                    continue; // allocated before the layer saw it, or unknown already
+                }
+                next = std::make_shared<SetContents>(*it->second);
+            }
+            auto at = std::find_if(next->writes.begin(), next->writes.end(),
+                                   [&](const PushWrite& x) {
+                                       return x.write.dstBinding == w.write.dstBinding &&
+                                              x.write.dstArrayElement == w.write.dstArrayElement;
+                                   });
+            if (at != next->writes.end()) {
+                *at = std::move(w);
+            } else {
+                next->writes.push_back(std::move(w));
+            }
+        }
+        for (auto& [set, next] : updated) {
+            if (next) {
+                known_sets[set] = std::move(next);
+            }
+        }
+        for (const VkDescriptorSet set : unknown) {
+            if (const auto it = known_sets.find(set); it != known_sets.end()) {
+                it->second = nullptr; // until it is allocated again
+            }
+        }
+    }
+}
+
 void SamplerCreated(VkSampler sampler, const VkSamplerCreateInfo* info) {
     using namespace Metal::VkToMtl;
     @autoreleasepool {
@@ -2700,6 +2829,7 @@ void CmdPushDescriptorSet(Owned& o, VkPipelineBindPoint point, VkPipelineLayout 
         }
         s.layout = layout;
         o.bound_sets.erase((u32(point) << 16) | set);
+        o.set_contents.erase((u32(point) << 16) | set);
         for (u32 i = 0; i < count; ++i) {
             const VkWriteDescriptorSet& in = writes[i];
             PushWrite w;
@@ -2746,6 +2876,24 @@ void CmdBindDescriptorSets(Owned& o, VkPipelineBindPoint point, VkPipelineLayout
     // is current, in set order).
     for (u32 i = 0; i < count; ++i) {
         o.push_sets.erase((u32(point) << 16) | (first + i));
+        // bbport: the set's contents for the Metal draws (none with dynamic offsets: the
+        // offsets are not applied to them).
+        static const bool sets_in_metal = [] {
+            const char* env = std::getenv("BB_METAL_DESCRIPTOR_SETS");
+            const bool on = !(env && env[0] == '0');
+            if (!on) {
+                Print("Metal frame: draws reading descriptor sets go to KosmicKrisp "
+                      "(BB_METAL_DESCRIPTOR_SETS=0)\n");
+            }
+            return on;
+        }();
+        std::shared_ptr<const SetContents> contents =
+            dynamic_count || !sets_in_metal ? nullptr : SetContentsOf(sets[i]);
+        if (contents) {
+            o.set_contents[(u32(point) << 16) | (first + i)] = std::move(contents);
+        } else {
+            o.set_contents.erase((u32(point) << 16) | (first + i));
+        }
     }
     // What is left of a partly covered bind stays (without dynamic offsets: they cannot be
     // told apart per set; such a bind is dropped whole).
@@ -3638,13 +3786,30 @@ void CmdClearColorImage(Owned& o, VkImage image, VkImageLayout layout,
         id<MTLTexture> texture =
             TransfersInMetal(Transfer::Clear) && !KkOnly(o) ? ImageTexture(image, format)
                                                                    : nil;
-        // A format stored swizzled (BGRA twins, 4-4-4-4) clears with its channels moved:
-        // KosmicKrisp knows how.
-        if (!texture || !ClearableTexture(texture) ||
-            Metal::VkToMtl::IsDepthPixelFormat(u32(texture.pixelFormat)) ||
-            !(Metal::VkToMtl::FormatSwizzle(vk::Format(format)) ==
-              Metal::VkToMtl::IdentitySwizzle)) {
-            if (VkCommandBuffer cb = KkTransfer(o, "a color clear KosmicKrisp makes")) {
+        // bbport: a format stored swizzled (BGRA twins, 4-4-4-4) clears with its channels moved
+        // (each stored channel gets the value of the channel that reads it).
+        const auto swizzle = Metal::VkToMtl::FormatSwizzle(vk::Format(format));
+        VkClearColorValue stored{};
+        bool permutation = true;
+        {
+            const u8 reads[4] = {swizzle.r, swizzle.g, swizzle.b, swizzle.a};
+            for (u32 c = 0; c < 4; ++c) {
+                if (reads[c] >= Metal::VkToMtl::SwizzleRed &&
+                    reads[c] <= Metal::VkToMtl::SwizzleAlpha) {
+                    stored.uint32[reads[c] - Metal::VkToMtl::SwizzleRed] = color->uint32[c];
+                } else if (reads[c] != Metal::VkToMtl::SwizzleOne) {
+                    permutation = false; // (a channel read as one: BC1, not a clear target)
+                }
+            }
+        }
+        const char* why = !texture                       ? "a color clear KosmicKrisp makes"
+                          : !ClearableTexture(texture)   ? "a color clear of an image Metal cannot render into"
+                          : Metal::VkToMtl::IsDepthPixelFormat(u32(texture.pixelFormat))
+                              ? "a color clear of a depth format"
+                          : !permutation ? "a color clear of a format stored swizzled"
+                                         : nullptr;
+        if (why) {
+            if (VkCommandBuffer cb = KkTransfer(o, why)) {
                 driver.vkCmdClearColorImage(cb, image, layout, color, count, ranges);
             }
             return;
@@ -3656,7 +3821,7 @@ void CmdClearColorImage(Owned& o, VkImage image, VkImageLayout layout,
             rp.colorAttachments[0].slice = layer;
             rp.colorAttachments[0].loadAction = MTLLoadActionClear;
             rp.colorAttachments[0].storeAction = MTLStoreActionStore;
-            rp.colorAttachments[0].clearColor = ClearColor(*color, texture.pixelFormat);
+            rp.colorAttachments[0].clearColor = ClearColor(stored, texture.pixelFormat);
             ClearPass(o, rp);
         });
         ++counters.metal_transfers;

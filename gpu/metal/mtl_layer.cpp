@@ -67,7 +67,8 @@ namespace {
     X(vkCmdExecuteCommands) X(vkFreeCommandBuffers) X(vkCreateSampler) X(vkDestroySampler)         \
     X(vkCreateImageView) X(vkDestroyImageView) X(vkCreateBuffer) X(vkDestroyBuffer)                \
     X(vkCreateImage) X(vkDestroyImage) X(vkCreateShaderModule) X(vkCreateGraphicsPipelines)       \
-    X(vkCreateComputePipelines) X(vkDestroyPipeline) X(vkGetDeviceProcAddr)                        \
+    X(vkCreateComputePipelines) X(vkDestroyPipeline) X(vkAllocateDescriptorSets)                   \
+    X(vkUpdateDescriptorSets) X(vkGetDeviceProcAddr)                                               \
     X(vkGetInstanceProcAddr)
 
 enum Id : unsigned {
@@ -391,7 +392,8 @@ struct Hook<I, R (*)(A...)> {
                I == Id_vkDestroyImageView || I == Id_vkCreateBuffer ||
                I == Id_vkDestroyBuffer || I == Id_vkCreateImage || I == Id_vkDestroyImage ||
                I == Id_vkCreateShaderModule || I == Id_vkCreateGraphicsPipelines ||
-               I == Id_vkCreateComputePipelines || I == Id_vkDestroyPipeline;
+               I == Id_vkCreateComputePipelines || I == Id_vkDestroyPipeline ||
+               I == Id_vkAllocateDescriptorSets || I == Id_vkUpdateDescriptorSets;
     }
 
     static R Frame(A... args) {
@@ -480,6 +482,19 @@ struct Hook<I, R (*)(A...)> {
             return result;
         } else if constexpr (I == Id_vkDestroyPipeline) {
             MetalShadow::PipelineDestroyed(std::get<1>(t));
+            return original(args...);
+        } else if constexpr (I == Id_vkAllocateDescriptorSets) {
+            // bbport: the contents of descriptor sets (the game's pipelines that do not push
+            // theirs), for the draws that bind them; a new set starts empty.
+            const R result = original(args...);
+            const auto [dev, info, sets] = t;
+            if (result == VK_SUCCESS && info && sets) {
+                F::DescriptorSetsAllocated(info->descriptorSetCount, sets);
+            }
+            return result;
+        } else if constexpr (I == Id_vkUpdateDescriptorSets) {
+            const auto [dev, write_count, writes, copy_count, copies] = t;
+            F::DescriptorSetsUpdated(write_count, writes, copy_count, copies);
             return original(args...);
         } else {
             // vkCmd*: the first argument is the command buffer.

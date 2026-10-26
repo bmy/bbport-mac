@@ -299,8 +299,17 @@ has no tessellator, so the frame encoder (`BB_METAL_FRAME=1`) now encodes classi
   workers (`MetalShadow::FormatVariant`; the draw falls back until it is ready); an aspect its
   key has none of is declared and never tested or written. `BB_METAL_FORMAT_VARIANTS=0` turns
   them off.
-- **Switches for bisecting:** `BB_METAL_TESS=0`, `BB_METAL_GEOMETRY=0` and
-  `BB_METAL_FORMAT_VARIANTS=0` keep those draws on KosmicKrisp (with `BB_METAL_PRECISE=all` and
+- **Descriptor sets in Metal:** the game's pipelines with more resources than push
+  descriptors take bind descriptor sets (`render/pipeline.cpp`); their draws fell back (about
+  80 a second at the lamp). The layer now sees `vkAllocateDescriptorSets` (a set starts empty)
+  and `vkUpdateDescriptorSets` (the writes, decoded as push writes are, kept as a snapshot per
+  set); a bind takes the sets' snapshots, and the draws read them as they read pushed ones.
+  Sets written by copies or with dynamic offsets still fall back. `BB_METAL_DESCRIPTOR_SETS=0`
+  turns it off.
+- **Color clears of swizzled formats in Metal:** a format stored swizzled (the BGRA twins,
+  4-4-4-4) is cleared with the clear color's channels moved to where they are stored.
+- **Switches for bisecting:** `BB_METAL_TESS=0`, `BB_METAL_GEOMETRY=0`,
+  `BB_METAL_FORMAT_VARIANTS=0` and `BB_METAL_DESCRIPTOR_SETS=0` keep those draws on KosmicKrisp (with `BB_METAL_PRECISE=all` and
   `BB_METAL_TRANSFERS`).
 - **Self-test:** `BB_METAL_FRAME_TEST=1` (with `BB_METAL_FRAME=1`) runs 32 rounds of fills on a
   16 MB buffer at the renderer's start, alternating between KosmicKrisp (fills of differing

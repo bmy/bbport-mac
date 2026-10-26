@@ -858,6 +858,58 @@ MetalObjects BuildLibrary(id<MTLDevice> device, const std::string& msl, const st
     return objects;
 }
 
+/// bbport: whether the Metal translation of this variant keeps SPIR-V NoContraction. SPIRV-Cross
+/// makes each such add, multiply and FMA a call to an `[[clang::optnone]]` helper (spvFAdd,
+/// spvFMul, ...), which the Metal compiler cannot optimise: in 94 of 100 of the game's modules,
+/// 11,213 calls. KosmicKrisp compiles the same SPIR-V with a safe-math pragma instead, so this
+/// cost is the Metal path's own. Wooloomooloo2's port measured the same change on its Metal path
+/// (precise only in the vertex stages: 19.6 -> 12.1 ms a frame). The recompiler marks float ops
+/// exact so that every pass computes the same positions; only the stages that compute positions
+/// keep it here (vertex, the vertex and control kernels of a tessellated draw, the evaluation
+/// shader, the geometry kernel). BB_METAL_PRECISE=all keeps it everywhere (as before).
+bool KeepsNoContraction(ShaderStage stage) {
+    static const bool keep_all = [] {
+        const char* env = std::getenv("BB_METAL_PRECISE");
+        const bool all = env && std::strcmp(env, "all") == 0;
+        if (all) {
+            LOG_INFO(Render, "Metal shaders: exact float maths in every stage (BB_METAL_PRECISE=all)");
+        }
+        return all;
+    }();
+    return keep_all || (stage != ShaderStage::Fragment && stage != ShaderStage::Compute);
+}
+
+/// `spirv` without its NoContraction decorations (OpDecorate <id> NoContraction), or empty when
+/// it has none. `removed` counts them.
+std::vector<u32> StripNoContraction(std::span<const u32> spirv, u32& removed) {
+    constexpr u32 kOpDecorate = 71;
+    constexpr u32 kDecorationNoContraction = 42;
+    removed = 0;
+    std::vector<u32> out;
+    if (spirv.size() < 5) {
+        return out;
+    }
+    size_t at = 5;
+    while (at < spirv.size()) {
+        const u32 count = spirv[at] >> 16;
+        if (count == 0 || at + count > spirv.size()) {
+            return {}; // malformed: left as it is (the translation reports it)
+        }
+        const bool strip = (spirv[at] & 0xffff) == kOpDecorate && count == 3 &&
+                           spirv[at + 2] == kDecorationNoContraction;
+        if (strip) {
+            if (out.empty()) {
+                out.assign(spirv.begin(), spirv.begin() + at);
+            }
+            ++removed;
+        } else if (!out.empty()) {
+            out.insert(out.end(), spirv.begin() + at, spirv.begin() + at + count);
+        }
+        at += count;
+    }
+    return out;
+}
+
 } // namespace
 
 const char* ShaderStageName(ShaderStage stage) {
@@ -1043,6 +1095,11 @@ CompileResult ShaderCompiler::Compile(std::span<const u32> spirv, u64 hash, std:
         break;
     }
     }
+    // bbport: the MSL without NoContraction has a file of its own (BB_METAL_PRECISE switches).
+    const bool keep_precise = KeepsNoContraction(scan.stage);
+    if (!keep_precise) {
+        tag += "_np";
+    }
     const std::filesystem::path cache_file =
         cache_dir / fmt::format("{:016x}_{}{}_{:016x}.metal", hash, stage_name, tag, spirv_hash);
     id<MTLDevice> mtl_device = device.GetImpl().device;
@@ -1101,6 +1158,20 @@ CompileResult ShaderCompiler::Compile(std::span<const u32> spirv, u64 hash, std:
             return fail(CompileStatus::Failed, "robust buffer access: " + robust.error);
         }
         module = robust.spirv;
+        std::vector<u32> imprecise;
+        if (!keep_precise) {
+            u32 removed = 0;
+            imprecise = StripNoContraction(module, removed);
+            if (removed) {
+                module = imprecise;
+                if (counters.precise_stripped.fetch_add(removed, std::memory_order_relaxed) == 0) {
+                    LOG_INFO(Render, "Metal shaders: exact float maths in the position stages "
+                                     "only ({} NoContraction ops dropped from the first pixel or "
+                                     "compute shader; BB_METAL_PRECISE=all keeps them)",
+                             removed);
+                }
+            }
+        }
         try {
             msl = Convert(module, scan, variant, *shader);
         } catch (const std::exception& e) {

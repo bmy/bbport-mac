@@ -227,6 +227,7 @@ public:
         std::atomic<u64> unsupported_stages{};  ///< CompileStatus::UnsupportedStage
         std::atomic<u64> cache_hits{};          ///< MSL taken from the disk cache
         std::atomic<u64> cache_stores{};        ///< MSL written to the disk cache
+        std::atomic<u64> precise_stripped{};    ///< NoContraction decorations dropped (bbport)
     };
     const Counters& GetCounters() const {
         return counters;

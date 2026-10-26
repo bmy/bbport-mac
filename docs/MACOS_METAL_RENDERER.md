@@ -227,6 +227,18 @@ Metal build rather than leaving an access unchecked; such a shader then never dr
 fallback reason, about 30,000 to 45,000 draws a second) are encoded in Metal. MSL cache version 5.
 Checked on 100 of the game's cached modules: all rewrite, pass `spirv-val` and convert.
 
+## Stage 4c: no precise maths outside the position stages
+
+SPIRV-Cross translates SPIR-V `NoContraction` (the recompiler's exact float ops) into calls to
+`[[clang::optnone]]` helpers (`spvFAdd`, `spvFMul`, ...) that the Metal compiler may not optimise:
+10,933 calls in 100 of the game's modules. KosmicKrisp compiles the same SPIR-V without them,
+which is why `BB_SPIRV_PRECISE=vertex` made no difference there. The Metal path now drops
+`NoContraction` from pixel and compute shaders before translating (the vertex, tessellation and
+geometry stages keep it, so every pass computes the same positions); Wooloomooloo2's port measured
+the same change on its Metal path at 19.6 -> 12.1 ms a frame. `BB_METAL_PRECISE=all` keeps it
+everywhere. The MSL of each mode has its own cache file (`_np`). Checked on the 100 modules: all
+pass `spirv-val` after the strip, and the translation has no helper calls left.
+
 ## Results so far (M5 Max, 2560x1600, MetalFX native AA)
 
 - Stage 2 (2026-10-25): about 650 pipelines in a session; all but 1 render pipeline (a fragment

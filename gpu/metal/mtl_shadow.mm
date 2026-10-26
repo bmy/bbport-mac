@@ -57,6 +57,9 @@ struct ShaderEntry {
     std::unique_ptr<Metal::CompiledShader> compiled;
     std::once_flag rect_once; ///< the RectList rewrite of a vertex shader (mtl_spirv_rectlist.h)
     std::unique_ptr<Metal::CompiledShader> rect;
+    /// bbport: the same two with clip space z converted from [-w, w] (CompileVariant::clip_fixup)
+    std::once_flag clip_once, rect_clip_once;
+    std::unique_ptr<Metal::CompiledShader> clip, rect_clip;
     std::mutex variant_mutex; ///< tessellation variants (Metal::CompileVariant)
     std::vector<std::pair<Metal::CompileVariant, std::unique_ptr<Metal::CompiledShader>>> variants;
 };
@@ -100,37 +103,44 @@ struct State {
                     device.Name().c_str(), dir.string().c_str());
     }
 
+    /// `clip`: a vertex shader with clip space z converted from [-w, w] (the pipeline's key).
     const Metal::CompiledShader* Get(const std::shared_ptr<ShaderEntry>& shader, u64 hash,
-                                     const char* what, bool rect_list = false) {
+                                     const char* what, bool rect_list = false, bool clip = false) {
         if (!shader) {
             ++no_spirv;
             return nullptr;
         }
         const auto& words = shader->words;
+        const Metal::CompileVariant variant{.clip_fixup = clip};
         if (rect_list) {
-            std::call_once(shader->rect_once, [&] {
+            auto& once = clip ? shader->rect_clip_once : shader->rect_once;
+            auto& slot = clip ? shader->rect_clip : shader->rect;
+            std::call_once(once, [&] {
                 const auto rewrite = Metal::RewriteRectListVertex(*words);
                 if (!rewrite.ok) {
                     Print("Metal shadow: rect list vertex shader %#llx not rewritable: %s\n",
                                 (unsigned long long)hash, rewrite.error.c_str());
                     return;
                 }
-                auto result = compiler.Compile(rewrite.spirv, hash ^ 0x5265637443ull, "rect");
+                auto result =
+                    compiler.Compile(rewrite.spirv, hash ^ 0x5265637443ull, "rect", variant);
                 if (result.status == Metal::CompileStatus::Ok) {
-                    shader->rect = std::move(result.shader);
+                    slot = std::move(result.shader);
                 }
             });
-            return shader->rect.get();
+            return slot.get();
         }
-        std::call_once(shader->once, [&] {
-            auto result = compiler.Compile(*words, hash, what);
+        auto& once = clip ? shader->clip_once : shader->once;
+        auto& slot = clip ? shader->clip : shader->compiled;
+        std::call_once(once, [&] {
+            auto result = compiler.Compile(*words, hash, what, variant);
             if (result.status == Metal::CompileStatus::Ok) {
-                shader->compiled = std::move(result.shader);
+                slot = std::move(result.shader);
             } else {
                 ++shader_failed;
             }
         });
-        return shader->compiled.get();
+        return slot.get();
     }
 
     /// The module's entry (at pipeline creation: the handle may stand for another module by
@@ -413,7 +423,9 @@ void BuildGraphics(const Vulkan::GraphicsPipelineKey& key, const ModuleRefs& mod
                                           {.kind = Kind::TessControl, .domain = tes_info.domain});
                 input.eval = s.Variant(tes_module, key.stage_hashes[u32(Stage::TessellationEval)],
                                        {.kind = Kind::TessEval,
-                                        .output_vertices = tcs_info.output_vertices});
+                                        .output_vertices = tcs_info.output_vertices,
+                                        .clip_fixup = key.clip_space ==
+                                                      Gcn::ClipSpace::MinusWToW});
                 ok = input.control && input.eval;
             }
         }
@@ -517,7 +529,8 @@ void BuildGraphics(const Vulkan::GraphicsPipelineKey& key, const ModuleRefs& mod
         // emulates it with a tessellation control shader instead).
         const bool rect_list = key.prim_type == Gcn::PrimitiveType::RectList;
         const auto* vs = s.Get(modules[u32(Stage::Vertex)], key.stage_hashes[u32(Stage::Vertex)],
-                               "vertex", rect_list);
+                               "vertex", rect_list,
+                               key.clip_space == Gcn::ClipSpace::MinusWToW);
         const Metal::CompiledShader* fs = nullptr;
         bool ok = vs != nullptr;
         if (ok && has(Stage::Fragment)) {

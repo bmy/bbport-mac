@@ -273,6 +273,13 @@ has no tessellator, so the frame encoder (`BB_METAL_FRAME=1`) now encodes classi
   and geometry shaders as compute kernels writing vertex records and strip indices into private
   scratch, then indexed strip draws of the generated pass-through vertex function
   (`mtl_geometry.h`). Indirect and instanced ones still go to KosmicKrisp.
+- **Clip space z from -w in Metal:** pipelines whose key has the guest's [-w, w] clip space get
+  a vertex function (or evaluation function) that converts it at its end (SPIRV-Cross'
+  `fixup_clipspace`: z = (z + w) / 2; its own MSL cache files, `_cf`). Before, these draws (about
+  1,000 a second at the Byrgenwerth lamp) went to KosmicKrisp.
+- **Strips without primitive restart in Metal:** Metal always restarts at the all-ones index,
+  which only matters for a draw that uses vertex 65535 (or 2^32 - 1);
+  `BB_METAL_STRIP_RESTART=0` sends them to KosmicKrisp as before.
 - **Switches for bisecting:** `BB_METAL_TESS=0` and `BB_METAL_GEOMETRY=0` keep those draws on
   KosmicKrisp (with `BB_METAL_PRECISE=all` and `BB_METAL_TRANSFERS`).
 - **Self-test:** `BB_METAL_FRAME_TEST=1` (with `BB_METAL_FRAME=1`) runs 32 rounds of fills on a

@@ -105,6 +105,9 @@ struct CompileVariant {
     u32 output_vertices{};    ///< TessEval: the control shader's OutputVertices (patch size)
     /// GeometryKernel: the export shader's output layout (TessVertex variant, TessLayout::members)
     GeometryEsLayout es;
+    /// bbport: Plain vertex and TessEval: clip space z from [-w, w] (the guest's) to Metal's
+    /// [0, w] at the end of the shader (SPIRV-Cross' fixup_clipspace: z = (z + w) / 2).
+    bool clip_fixup{};
     bool operator==(const CompileVariant&) const = default;
 };
 

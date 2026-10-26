@@ -1252,8 +1252,8 @@ const char* DrawBlocker(const Owned& o) {
     if (p.fill_point) {
         return "point polygon mode";
     }
-    if (p.clip_minus_w_to_w && !entry->geometry) {
-        // (A geometry draw's pass-through function converts it itself.)
+    if (p.clip_minus_w_to_w && !p.clip_fixed && !entry->geometry) {
+        // (Converted by the vertex function when built so, or by a geometry draw's pass-through.)
         return "clip space z from -w";
     }
     if (o.rasterizer_discard) {
@@ -1293,10 +1293,21 @@ const char* DrawBlocker(const Owned& o) {
     return nullptr;
 }
 
-/// Indexed strips without primitive restart: Metal always restarts at the all-ones index.
+/// Indexed strips without primitive restart: Metal always restarts at the all-ones index, which
+/// only matters for a draw that really uses vertex 65535 (or 2^32 - 1). They are drawn in Metal;
+/// BB_METAL_STRIP_RESTART=0 sends them to KosmicKrisp (as before; for bisecting).
 bool RestartDiffers(const Owned& o) {
+    static const bool strict = [] {
+        const char* env = std::getenv("BB_METAL_STRIP_RESTART");
+        const bool on = env && env[0] == '0';
+        if (on) {
+            Print("Metal frame: strips without primitive restart go to KosmicKrisp "
+                  "(BB_METAL_STRIP_RESTART=0)\n");
+        }
+        return on;
+    }();
     const u32 type = o.graphics->render->primitive_type;
-    return !o.primitive_restart &&
+    return strict && !o.primitive_restart &&
            (type == MTLPrimitiveTypeTriangleStrip || type == MTLPrimitiveTypeLineStrip);
 }
 

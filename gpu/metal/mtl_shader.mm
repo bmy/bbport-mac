@@ -462,6 +462,12 @@ std::string Convert(std::span<const u32> spirv, const SpirvScan& scan,
             break;
         }
     }
+    if (variant.clip_fixup) {
+        // bbport: the guest's clip space z is [-w, w] (Metal's [0, w]).
+        auto common = comp.get_common_options();
+        common.vertex.fixup_clipspace = true;
+        comp.set_common_options(common);
+    }
     comp.set_msl_options(options);
     if (variant.kind == VariantKind::TessControl) {
         // The tessellation factor struct (quad or triangle) follows the domain, which the control
@@ -1095,6 +1101,9 @@ CompileResult ShaderCompiler::Compile(std::span<const u32> spirv, u64 hash, std:
         tag = fmt::format("_gk{:016x}", XXH3_64bits(layout.data(), layout.size() * sizeof(u32)));
         break;
     }
+    }
+    if (variant.clip_fixup) {
+        tag += "_cf"; // bbport: the clip space z conversion
     }
     // bbport: the MSL without NoContraction has a file of its own (BB_METAL_PRECISE switches).
     const bool keep_precise = KeepsNoContraction(scan.stage);

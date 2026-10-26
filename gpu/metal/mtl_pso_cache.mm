@@ -404,6 +404,7 @@ const RenderPipeline* PsoCache::GetRenderPipeline(const Vulkan::GraphicsPipeline
             pipeline->provoking_vertex_last =
                 key.provoking_vtx_last != Gcn::ProvokingVtxLast::First;
             pipeline->clip_minus_w_to_w = key.clip_space == Gcn::ClipSpace::MinusWToW;
+            pipeline->clip_fixed = vs->variant.clip_fixup;
             pipeline->num_color_attachments = key.num_color_attachments;
 
             MTLRenderPipelineDescriptor* desc = [MTLRenderPipelineDescriptor new];

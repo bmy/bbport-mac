@@ -99,6 +99,8 @@ struct RenderPipeline {
     bool geometry{};             ///< `vs` is a geometry draw's pass-through function
     u32 patch_control_points{};  ///< tessellation: the patch size of the draw (drawPatches)
     bool clip_minus_w_to_w{}; ///< clip space z in [-w, w] (Metal's is [0, w])
+    /// bbport: the vertex function converts it (CompileVariant::clip_fixup).
+    bool clip_fixed{};
     u32 sample_count{1};
     u32 num_color_attachments{}; ///< the key's (holes have pixel format Invalid)
     u32 depth_pixel_format{};    ///< MTLPixelFormat of the depth / stencil attachment, 0 = none

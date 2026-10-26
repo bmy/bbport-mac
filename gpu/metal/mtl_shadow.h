@@ -24,13 +24,33 @@ namespace MetalShadow {
 /// dynamically. A field applies where its flag (cull, front_face, depth, stencil, depth_bias) is
 /// set: that state is not dynamic in the pipeline.
 struct FixedState {
-    bool cull{}, front_face{}, depth{}, stencil{}, depth_bias{};
+    bool cull{}, front_face{}, depth{}, depth_write_fixed{}, depth_compare_fixed{}, stencil{},
+        depth_bias{};
     VkCullModeFlags cull_mode{};
     VkFrontFace front{VK_FRONT_FACE_COUNTER_CLOCKWISE};
     bool depth_test{}, depth_write{};
     VkCompareOp depth_compare{VK_COMPARE_OP_ALWAYS};
     bool stencil_test{};
     bool depth_bias_enable{};
+    /// The stencil faces, per part (VK_DYNAMIC_STATE_STENCIL_OP, _COMPARE_MASK, _WRITE_MASK,
+    /// _REFERENCE).
+    bool stencil_op{}, stencil_compare_mask{}, stencil_write_mask{}, stencil_reference{};
+    struct Face {
+        VkStencilOp fail{}, pass{}, depth_fail{};
+        VkCompareOp compare{VK_COMPARE_OP_ALWAYS};
+        u32 compare_mask{0xff}, write_mask{0xff}, reference{};
+    } stencil_front, stencil_back;
+    /// The depth bounds test and its bounds.
+    bool depth_bounds{}, depth_bounds_test{}, depth_bounds_values{};
+    float min_depth_bounds{0.0f}, max_depth_bounds{1.0f};
+    /// The color write masks are the pipeline's (VK_DYNAMIC_STATE_COLOR_WRITE_MASK_EXT absent).
+    bool write_masks{};
+    /// The blend constants (VK_DYNAMIC_STATE_BLEND_CONSTANTS absent).
+    bool blend_constants_fixed{};
+    float blend_constants[4]{};
+    /// The vertex strides are the pipeline's (GraphicsEntry::strides), whatever is bound
+    /// (VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE absent).
+    bool strides{};
 };
 
 struct GraphicsEntry {

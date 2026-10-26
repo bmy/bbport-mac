@@ -764,6 +764,26 @@ void ComputeCreated(const VkComputePipelineCreateInfo* info, VkPipeline pipeline
         std::scoped_lock lock{s.pipelines_mutex};
         build = s.Expect(pipeline);
     }
+    // A work-group size given by specialization constants (the WorkgroupSize built-in, or
+    // LocalSizeId): the translation reads only the literal LocalSize. Left to KosmicKrisp.
+    bool spec_size = false;
+    if (const auto entry = s.Lookup(vk::ShaderModule(info->stage.module))) {
+        const auto& w = *entry->words;
+        for (size_t i = 5; i < w.size();) {
+            const u32 count = w[i] >> 16, op = w[i] & 0xffff;
+            if (!count || i + count > w.size()) {
+                break;
+            }
+            spec_size |= op == 71 && count >= 4 && w[i + 2] == 11 && w[i + 3] == 25; // BuiltIn
+            spec_size |= op == 331;                                                 // LocalSizeId
+            i += count;
+        }
+    }
+    if (spec_size) {
+        s.Abandon(pipeline, build);
+        NoteGeneric(false, "a compute work-group size from specialization constants");
+        return;
+    }
     const auto* cs = CompileStage(s, info->stage, "host compute");
     const Metal::ComputePipeline* p = nullptr;
     if (cs) {
@@ -916,6 +936,26 @@ void GraphicsCreated(const VkGraphicsPipelineCreateInfo* info, VkPipeline pipeli
                 auto& vslot = entry->vertex_slots[entry->num_vertex_slots++];
                 vslot.location = b.binding;
                 vslot.slot = slot;
+                for (auto* n = static_cast<const VkBaseInStructure*>(vi->pNext); n; n = n->pNext) {
+                    if (n->sType != VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_DIVISOR_STATE_CREATE_INFO) {
+                        continue;
+                    }
+                    const auto* div =
+                        reinterpret_cast<const VkPipelineVertexInputDivisorStateCreateInfo*>(n);
+                    for (u32 k = 0; k < div->vertexBindingDivisorCount; ++k) {
+                        const auto& bd = div->pVertexBindingDivisors[k];
+                        if (bd.binding != b.binding) {
+                            continue;
+                        }
+                        if (bd.divisor == 0) {
+                            vd.layouts[slot].stepFunction = MTLVertexStepFunctionConstant;
+                            vd.layouts[slot].stepRate = 0;
+                            vslot.constant = true;
+                        } else {
+                            vd.layouts[slot].stepRate = bd.divisor;
+                        }
+                    }
+                }
             }
             d.vertexDescriptor = vd;
         }
@@ -966,17 +1006,44 @@ void GraphicsCreated(const VkGraphicsPipelineCreateInfo* info, VkPipeline pipeli
         entry->depth_clip = !r->depthClampEnable;
         if (r->polygonMode == VK_POLYGON_MODE_LINE) {
             entry->fill_mode = MTLTriangleFillModeLines;
+        } else if (r->polygonMode == VK_POLYGON_MODE_POINT) {
+            entry->fill_point = true; // Metal has none: its draws fall back
         }
+    }
+    ge.fixed.write_masks = !is_dynamic(VK_DYNAMIC_STATE_COLOR_WRITE_MASK_EXT);
+    ge.fixed.strides = !is_dynamic(VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE);
+    if (const auto* cb = info->pColorBlendState; cb && !is_dynamic(VK_DYNAMIC_STATE_BLEND_CONSTANTS)) {
+        ge.fixed.blend_constants_fixed = true;
+        std::copy_n(cb->blendConstants, 4, ge.fixed.blend_constants);
     }
     if (const auto* ds = info->pDepthStencilState) {
         ge.fixed.depth = !is_dynamic(VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE);
+        ge.fixed.depth_write_fixed = !is_dynamic(VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE);
+        ge.fixed.depth_compare_fixed = !is_dynamic(VK_DYNAMIC_STATE_DEPTH_COMPARE_OP);
         ge.fixed.depth_test = ds->depthTestEnable;
         ge.fixed.depth_write = ds->depthWriteEnable;
         ge.fixed.depth_compare = ds->depthCompareOp;
         ge.fixed.stencil = !is_dynamic(VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE);
         ge.fixed.stencil_test = ds->stencilTestEnable;
+        ge.fixed.stencil_op = !is_dynamic(VK_DYNAMIC_STATE_STENCIL_OP);
+        ge.fixed.stencil_compare_mask = !is_dynamic(VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK);
+        ge.fixed.stencil_write_mask = !is_dynamic(VK_DYNAMIC_STATE_STENCIL_WRITE_MASK);
+        ge.fixed.stencil_reference = !is_dynamic(VK_DYNAMIC_STATE_STENCIL_REFERENCE);
+        const auto face = [](const VkStencilOpState& f) {
+            return FixedState::Face{f.failOp,      f.passOp,    f.depthFailOp, f.compareOp,
+                                    f.compareMask, f.writeMask, f.reference};
+        };
+        ge.fixed.stencil_front = face(ds->front);
+        ge.fixed.stencil_back = face(ds->back);
+        ge.fixed.depth_bounds = !is_dynamic(VK_DYNAMIC_STATE_DEPTH_BOUNDS_TEST_ENABLE);
+        ge.fixed.depth_bounds_test = ds->depthBoundsTestEnable;
+        ge.fixed.depth_bounds_values = !is_dynamic(VK_DYNAMIC_STATE_DEPTH_BOUNDS);
+        ge.fixed.min_depth_bounds = ds->minDepthBounds;
+        ge.fixed.max_depth_bounds = ds->maxDepthBounds;
     } else {
-        ge.fixed.depth = ge.fixed.stencil = true; // no depth/stencil state: both off
+        // No depth/stencil state: depth, stencil and depth bounds tests all off.
+        ge.fixed.depth = ge.fixed.depth_write_fixed = ge.fixed.depth_compare_fixed = true;
+        ge.fixed.stencil = ge.fixed.depth_bounds = true;
     }
     ge.render = entry.get();
     {

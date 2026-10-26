@@ -1233,6 +1233,104 @@ bool BindStage(Owned& o, Stage stage, VkPipelineBindPoint point, const Metal::Co
 
 // ---- Draws ----
 
+/// The draw's state where a generic pipeline (the renderer's own passes) fixes it instead of
+/// taking it from the dynamic state (MetalShadow::FixedState); the game's pipelines take it all
+/// from the dynamic state.
+struct Effective {
+    VkCullModeFlags cull_mode;
+    VkFrontFace front_face;
+    bool depth_test, depth_write;
+    VkCompareOp depth_compare;
+    bool stencil_test, depth_bias_enable;
+    Owned::Face front, back;
+    bool depth_bounds_test;
+    float depth_bounds[2];
+    bool dynamic_write_masks; ///< the dynamic color write masks apply (not a pipeline's own)
+    float blend_constants[4];
+};
+Effective EffectiveState(const Owned& o) {
+    Effective e{o.cull_mode,
+                o.front_face,
+                o.depth_test,
+                o.depth_write,
+                o.depth_compare,
+                o.stencil_test,
+                o.depth_bias_enable,
+                o.front,
+                o.back,
+                o.depth_bounds_test,
+                {o.depth_bounds[0], o.depth_bounds[1]},
+                o.state_set[size_t(State::ColorWriteMask)],
+                {o.blend_constants[0], o.blend_constants[1], o.blend_constants[2],
+                 o.blend_constants[3]}};
+    if (o.graphics && o.graphics->generic) {
+        const MetalShadow::FixedState& f = o.graphics->fixed;
+        for (auto [face, fixed] : {std::pair{&e.front, &f.stencil_front},
+                                   std::pair{&e.back, &f.stencil_back}}) {
+            if (f.stencil_op) {
+                face->fail = fixed->fail;
+                face->pass = fixed->pass;
+                face->depth_fail = fixed->depth_fail;
+                face->compare = fixed->compare;
+            }
+            if (f.stencil_compare_mask) {
+                face->compare_mask = fixed->compare_mask;
+            }
+            if (f.stencil_write_mask) {
+                face->write_mask = fixed->write_mask;
+            }
+            if (f.stencil_reference) {
+                face->reference = fixed->reference;
+            }
+        }
+        if (f.depth_bounds) {
+            e.depth_bounds_test = f.depth_bounds_test;
+        }
+        if (f.depth_bounds_values) {
+            e.depth_bounds[0] = f.min_depth_bounds;
+            e.depth_bounds[1] = f.max_depth_bounds;
+        }
+        if (f.write_masks) {
+            e.dynamic_write_masks = false;
+        }
+        if (f.cull) {
+            e.cull_mode = f.cull_mode;
+        }
+        if (f.front_face) {
+            e.front_face = f.front;
+        }
+        if (f.depth) {
+            e.depth_test = f.depth_test;
+        }
+        if (f.depth_write_fixed) {
+            e.depth_write = f.depth_write;
+        }
+        if (f.depth_compare_fixed) {
+            e.depth_compare = f.depth_compare;
+        }
+        if (f.blend_constants_fixed) {
+            std::copy_n(f.blend_constants, 4, e.blend_constants);
+        }
+        if (f.stencil) {
+            e.stencil_test = f.stencil_test;
+        }
+        if (f.depth_bias) {
+            e.depth_bias_enable = f.depth_bias_enable;
+        }
+    }
+    return e;
+}
+
+/// A vertex buffer's stride: a generic pipeline's own unless its strides are dynamic (then as
+/// bound, or its own when bound without one); as bound for the game's.
+u64 VertexStride(const Owned& o, const Owned::VertexBuffer& vb, u32 location) {
+    if (!o.graphics || !o.graphics->generic || location >= o.graphics->strides.size() ||
+        (vb.stride && !o.graphics->fixed.strides)) {
+        return vb.stride;
+    }
+    return o.graphics->strides[location];
+}
+
 /// Why a draw cannot be encoded in Metal (null: it can).
 const char* DrawBlocker(const Owned& o) {
     if (!o.in_pass) {
@@ -1259,15 +1357,16 @@ const char* DrawBlocker(const Owned& o) {
     if (o.rasterizer_discard) {
         return "rasterizer discard";
     }
-    if (o.depth_bounds_test &&
-        !(o.depth_bounds[0] >= 0.0f && o.depth_bounds[0] <= o.depth_bounds[1] &&
-          o.depth_bounds[1] <= 1.0f)) {
+    const Effective e = EffectiveState(o);
+    if (e.depth_bounds_test &&
+        !(e.depth_bounds[0] >= 0.0f && e.depth_bounds[0] <= e.depth_bounds[1] &&
+          e.depth_bounds[1] <= 1.0f)) {
         return "depth bounds outside [0, 1]"; // Metal takes them inside only
     }
     if (o.feedback_loop) {
         return "an attachment feedback loop";
     }
-    if (o.state_set[size_t(State::ColorWriteMask)]) {
+    if (e.dynamic_write_masks) {
         for (u32 i = 0; i < o.write_mask_count; ++i) {
             if (o.write_masks[i] != VkColorComponentFlags(p.key.write_masks[i])) {
                 return "a color write mask other than the pipeline's";
@@ -1312,51 +1411,6 @@ bool RestartDiffers(const Owned& o) {
            (type == MTLPrimitiveTypeTriangleStrip || type == MTLPrimitiveTypeLineStrip);
 }
 
-/// The draw's state where a generic pipeline (the renderer's own passes) fixes it instead of
-/// taking it from the dynamic state (MetalShadow::FixedState); the game's pipelines take it all
-/// from the dynamic state.
-struct Effective {
-    VkCullModeFlags cull_mode;
-    VkFrontFace front_face;
-    bool depth_test, depth_write;
-    VkCompareOp depth_compare;
-    bool stencil_test, depth_bias_enable;
-};
-Effective EffectiveState(const Owned& o) {
-    Effective e{o.cull_mode,    o.front_face,   o.depth_test,       o.depth_write,
-                o.depth_compare, o.stencil_test, o.depth_bias_enable};
-    if (o.graphics && o.graphics->generic) {
-        const MetalShadow::FixedState& f = o.graphics->fixed;
-        if (f.cull) {
-            e.cull_mode = f.cull_mode;
-        }
-        if (f.front_face) {
-            e.front_face = f.front;
-        }
-        if (f.depth) {
-            e.depth_test = f.depth_test;
-            e.depth_write = f.depth_write;
-            e.depth_compare = f.depth_compare;
-        }
-        if (f.stencil) {
-            e.stencil_test = f.stencil_test;
-        }
-        if (f.depth_bias) {
-            e.depth_bias_enable = f.depth_bias_enable;
-        }
-    }
-    return e;
-}
-
-/// A vertex buffer's stride: as bound, else (bound without one) a generic pipeline's own.
-u64 VertexStride(const Owned& o, const Owned::VertexBuffer& vb, u32 location) {
-    if (vb.stride || !o.graphics || !o.graphics->generic ||
-        location >= o.graphics->strides.size()) {
-        return vb.stride;
-    }
-    return o.graphics->strides[location];
-}
-
 /// The depth/stencil state of the draw.
 Metal::DepthStencilKey DepthStencilKeyOf(const Owned& o, const Metal::RenderPipeline& p) {
     const Effective e = EffectiveState(o);
@@ -1375,8 +1429,8 @@ Metal::DepthStencilKey DepthStencilKeyOf(const Owned& o, const Metal::RenderPipe
         out.write_mask = u8(f.write_mask);
         return out;
     };
-    ds.front = face(o.front);
-    ds.back = face(o.back);
+    ds.front = face(e.front);
+    ds.back = face(e.back);
     return ds;
 }
 
@@ -1457,11 +1511,12 @@ bool PrepareDraw(Owned& o, const char*& why) {
     }
     [enc setDepthStencilState:(__bridge id<MTLDepthStencilState>)state];
     if (ds.stencil_test) {
-        [enc setStencilFrontReferenceValue:o.front.reference backReferenceValue:o.back.reference];
+        [enc setStencilFrontReferenceValue:effective.front.reference
+                        backReferenceValue:effective.back.reference];
     }
     // Metal's depth bounds test (macOS 26; on the stored depth, as Vulkan's); [0, 1] turns it off.
-    if (o.depth_bounds_test && p.depth_pixel_format) { // Vulkan's test needs a depth attachment
-        [enc setDepthTestMinBound:o.depth_bounds[0] maxBound:o.depth_bounds[1]];
+    if (effective.depth_bounds_test && p.depth_pixel_format) { // the test needs a depth attachment
+        [enc setDepthTestMinBound:effective.depth_bounds[0] maxBound:effective.depth_bounds[1]];
     } else {
         [enc setDepthTestMinBound:0.0f maxBound:1.0f];
     }
@@ -1470,10 +1525,10 @@ bool PrepareDraw(Owned& o, const char*& why) {
     } else {
         [enc setDepthBias:0.0f slopeScale:0.0f clamp:0.0f];
     }
-    [enc setBlendColorRed:o.blend_constants[0]
-                    green:o.blend_constants[1]
-                     blue:o.blend_constants[2]
-                    alpha:o.blend_constants[3]];
+    [enc setBlendColorRed:effective.blend_constants[0]
+                    green:effective.blend_constants[1]
+                     blue:effective.blend_constants[2]
+                    alpha:effective.blend_constants[3]];
     for (u32 i = 0; i < p.num_vertex_slots; ++i) {
         const auto& slot = p.vertex_slots[i];
         const auto& vb = slot.location < o.vertex_buffers.size() ? o.vertex_buffers[slot.location]

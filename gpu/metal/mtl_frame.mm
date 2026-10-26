@@ -889,16 +889,12 @@ void Decode(PushWrite& w) {
         case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: {
             const VkDescriptorBufferInfo& info = w.buffer_infos[i];
             if (!info.buffer) {
-                // A null descriptor (nullDescriptor): reads give zeros. A uniform buffer is
-                // read-only and at most 64 KiB, the zero buffer's size; a storage buffer could be
-                // written (Vulkan drops that) or read past it, so it stays on KosmicKrisp.
-                if (write.descriptorType == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER) {
-                    b.address = null_buffer.gpuAddress;
-                    b.size = 0;
-                    b.ok = true;
-                } else {
-                    b.why = "a null storage buffer descriptor";
-                }
+                // A null descriptor (nullDescriptor): an empty buffer. Every access of the Metal
+                // shaders is checked against the bound size (mtl_spirv_robust.h): with size 0
+                // reads give zero and writes are dropped; the zero buffer is only addressed.
+                b.address = null_buffer.gpuAddress;
+                b.size = 0;
+                b.ok = true;
                 break;
             }
             const BufferRef ref = ResolveBuffer(info.buffer);
@@ -1036,8 +1032,8 @@ bool BindStage(Owned& o, id<MTL4ArgumentTable> table, VkPipelineBindPoint point,
             case Kind::Buffer:
                 [table setAddress:bound ? bound->address : null_buffer.gpuAddress atIndex:slot];
                 if (slot < sizes.size()) {
-                    sizes[slot] =
-                        u32(std::min<u64>(bound ? bound->size : null_buffer.length, 0xffffffffu));
+                    // An unbound slot is an empty buffer: its accesses are dropped.
+                    sizes[slot] = u32(std::min<u64>(bound ? bound->size : 0, 0xffffffffu));
                 }
                 break;
             case Kind::Texture:

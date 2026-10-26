@@ -67,7 +67,7 @@ constexpr u32 kTessFirstReservedBuffer = 13;
 constexpr u32 kMaxTextures = 128;
 constexpr u32 kMaxSamplers = 16;
 /// Bump when the MSL options or the slot assignment change: it is part of the disk cache key.
-constexpr u32 kMslCacheVersion = 4; // 4: 1D textures as 2D (bbport) // 3: stage input / export output layouts in the file (P7.1)
+constexpr u32 kMslCacheVersion = 5; // 5: buffer accesses bounds-checked (bbport, mtl_spirv_robust.h) // 4: 1D textures as 2D (bbport) // 3: stage input / export output layouts in the file (P7.1)
 /// (The variants have their own cache files.)
 
 enum class TessDomain : u8 { Unknown, Triangles, Quads, Isolines };

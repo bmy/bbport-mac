@@ -33,6 +33,7 @@
 #include "metal/mtl_shader.h"
 #include "metal/mtl_spirv_geometry.h"
 #include "metal/mtl_spirv_pervertex.h"
+#include "metal/mtl_spirv_robust.h"
 
 #ifndef BB_SPIRV_CROSS_VERSION
 #define BB_SPIRV_CROSS_VERSION "unknown"
@@ -1093,6 +1094,13 @@ CompileResult ShaderCompiler::Compile(std::span<const u32> spirv, u64 hash, std:
             }
             module = rewritten.spirv;
         }
+        // bbport: every buffer access bounds-checked, as robustBufferAccess2 and nullDescriptor
+        // promise the renderer (the geometry kernel's own buffers have no size: left alone).
+        RobustRewrite robust = RewriteRobustBuffers(module, kGeometryKernelSet);
+        if (!robust.ok) {
+            return fail(CompileStatus::Failed, "robust buffer access: " + robust.error);
+        }
+        module = robust.spirv;
         try {
             msl = Convert(module, scan, variant, *shader);
         } catch (const std::exception& e) {

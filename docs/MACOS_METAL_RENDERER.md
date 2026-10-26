@@ -206,6 +206,23 @@ sample counts, or of depth/stencil; a clear of a texture without render target u
 a fill whose four bytes differ. `BB_METAL_TRANSFERS=0` sends them all to KosmicKrisp (for
 bisecting a broken picture). Blits and resolves still go to KosmicKrisp.
 
+## Stage 4b: robust buffer access
+
+The renderer relies on `robustBufferAccess2` and `nullDescriptor`: a storage buffer read past its
+bound range gives zero, a write there is dropped, and a null buffer descriptor is an empty
+buffer. KosmicKrisp provides that; a Metal shader reads raw addresses. So every module is
+rewritten before SPIRV-Cross (`gpu/metal/mtl_spirv_robust.{h,cpp}`): each element access of the
+recompiler's buffers (`struct { T data[]; }`) is checked against `OpArrayLength`, which
+SPIRV-Cross reads from its buffer of buffer sizes, filled from the bound descriptor's range (0 for
+a null descriptor or an unbound slot). Loads give zero out of range; stores and atomics run only
+in range (their block split into a selection); the index is clamped to 0 as well, so nothing is
+addressed outside the buffer (a load still reads the first element when the bound range is
+smaller than one). A shape the rewrite does not know (a storage buffer of another shape, a
+store in a loop header, a buffer pointer used otherwise, variable pointers) fails the shader's
+Metal build rather than leaving an access unchecked; such a shader then never draws in Metal. With it, draws and dispatches with a null storage buffer descriptor (the commonest
+fallback reason, about 30,000 to 45,000 draws a second) are encoded in Metal. MSL cache version 5.
+Checked on 100 of the game's cached modules: all rewrite, pass `spirv-val` and convert.
+
 ## Results so far (M5 Max, 2560x1600, MetalFX native AA)
 
 - Stage 2 (2026-10-25): about 650 pipelines in a session; all but 1 render pipeline (a fragment

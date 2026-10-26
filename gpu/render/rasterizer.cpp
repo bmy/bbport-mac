@@ -2,6 +2,8 @@
 // bbport render: Rasterizer, the draw and dispatch entry points: pipeline selection, then recording here or on the
 // draw recording thread (raster_pipe.cpp), and the per-frame bookkeeping.
 
+#include <chrono>
+#include <cstring>
 #include <mutex>
 #include <set>
 #include <string>
@@ -313,6 +315,61 @@ bool CountTessellation(const Vulkan::GraphicsPipeline* pipeline) {
     return SkipTessDraws();
 }
 
+/// bbport (macOS) experiment bits of BB_TOGGLE_FILE (its second number), to measure what draws
+/// drawn as patches cost on drivers that tessellate in software (KosmicKrisp): 128 leaves out
+/// the game's tessellated draws, 256 the rect and quad lists (drawn as patches). The picture is
+/// wrong while either is set: for GPU time measurements only.
+bool SkippedPatchDraw(const GraphicsPipeline* pipeline) {
+    const bool skip_tess = BbToggle::Experiment(128), skip_lists = BbToggle::Experiment(256);
+    if (!skip_tess && !skip_lists) {
+        return false;
+    }
+    const auto prim = pipeline->GetGraphicsKey().prim_type;
+    const bool list = prim == Gcn::PrimitiveType::RectList || prim == Gcn::PrimitiveType::QuadList;
+    return (skip_lists && list) || (skip_tess && prim == Gcn::PrimitiveType::PatchPrimitive);
+}
+
+/// bbport (macOS) diagnostics: the game's tessellated draws (direct ones) every 5 s, per frame,
+/// with the tess level clamp the game sets (VGT_HOS_MAX/MIN_TESS_LEVEL, 0xA286/0xA287, which
+/// the renderer does not apply): what KosmicKrisp's software tessellation is given.
+void NoteTessellatedDraw(const GraphicsPipeline* pipeline, const Gcn::Regs& regs) {
+    const auto& key = pipeline->GetGraphicsKey();
+    if (key.prim_type != Gcn::PrimitiveType::PatchPrimitive) {
+        return;
+    }
+    static std::mutex mutex;
+    static auto window = std::chrono::steady_clock::now();
+    static u64 frames_at = BbStats::gpu_frames.load(std::memory_order_relaxed);
+    static u64 draws = 0, patches = 0;
+    static std::set<std::pair<u32, u32>> clamps;
+    std::scoped_lock lock{mutex};
+    ++draws;
+    const u32 points = std::max(1u, u32(key.patch_control_points));
+    patches += u64(regs.num_indices / points) * std::max(1u, regs.num_instances.NumInstances());
+    if (clamps.size() < 8) {
+        clamps.emplace(regs.reg_array[0xA286], regs.reg_array[0xA287]);
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now - window < std::chrono::seconds(5)) {
+        return;
+    }
+    const u64 frames_now = BbStats::gpu_frames.load(std::memory_order_relaxed);
+    const double frames = double(std::max<u64>(1, frames_now - frames_at));
+    std::string levels;
+    for (const auto& [max_bits, min_bits] : clamps) {
+        float max_level, min_level;
+        std::memcpy(&max_level, &max_bits, sizeof(float));
+        std::memcpy(&min_level, &min_bits, sizeof(float));
+        levels += fmt::format("{}{}..{}", levels.empty() ? "" : ", ", min_level, max_level);
+    }
+    std::printf("Tessellation (game): %.1f draws/frame, %.0f patches/frame; tess level clamp "
+                "the game sets (min..max): %s\n",
+                double(draws) / frames, double(patches) / frames, levels.c_str());
+    window = now;
+    frames_at = frames_now;
+    draws = patches = 0;
+    clamps.clear();
+}
 } // namespace
 
 void Rasterizer::Draw(bool is_indexed, u32 index_offset, const PreparedDraw* prepared) {
@@ -460,6 +517,10 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
             return;
         }
     }
+    if (SkippedPatchDraw(pipeline)) {
+        return;
+    }
+    NoteTessellatedDraw(pipeline, regs);
     // bbport: the key guide icons for the device in use (a change: uploaded before this draw).
     prompts->Update();
     bind_prepared = used_prepared;
@@ -964,6 +1025,9 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     if (DrawPipe::OnStageB()) {
         FrameCapture::Poll();
         scheduler.PopPendingOperations();
+    }
+    if (SkippedPatchDraw(pipeline)) {
+        return;
     }
     const VAddr count_address = indirect.count;
     const u32 stride = indirect.stride;

@@ -5,6 +5,7 @@
 #include <atomic>
 #include <bit>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <csetjmp>
 #include <cstdio>
@@ -271,6 +272,36 @@ Shader::Profile MakeProfile(const Instance& instance, u32 sparse_page_shift) {
         .needs_unorm_fixup = driver == vk::DriverId::eMesaKosmickrisp,
         .needs_clip_distance_emulation = nvidia,
         .supports_shader_stencil_export = instance.IsShaderStencilExportSupported(),
+        // BB_SPIRV_PRECISE=vertex: exact float math in the position stages only (macOS);
+        // unset or anything else: everywhere, as upstream. Part of the profile, so switching
+        // rebuilds the shader cache.
+        .precise_vertex_stages_only = [] {
+            const char* env = std::getenv("BB_SPIRV_PRECISE");
+            const bool vertex_only = env && std::strcmp(env, "vertex") == 0;
+            if (vertex_only) {
+                LOG_WARNING(Render, "Shaders: exact float math in vertex, tessellation and "
+                                 "geometry stages only (BB_SPIRV_PRECISE=vertex)");
+            }
+            return vertex_only;
+        }(),
+        .tess_level_clamp = [] {
+            const char* env = std::getenv("BB_TESS_CLAMP");
+            const bool clamp = env && env[0] == '1';
+            if (clamp) {
+                LOG_WARNING(Render, "Shaders: tessellation factors clamped to the game's maximum "
+                                    "tess level, as the PS4 does (BB_TESS_CLAMP=1)");
+            }
+            return clamp;
+        }(),
+        .tess_factor_cap = [] {
+            const char* env = std::getenv("BB_TESS_MAX");
+            const u32 cap = env ? u32(std::strtoul(env, nullptr, 10)) : 0;
+            if (cap) {
+                LOG_WARNING(Render, "Shaders: tessellation factors capped at {} (BB_TESS_MAX, an "
+                                    "experiment: less detail than the game asks for)", cap);
+            }
+            return cap;
+        }(),
         // BB_LAYER_MEMORY: buffers over nearly all memory go through the page table.
         .paged_buffers = VideoCore::BufferCache::LayerPagedActive(),
         // The game's buffer copy shader, from its profile (games/).
@@ -490,6 +521,17 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(PipelineSelection& se
         info.sw.tcs.num_threads = regs.ls_hs_config.hs_output_control_points;
         info.sw.tcs.tess_type = regs.tess_config.type;
         info.sw.tcs.offchip_lds_enable = regs.hs_program.settings.oc_lds_en;
+        if (profile.tess_level_clamp) {
+            // VGT_HOS_MAX_TESS_LEVEL (0xA286), as the hardware clamps (Regs::hs_clamp sits one
+            // register too high).
+            f32 max_level;
+            std::memcpy(&max_level, &regs.reg_array[0xA286], sizeof(f32));
+            // Only a clamp that does something: a NaN would never match its permutation, and
+            // 64 or more is Vulkan's own limit (one shared, unclamped permutation for those).
+            info.sw.tcs.max_tess_level =
+                std::isfinite(max_level) && max_level > 0.0f && max_level < 64.0f ? max_level
+                                                                                   : 0.0f;
+        }
         break;
     case SwStage::TessellationEval:
         info.sw.tes.tess_type = regs.tess_config.type;

@@ -24,6 +24,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
@@ -409,9 +410,39 @@ KkBuffer* TakeKk() {
 // ---- Metal command buffers ----
 
 /// What a Metal segment's completion hands back.
+// ---- Fences (BB_METAL_ORDER=barriers: one per encoder) ----
+
+std::mutex fence_mutex;
+std::vector<id<MTLFence>> fence_pool;
+
+id<MTLFence> TakeFence() {
+    {
+        std::scoped_lock lock{fence_mutex};
+        if (!fence_pool.empty()) {
+            id<MTLFence> f = fence_pool.back();
+            fence_pool.pop_back();
+            return f;
+        }
+    }
+    return [device newFence];
+}
+
+void GiveFences(std::vector<id<MTLFence>>& fences) {
+    std::scoped_lock lock{fence_mutex};
+    for (id<MTLFence> f : fences) {
+        if (fence_pool.size() < 4096) {
+            fence_pool.push_back(f);
+        }
+    }
+    fences.clear();
+}
+
 struct Retire {
     std::vector<id<MTLBuffer>> scratch;
     std::vector<id<MTLBuffer>> gpu_scratch;
+    /// bbport: the encoders' fences (BB_METAL_ORDER=barriers), reused once the GPU is done (the
+    /// command buffers retain nothing).
+    std::vector<id<MTLFence>> fences;
     /// Holds: the owner until its submission is done, and each committed Metal command buffer
     /// of it until the GPU is done with it.
     std::atomic<u32> pending{0};
@@ -421,6 +452,7 @@ void Release(const std::shared_ptr<Retire>& r) {
     if (r->pending.fetch_sub(1, std::memory_order_acq_rel) == 1) {
         GiveScratch(r->scratch);
         GiveGpuScratch(r->gpu_scratch);
+        GiveFences(r->fences);
     }
 }
 
@@ -576,6 +608,15 @@ struct Owned {
     std::vector<VkRenderingAttachmentInfo> pass_colors;
     VkRenderingAttachmentInfo pass_depth{}, pass_stencil{};
     bool has_depth{}, has_stencil{};
+    /// bbport, BB_METAL_ORDER=barriers: the encoders of this Metal segment are ordered by the
+    /// renderer's barriers instead of each after the one before (the chain). `waits`: the fences
+    /// of the encoders before the last barrier (each encoder waits for them; the chain instead
+    /// while `wait_chain`); `epoch`: those since (they may overlap); `last`: the last encoder's;
+    /// `pass_part`: the open pass's last render encoder's (a reopened pass loads what it stored).
+    std::vector<id<MTLFence>> waits, epoch;
+    bool wait_chain{true};
+    bool compute_spans_barrier{}; ///< the open compute encoder took a barrier as memoryBarrier
+    id<MTLFence> last, pass_part;
     MTLRenderPassDescriptor* pass_first;  ///< as begun (its clears)
     MTLRenderPassDescriptor* pass_reopen; ///< loading
     u32 target_width{}, target_height{};
@@ -586,6 +627,119 @@ struct Owned {
 namespace {
 
 // ---- Segments ----
+
+// ---- Encoder order ----
+
+/// BB_METAL_ORDER=barriers: encoders between two barriers of the renderer may overlap on the GPU
+/// (as Vulkan allows); the default (chain) runs each after the one before, as KosmicKrisp does.
+bool OrderByBarriers() {
+    static const bool on = [] {
+        const char* env = std::getenv("BB_METAL_ORDER");
+        const bool barriers = env && std::strcmp(env, "barriers") == 0;
+        Print("Metal frame: encoders ordered %s (BB_METAL_ORDER=%s)\n",
+              barriers ? "by the renderer's barriers: those between two may overlap"
+                       : "one after another",
+              barriers ? "barriers" : "chain");
+        return barriers;
+    }();
+    return on;
+}
+
+/// What a new encoder waits for. `reopen`: it continues the open render pass (after its last
+/// part and whatever ran in between, a tessellated draw's kernels).
+template <typename Encoder>
+void OrderStart(Owned& o, Encoder e, bool reopen) {
+    if (!OrderByBarriers()) {
+        WaitChain(e);
+        return;
+    }
+    const auto wait = [&](id<MTLFence> f) {
+        if constexpr (std::is_same_v<Encoder, id<MTLRenderCommandEncoder>>) {
+            [e waitForFence:f beforeStages:MTLRenderStageVertex | MTLRenderStageFragment];
+        } else {
+            [e waitForFence:f];
+        }
+    };
+    if (o.wait_chain) {
+        wait(chain);
+    }
+    for (id<MTLFence> f : o.waits) {
+        wait(f);
+    }
+    if (reopen) {
+        if (o.last) {
+            wait(o.last);
+        }
+        if (o.pass_part && o.pass_part != o.last) {
+            wait(o.pass_part);
+        }
+    }
+}
+
+/// An encoder's end: its fence (for the encoders after the next barrier).
+template <typename Encoder>
+void OrderEnd(Owned& o, Encoder e) {
+    if (!OrderByBarriers()) {
+        UpdateChain(e);
+        return;
+    }
+    id<MTLFence> f = TakeFence();
+    if (!o.retire) {
+        o.retire = std::make_shared<Retire>();
+    }
+    o.retire->fences.push_back(f);
+    if constexpr (std::is_same_v<Encoder, id<MTLRenderCommandEncoder>>) {
+        [e updateFence:f afterStages:MTLRenderStageVertex | MTLRenderStageFragment];
+        o.pass_part = f;
+    } else {
+        [e updateFence:f];
+    }
+    if constexpr (std::is_same_v<Encoder, id<MTLComputeCommandEncoder>>) {
+        if (o.compute_spans_barrier) {
+            // Its dispatches before the barrier are before every encoder after it.
+            o.waits.push_back(f);
+            o.compute_spans_barrier = false;
+        }
+    }
+    o.epoch.push_back(f);
+    o.last = f;
+}
+
+/// A barrier: the encoders after it wait for those before it (transitively for the earlier
+/// ones: each of those waited for the ones before its own barrier).
+void OrderBarrier(Owned& o) {
+    if (o.epoch.empty()) {
+        return;
+    }
+    o.waits = std::move(o.epoch);
+    o.epoch.clear();
+    o.wait_chain = false;
+}
+
+/// The segment's end: the chain passed on after all of its encoders (the next segment, and the
+/// submission's end for KosmicKrisp, wait for the chain).
+void OrderSegmentEnd(Owned& o, id<MTLCommandBuffer> cmd) {
+    if (!OrderByBarriers()) {
+        return;
+    }
+    if (!o.epoch.empty() || !o.waits.empty()) {
+        id<MTLBlitCommandEncoder> blit = [cmd blitCommandEncoder];
+        for (id<MTLFence> f : o.waits) {
+            [blit waitForFence:f];
+        }
+        for (id<MTLFence> f : o.epoch) {
+            [blit waitForFence:f];
+        }
+        [blit updateFence:chain];
+        [blit endEncoding];
+    }
+    o.waits.clear();
+    o.epoch.clear();
+    o.wait_chain = true;
+    o.compute_spans_barrier = false;
+    o.last = nil;
+    o.pass_part = nil;
+}
 
 /// Ends the render encoder (every one renders a Vulkan pass, its store actions left to its end):
 /// `pass_end`, at vkCmdEndRendering, stores what Vulkan's store operations keep; any other end
@@ -615,14 +769,14 @@ void CloseRender(Owned& o, bool pass_end) {
     } else if (o.in_pass) {
         ++counters.pass_breaks;
     }
-    UpdateChain(o.render);
+    OrderEnd(o, o.render);
     [o.render endEncoding];
     o.render = nil;
 }
 
 void EndCompute(Owned& o) {
     if (o.compute) {
-        UpdateChain(o.compute);
+        OrderEnd(o, o.compute);
         [o.compute endEncoding];
         o.compute = nil;
     }
@@ -630,7 +784,7 @@ void EndCompute(Owned& o) {
 
 void EndBlit(Owned& o) {
     if (o.blit) {
-        UpdateChain(o.blit);
+        OrderEnd(o, o.blit);
         [o.blit endEncoding];
         o.blit = nil;
     }
@@ -647,6 +801,7 @@ void EndMetal(Owned& o) {
         return;
     }
     EndEncoders(o);
+    OrderSegmentEnd(o, o.cmd);
     o.segments.push_back({.metal = o.cmd});
     o.cmd = nil;
 }
@@ -931,10 +1086,11 @@ id<MTLRenderCommandEncoder> RenderEncoder(Owned& o) {
     id<MTLCommandBuffer> cmd = Metal(o);
     EndCompute(o);
     EndBlit(o);
+    const bool reopen = o.pass_begun;
     o.render = [cmd renderCommandEncoderWithDescriptor:o.pass_begun ? o.pass_reopen : o.pass_first];
     o.pass_begun = true;
     if (o.render) {
-        WaitChain(o.render);
+        OrderStart(o, o.render, reopen);
     }
     return o.render;
 }
@@ -948,7 +1104,7 @@ id<MTLComputeCommandEncoder> ComputeEncoder(Owned& o) {
     EndBlit(o);
     // Concurrent: Vulkan orders dispatches only through barriers (CmdPipelineBarrier).
     o.compute = [cmd computeCommandEncoderWithDispatchType:MTLDispatchTypeConcurrent];
-    WaitChain(o.compute);
+    OrderStart(o, o.compute, false);
     return o.compute;
 }
 
@@ -960,7 +1116,7 @@ id<MTLBlitCommandEncoder> BlitEncoder(Owned& o) {
     CloseRender(o, false);
     EndCompute(o);
     o.blit = [cmd blitCommandEncoder];
-    WaitChain(o.blit);
+    OrderStart(o, o.blit, false);
     return o.blit;
 }
 
@@ -2700,6 +2856,21 @@ void CmdPipelineBarrier(Owned& o, VkCommandBuffer, const VkDependencyInfo* info)
             driver.vkCmdPipelineBarrier2(o.kk->cb, info);
             return;
         }
+        if (OrderByBarriers()) {
+            if (o.render) {
+                BreakPass(o);
+            }
+            if (o.compute && o.epoch.empty()) {
+                // The epoch's only encoder: its dispatches after the barrier wait for those
+                // before it, and it already waited for everything earlier.
+                [o.compute memoryBarrierWithScope:MTLBarrierScopeBuffers | MTLBarrierScopeTextures];
+                o.compute_spans_barrier = true;
+                return;
+            }
+            EndEncoders(o);
+            OrderBarrier(o);
+            return;
+        }
         if (o.render) {
             // Inside a pass (a self-dependency): Metal orders by ending the encoder.
             BreakPass(o);
@@ -2764,6 +2935,7 @@ void CmdBeginRendering(Owned& o, const VkRenderingInfo* info) {
     @autoreleasepool {
         o.in_pass = true;
         o.pass_begun = false;
+        o.pass_part = nil;
         o.pass_info = *info;
         o.pass_info.pNext = nullptr;
         o.pass_colors.assign(info->pColorAttachments,
@@ -3627,8 +3799,9 @@ void ClearPass(Owned& o, MTLRenderPassDescriptor* rp) {
     id<MTLCommandBuffer> cmd = Metal(o);
     EndEncoders(o);
     id<MTLRenderCommandEncoder> enc = [cmd renderCommandEncoderWithDescriptor:rp];
-    WaitChain(enc);
-    UpdateChain(enc);
+    OrderStart(o, enc, false);
+    OrderEnd(o, enc);
+    o.pass_part = nil; // (not the open pass's)
     [enc endEncoding];
 }
 

@@ -316,10 +316,20 @@ has no tessellator, so the frame encoder (`BB_METAL_FRAME=1`) now encodes classi
   bytes) and our queue (fills of one byte value, the copy), in one submission and split in two,
   and reads them back: `Metal frame test: PASS`, or which write landed out of order, or that the
   GPU did not finish (a wait between the queues never signalled).
-- Not yet: ordering by the renderer's barriers instead of the
-  fence chain, batched tessellation, a KosmicKrisp-free frame. The classic device and encoder of
-  Wooloomooloo2's native renderer are in the tree (`mtl_device`, `mtl_encoder`, `mtl_order`) for
-  that ordering; the frame encoder does not use them yet.
+- **Ordering by the renderer's barriers (`BB_METAL_ORDER=barriers`; the default is `chain`):**
+  each encoder updates a fence of its own; encoders wait for the fences of the encoders before
+  the last barrier (transitively everything earlier), not for the encoder just before them, so
+  the encoders between two barriers may overlap on the GPU as Vulkan allows. A reopened render
+  pass still waits for its last part (and a tessellated draw's kernels in between); a compute
+  encoder takes a barrier as a memory barrier while it is the only encoder since the last one.
+  Each Metal segment starts after the chain and passes it on at its end (one small blit encoder
+  that waits for all of its encoders), so segments, KosmicKrisp's work and submissions stay in
+  order as before. It relies on the renderer's barriers being complete: KosmicKrisp runs every
+  encoder after the one before, so a missing barrier never showed until now.
+- Not yet: batched tessellation, a KosmicKrisp-free frame. The classic device and encoder of
+  Wooloomooloo2's native renderer are in the tree (`mtl_device`, `mtl_encoder`, `mtl_order`);
+  the frame encoder's barrier ordering above is its own, simpler (whole barriers, no per-resource
+  tracking).
 
 ## Results so far (M5 Max, 2560x1600, MetalFX native AA)
 

@@ -308,6 +308,10 @@ has no tessellator, so the frame encoder (`BB_METAL_FRAME=1`) now encodes classi
   turns it off.
 - **Color clears of swizzled formats in Metal:** a format stored swizzled (the BGRA twins,
   4-4-4-4) is cleared with the clear color's channels moved to where they are stored.
+- **Flat inputs from the last vertex:** Metal takes a primitive's flat values from its first
+  vertex; a game pipeline whose key asks for the last (and whose fragment shader has flat
+  inputs) has its draws go to KosmicKrisp. `BB_METAL_FLAT_LAST=1` keeps them in Metal (wrong
+  flat values where the vertices differ; for measuring).
 - **Switches for bisecting:** `BB_METAL_TESS=0`, `BB_METAL_GEOMETRY=0`,
   `BB_METAL_FORMAT_VARIANTS=0` and `BB_METAL_DESCRIPTOR_SETS=0` keep those draws on KosmicKrisp (with `BB_METAL_PRECISE=all` and
   `BB_METAL_TRANSFERS`).

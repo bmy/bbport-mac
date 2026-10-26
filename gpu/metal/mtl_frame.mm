@@ -1594,6 +1594,18 @@ const char* DrawBlocker(Owned& o) {
     if (p.fill_point) {
         return "point polygon mode";
     }
+    static const bool flat_last_in_metal = [] {
+        const char* env = std::getenv("BB_METAL_FLAT_LAST");
+        const bool on = env && env[0] == '1';
+        if (on) {
+            Print("Metal frame: draws with flat inputs from the last vertex stay in Metal (which "
+                  "takes them from the first; BB_METAL_FLAT_LAST=1)\n");
+        }
+        return on;
+    }();
+    if (entry->flat_from_last && !flat_last_in_metal) {
+        return "flat inputs from the last vertex"; // Metal takes them from the first
+    }
     if (p.clip_minus_w_to_w && !p.clip_fixed && !entry->geometry) {
         // (Converted by the vertex function when built so, or by a geometry draw's pass-through.)
         return "clip space z from -w";
@@ -3431,6 +3443,9 @@ void CmdSetLineWidth(Owned& o, float width) {
 
 void CmdDraw(Owned& o, uint32_t vertex_count, uint32_t instance_count, uint32_t first_vertex,
              uint32_t first_instance) {
+    if (!vertex_count || !instance_count) {
+        return; // nothing in Vulkan; Metal's validation rejects empty draws
+    }
     @autoreleasepool {
         if (o.graphics && (o.graphics->tess || o.graphics->geometry)) {
             DrawTessellated(o, {vertex_count, instance_count, first_vertex, 0, first_instance, false},
@@ -3468,6 +3483,9 @@ void CmdDraw(Owned& o, uint32_t vertex_count, uint32_t instance_count, uint32_t 
 
 void CmdDrawIndexed(Owned& o, uint32_t index_count, uint32_t instance_count, uint32_t first_index,
                     int32_t vertex_offset, uint32_t first_instance) {
+    if (!index_count || !instance_count) {
+        return; // nothing in Vulkan; Metal's validation rejects empty draws
+    }
     @autoreleasepool {
         if (o.graphics && (o.graphics->tess || o.graphics->geometry)) {
             DrawTessellated(o,
@@ -3563,6 +3581,9 @@ void CmdDrawIndirectCount(Owned& o, VkBuffer buffer, VkDeviceSize offset, VkBuff
 }
 
 void CmdDispatch(Owned& o, uint32_t x, uint32_t y, uint32_t z) {
+    if (!x || !y || !z) {
+        return; // nothing in Vulkan; Metal's validation rejects empty dispatches
+    }
     @autoreleasepool {
         Dispatch(
             o,

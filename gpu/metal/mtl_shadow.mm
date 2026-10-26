@@ -389,6 +389,27 @@ struct VariantSource {
 namespace {
 
 /// One graphics pipeline's build (a worker thread): what Graphics was given, kept.
+/// bbport: whether a SPIR-V module decorates anything Flat (a fragment shader's flat inputs:
+/// OpDecorate id Flat, OpMemberDecorate struct member Flat).
+bool HasFlat(const std::vector<u32>& w) {
+    constexpr u32 Flat = 14;
+    for (size_t i = 5; i < w.size();) {
+        const u32 count = w[i] >> 16, op = w[i] & 0xffff;
+        if (!count || i + count > w.size()) {
+            break;
+        }
+        if ((op == 71 && count >= 3 && w[i + 2] == Flat) ||
+            (op == 72 && count >= 4 && w[i + 3] == Flat)) {
+            return true;
+        }
+        if (op == 54) { // OpFunction: no decorations after the first one
+            break;
+        }
+        i += count;
+    }
+    return false;
+}
+
 void BuildGraphics(const Vulkan::GraphicsPipelineKey& key, const ModuleRefs& modules,
                    std::span<const bool> has_stage, std::span<const VertexInput> inputs,
                    std::span<const vk::PipelineColorBlendAttachmentState> blend,
@@ -396,7 +417,15 @@ void BuildGraphics(const Vulkan::GraphicsPipelineKey& key, const ModuleRefs& mod
     using Stage = ::Shader::SwStage;
     auto& s = Get();
     bool published = false;
-    const auto publish = [&](const GraphicsEntry& entry) {
+    bool flat_from_last = false;
+    if (key.provoking_vtx_last != Gcn::ProvokingVtxLast::First &&
+        has_stage[u32(Stage::Fragment)]) {
+        const auto words = s.Words(modules[u32(Stage::Fragment)]);
+        flat_from_last = !words || HasFlat(*words); // (unknown: as if it had)
+    }
+    const auto publish = [&](const GraphicsEntry& built) {
+        GraphicsEntry entry = built;
+        entry.flat_from_last = flat_from_last;
         s.PublishGraphics(vk_pipeline, id, entry);
         published = true;
     };

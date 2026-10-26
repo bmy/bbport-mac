@@ -66,6 +66,10 @@ struct GraphicsEntry {
     bool generic{};
     FixedState fixed;
     std::array<u32, 32> strides{};
+    /// bbport: the pipeline takes flat values from the last vertex (its key's provoking vertex)
+    /// and its fragment shader has flat inputs: Metal takes them from the first, so its draws
+    /// go to KosmicKrisp.
+    bool flat_from_last{};
     /// bbport: a plain game pipeline's build inputs, for its variants with a pass's depth and
     /// stencil formats (FormatVariant); null for the others.
     std::shared_ptr<const VariantSource> source;

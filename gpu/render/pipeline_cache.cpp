@@ -5,6 +5,7 @@
 #include <atomic>
 #include <bit>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <csetjmp>
 #include <cstdio>
@@ -241,6 +242,15 @@ Shader::Profile MakeProfile(const Instance& instance, u32 sparse_page_shift) {
             }
             return vertex_only;
         }(),
+        .tess_level_clamp = [] {
+            const char* env = std::getenv("BB_TESS_CLAMP");
+            const bool clamp = env && env[0] == '1';
+            if (clamp) {
+                LOG_WARNING(Render, "Shaders: tessellation factors clamped to the game's maximum "
+                                    "tess level, as the PS4 does (BB_TESS_CLAMP=1)");
+            }
+            return clamp;
+        }(),
         .tess_factor_cap = [] {
             const char* env = std::getenv("BB_TESS_MAX");
             const u32 cap = env ? u32(std::strtoul(env, nullptr, 10)) : 0;
@@ -461,6 +471,17 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(PipelineSelection& se
         info.sw.tcs.num_threads = regs.ls_hs_config.hs_output_control_points;
         info.sw.tcs.tess_type = regs.tess_config.type;
         info.sw.tcs.offchip_lds_enable = regs.hs_program.settings.oc_lds_en;
+        if (profile.tess_level_clamp) {
+            // VGT_HOS_MAX_TESS_LEVEL (0xA286), as the hardware clamps (Regs::hs_clamp sits one
+            // register too high).
+            f32 max_level;
+            std::memcpy(&max_level, &regs.reg_array[0xA286], sizeof(f32));
+            // Only a clamp that does something: a NaN would never match its permutation, and
+            // 64 or more is Vulkan's own limit (one shared, unclamped permutation for those).
+            info.sw.tcs.max_tess_level =
+                std::isfinite(max_level) && max_level > 0.0f && max_level < 64.0f ? max_level
+                                                                                   : 0.0f;
+        }
         break;
     case SwStage::TessellationEval:
         info.sw.tes.tess_type = regs.tess_config.type;

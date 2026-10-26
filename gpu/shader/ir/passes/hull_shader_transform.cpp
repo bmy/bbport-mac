@@ -311,6 +311,12 @@ void LowerTessFactorStore(IR::Block& block, IR::Inst& inst, const RuntimeInfo& r
         const char* env = std::getenv("BB_TESS_MAX");
         return env ? f32(std::strtoul(env, nullptr, 10)) : 0.0f;
     }();
+    // BB_TESS_CLAMP=1: the game's maximum tess level, as the hardware applies it; only the
+    // maximum, so a factor of 0 or NaN still culls its patch.
+    f32 max_level = runtime_info.sw.tcs.max_tess_level;
+    if (cap > 0.0f && (max_level <= 0.0f || cap < max_level)) {
+        max_level = cap;
+    }
     const auto as_float = [&](const IR::Value& value) -> IR::F32 {
         IR::F32 factor;
         if (const IR::Inst* const cast = InstOf(value, Opcode::BitCastU32F32)) {
@@ -318,7 +324,11 @@ void LowerTessFactorStore(IR::Block& block, IR::Inst& inst, const RuntimeInfo& r
         } else {
             factor = ir.BitCast<IR::F32, IR::U32>(IR::U32{value});
         }
-        return cap > 0.0f ? IR::F32{ir.FPMin(factor, ir.Imm32(cap))} : factor;
+        if (max_level <= 0.0f) {
+            return factor;
+        }
+        const IR::F32 limit = ir.Imm32(max_level);
+        return IR::F32{ir.Select(ir.FPGreaterThan(factor, limit), limit, factor)};
     };
     inst.Invalidate();
     if (num_dwords == 1) {

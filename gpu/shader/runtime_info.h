@@ -131,6 +131,9 @@ struct SwTessControlRuntimeInfo {
     bool offchip_lds_enable;
     u32 ls_stride;
     u32 hs_output_base;
+    /// bbport (macOS), BB_TESS_CLAMP=1: the game's VGT_HOS_MAX_TESS_LEVEL, which the hardware
+    /// applies to the hull shader's factors (0: not applied, as upstream).
+    f32 max_tess_level{};
 
     bool operator==(const SwTessControlRuntimeInfo&) const = default;
 

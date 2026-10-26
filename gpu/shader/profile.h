@@ -64,6 +64,9 @@ struct Profile {
     /// not in fragment and compute shaders. KosmicKrisp compiles every NoContraction operation
     /// in Metal's safe math mode, which keeps the compiler from optimising it.
     bool precise_vertex_stages_only{};
+    /// bbport (macOS), BB_TESS_CLAMP=1: hull shader tessellation factors are clamped to the
+    /// game's VGT_HOS_MAX_TESS_LEVEL as the hardware does (SwTessControlRuntimeInfo).
+    bool tess_level_clamp{};
     /// bbport (macOS) experiment, BB_TESS_MAX=n: the hull shaders' tessellation factors are
     /// capped at n (0: as the game writes them). Here so that changing it rebuilds the cache;
     /// the hull shader transform reads the variable itself.

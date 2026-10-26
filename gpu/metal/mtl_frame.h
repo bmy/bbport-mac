@@ -60,7 +60,10 @@ void BufferCreated(VkBuffer buffer, VkDeviceSize size);
 void BufferDestroyed(VkBuffer buffer);
 /// bbport: descriptor sets' contents (vkAllocateDescriptorSets: empty; vkUpdateDescriptorSets:
 /// the writes, decoded; a copied-into set is unknown, its draws fall back).
-void DescriptorSetsAllocated(uint32_t count, const VkDescriptorSet* sets);
+void DescriptorSetsAllocated(VkDescriptorPool pool, uint32_t count, const VkDescriptorSet* sets);
+/// Their contents forgotten (vkFreeDescriptorSets; a pool's reset or destruction: all of its).
+void DescriptorSetsFreed(uint32_t count, const VkDescriptorSet* sets);
+void DescriptorPoolReset(VkDescriptorPool pool);
 void DescriptorSetsUpdated(uint32_t write_count, const VkWriteDescriptorSet* writes,
                            uint32_t copy_count, const VkCopyDescriptorSet* copies);
 

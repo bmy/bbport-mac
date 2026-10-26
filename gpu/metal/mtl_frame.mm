@@ -1248,6 +1248,8 @@ void Decode(PushWrite& w) {
 /// may still look sets up while the process exits.
 std::mutex& set_contents_mutex = *new std::mutex;
 auto& known_sets = *new std::unordered_map<VkDescriptorSet, std::shared_ptr<const SetContents>>;
+/// The sets allocated from each pool (forgotten at its reset or destruction).
+auto& pool_sets = *new std::unordered_map<VkDescriptorPool, std::vector<VkDescriptorSet>>;
 
 std::shared_ptr<const SetContents> SetContentsOf(VkDescriptorSet set) {
     std::scoped_lock lock{set_contents_mutex};
@@ -2654,14 +2656,35 @@ VkResult Submit(VkQueue vkqueue, const Batch* batches, uint32_t count, VkFence f
     }
 }
 
-void DescriptorSetsAllocated(uint32_t count, const VkDescriptorSet* sets) {
+void DescriptorSetsAllocated(VkDescriptorPool pool, uint32_t count, const VkDescriptorSet* sets) {
     std::scoped_lock lock{set_contents_mutex};
     const auto empty = std::make_shared<const SetContents>();
+    auto& owned = pool_sets[pool];
     for (u32 i = 0; i < count; ++i) {
         if (sets[i]) {
-            known_sets[sets[i]] = empty; // a reset pool's handles come back here too
+            known_sets[sets[i]] = empty;
+            owned.push_back(sets[i]);
         }
     }
+}
+
+void DescriptorSetsFreed(uint32_t count, const VkDescriptorSet* sets) {
+    std::scoped_lock lock{set_contents_mutex};
+    for (u32 i = 0; sets && i < count; ++i) {
+        known_sets.erase(sets[i]); // (the pool's list keeps the handle until its reset)
+    }
+}
+
+void DescriptorPoolReset(VkDescriptorPool pool) {
+    std::scoped_lock lock{set_contents_mutex};
+    const auto it = pool_sets.find(pool);
+    if (it == pool_sets.end()) {
+        return;
+    }
+    for (const VkDescriptorSet set : it->second) {
+        known_sets.erase(set);
+    }
+    pool_sets.erase(it);
 }
 
 void DescriptorSetsUpdated(uint32_t write_count, const VkWriteDescriptorSet* writes,
@@ -2730,12 +2753,26 @@ void DescriptorSetsUpdated(uint32_t write_count, const VkWriteDescriptorSet* wri
                 }
                 next = std::make_shared<SetContents>(*it->second);
             }
-            auto at = std::find_if(next->writes.begin(), next->writes.end(),
-                                   [&](const PushWrite& x) {
-                                       return x.write.dstBinding == w.write.dstBinding &&
-                                              x.write.dstArrayElement == w.write.dstArrayElement;
-                                   });
-            if (at != next->writes.end()) {
+            // An earlier write of the binding is replaced when it covers the same elements;
+            // one that overlaps otherwise would shadow the new elements (FindBound takes the
+            // first match): such a set is not decoded (its draws fall back).
+            const u32 first = w.write.dstArrayElement, end = first + w.write.descriptorCount;
+            bool overlap = false;
+            auto at = next->writes.end();
+            for (auto x = next->writes.begin(); x != next->writes.end(); ++x) {
+                if (x->write.dstBinding != w.write.dstBinding) {
+                    continue;
+                }
+                const u32 xf = x->write.dstArrayElement, xe = xf + x->write.descriptorCount;
+                if (xf == first && xe == end) {
+                    at = x;
+                } else if (xf < end && first < xe) {
+                    overlap = true;
+                }
+            }
+            if (overlap) {
+                unknown.push_back(set);
+            } else if (at != next->writes.end()) {
                 *at = std::move(w);
             } else {
                 next->writes.push_back(std::move(w));

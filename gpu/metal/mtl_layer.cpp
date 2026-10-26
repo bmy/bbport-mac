@@ -68,7 +68,8 @@ namespace {
     X(vkCreateImageView) X(vkDestroyImageView) X(vkCreateBuffer) X(vkDestroyBuffer)                \
     X(vkCreateImage) X(vkDestroyImage) X(vkCreateShaderModule) X(vkCreateGraphicsPipelines)       \
     X(vkCreateComputePipelines) X(vkDestroyPipeline) X(vkAllocateDescriptorSets)                   \
-    X(vkUpdateDescriptorSets) X(vkGetDeviceProcAddr)                                               \
+    X(vkUpdateDescriptorSets) X(vkFreeDescriptorSets) X(vkResetDescriptorPool)                     \
+    X(vkDestroyDescriptorPool) X(vkGetDeviceProcAddr)                                              \
     X(vkGetInstanceProcAddr)
 
 enum Id : unsigned {
@@ -393,7 +394,9 @@ struct Hook<I, R (*)(A...)> {
                I == Id_vkDestroyBuffer || I == Id_vkCreateImage || I == Id_vkDestroyImage ||
                I == Id_vkCreateShaderModule || I == Id_vkCreateGraphicsPipelines ||
                I == Id_vkCreateComputePipelines || I == Id_vkDestroyPipeline ||
-               I == Id_vkAllocateDescriptorSets || I == Id_vkUpdateDescriptorSets;
+               I == Id_vkAllocateDescriptorSets || I == Id_vkUpdateDescriptorSets ||
+               I == Id_vkFreeDescriptorSets || I == Id_vkResetDescriptorPool ||
+               I == Id_vkDestroyDescriptorPool;
     }
 
     static R Frame(A... args) {
@@ -489,9 +492,19 @@ struct Hook<I, R (*)(A...)> {
             const R result = original(args...);
             const auto [dev, info, sets] = t;
             if (result == VK_SUCCESS && info && sets) {
-                F::DescriptorSetsAllocated(info->descriptorSetCount, sets);
+                F::DescriptorSetsAllocated(info->descriptorPool, info->descriptorSetCount, sets);
             }
             return result;
+        } else if constexpr (I == Id_vkFreeDescriptorSets) {
+            const auto [dev, pool, count, sets] = t;
+            F::DescriptorSetsFreed(count, sets);
+            return original(args...);
+        } else if constexpr (I == Id_vkResetDescriptorPool) {
+            F::DescriptorPoolReset(std::get<1>(t));
+            return original(args...);
+        } else if constexpr (I == Id_vkDestroyDescriptorPool) {
+            F::DescriptorPoolReset(std::get<1>(t));
+            return original(args...);
         } else if constexpr (I == Id_vkUpdateDescriptorSets) {
             const auto [dev, write_count, writes, copy_count, copies] = t;
             F::DescriptorSetsUpdated(write_count, writes, copy_count, copies);

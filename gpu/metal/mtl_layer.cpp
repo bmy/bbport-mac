@@ -25,6 +25,7 @@
 #include "vulkan/vk_common.h"
 #ifdef BB_METAL_BACKEND
 #include "metal/mtl_frame.h"
+#include "metal/mtl_shadow.h"
 #endif
 
 namespace MetalLayer {
@@ -65,7 +66,9 @@ namespace {
     X(vkCmdBeginQuery) X(vkCmdEndQuery) X(vkCmdResetQueryPool) X(vkCmdCopyQueryPoolResults)        \
     X(vkCmdExecuteCommands) X(vkFreeCommandBuffers) X(vkCreateSampler) X(vkDestroySampler)         \
     X(vkCreateImageView) X(vkDestroyImageView) X(vkCreateBuffer) X(vkDestroyBuffer)                \
-    X(vkCreateImage) X(vkDestroyImage) X(vkGetDeviceProcAddr) X(vkGetInstanceProcAddr)
+    X(vkCreateImage) X(vkDestroyImage) X(vkCreateShaderModule) X(vkCreateGraphicsPipelines)       \
+    X(vkCreateComputePipelines) X(vkDestroyPipeline) X(vkGetDeviceProcAddr)                        \
+    X(vkGetInstanceProcAddr)
 
 enum Id : unsigned {
 #define BB_ID(name) Id_##name,
@@ -386,7 +389,9 @@ struct Hook<I, R (*)(A...)> {
                I == Id_vkFreeCommandBuffers || I == Id_vkCreateSampler ||
                I == Id_vkDestroySampler || I == Id_vkCreateImageView ||
                I == Id_vkDestroyImageView || I == Id_vkCreateBuffer ||
-               I == Id_vkDestroyBuffer || I == Id_vkCreateImage || I == Id_vkDestroyImage;
+               I == Id_vkDestroyBuffer || I == Id_vkCreateImage || I == Id_vkDestroyImage ||
+               I == Id_vkCreateShaderModule || I == Id_vkCreateGraphicsPipelines ||
+               I == Id_vkCreateComputePipelines || I == Id_vkDestroyPipeline;
     }
 
     static R Frame(A... args) {
@@ -451,6 +456,30 @@ struct Hook<I, R (*)(A...)> {
             return original(args...);
         } else if constexpr (I == Id_vkDestroyBuffer) {
             F::BufferDestroyed(std::get<1>(t));
+            return original(args...);
+        } else if constexpr (I == Id_vkCreateShaderModule) {
+            // Every module's SPIR-V (the renderer's own passes make theirs here too).
+            const R result = original(args...);
+            if (result == VK_SUCCESS) {
+                MetalShadow::ModuleCreated(*std::get<3>(t), std::get<1>(t));
+            }
+            return result;
+        } else if constexpr (I == Id_vkCreateGraphicsPipelines ||
+                             I == Id_vkCreateComputePipelines) {
+            // The renderer's own pipelines (outside the game's GameBuildScope) are built in
+            // Metal from their create infos, at creation.
+            const R result = original(args...);
+            const auto [dev, cache, count, infos, alloc, out] = t;
+            for (uint32_t i = 0; out && i < count; ++i) {
+                if constexpr (I == Id_vkCreateGraphicsPipelines) {
+                    MetalShadow::GraphicsCreated(&infos[i], out[i]);
+                } else {
+                    MetalShadow::ComputeCreated(&infos[i], out[i]);
+                }
+            }
+            return result;
+        } else if constexpr (I == Id_vkDestroyPipeline) {
+            MetalShadow::PipelineDestroyed(std::get<1>(t));
             return original(args...);
         } else {
             // vkCmd*: the first argument is the command buffer.

@@ -256,9 +256,13 @@ ComputePipeline::ComputePipeline(const Instance& instance, Scheduler& scheduler,
             },
         .layout = *pipeline_layout,
     };
-    pipeline = CheckPipeline(instance.GetDevice().createComputePipelineUnique(pipeline_cache,
-                                                                              pipeline_ci),
-                             preloading, "compute");
+    {
+        // bbport (macOS): the game's pipeline (MetalShadow::Compute below), not a generic one.
+        [[maybe_unused]] MetalShadow::GameBuildScope game_build;
+        pipeline = CheckPipeline(instance.GetDevice().createComputePipelineUnique(pipeline_cache,
+                                                                                  pipeline_ci),
+                                 preloading, "compute");
+    }
     SetObjectName(instance.GetDevice(), *pipeline, "Compute Pipeline {}", debug_name);
     if (MetalShadow::Enabled()) { // bbport (macOS): docs/MACOS_METAL_RENDERER.md, stage 2
         MetalShadow::Compute(compute_key, module, *pipeline);
@@ -588,8 +592,12 @@ GraphicsPipeline::GraphicsPipeline(
         .pDynamicState = &dynamic_info,
         .layout = *pipeline_layout,
     };
-    pipeline = CheckPipeline(device.createGraphicsPipelineUnique(pipeline_cache, pipeline_ci),
-                             preloading, "graphics");
+    {
+        // bbport (macOS): the game's pipeline (MetalShadow::Graphics below), not a generic one.
+        [[maybe_unused]] MetalShadow::GameBuildScope game_build;
+        pipeline = CheckPipeline(device.createGraphicsPipelineUnique(pipeline_cache, pipeline_ci),
+                                 preloading, "graphics");
+    }
     SetObjectName(device, *pipeline, "Graphics Pipeline {}", debug_name);
     // bbport (macOS): docs/MACOS_METAL_RENDERER.md, stage 2. Not with dynamic vertex input: the
     // key then holds no vertex formats (never so on KosmicKrisp).

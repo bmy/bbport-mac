@@ -26,6 +26,15 @@ struct VertexInput {
 };
 
 #ifdef BB_METAL_BACKEND
+/// While one lives on a thread, pipelines that thread creates are the game's (Graphics and
+/// Compute bring them with their keys): the command layer's generic build (from the Vulkan create
+/// info, for the renderer's own passes) leaves them alone.
+struct GameBuildScope {
+    GameBuildScope();
+    ~GameBuildScope();
+    GameBuildScope(const GameBuildScope&) = delete;
+    GameBuildScope& operator=(const GameBuildScope&) = delete;
+};
 bool Enabled();
 /// The SPIR-V a Vulkan shader module was made from (CompileSPV).
 void RegisterModule(vk::ShaderModule module, std::span<const u32> spirv);
@@ -40,6 +49,7 @@ void Compute(const Vulkan::ComputePipelineKey& key, vk::ShaderModule module, vk:
 /// A Vulkan pipeline is destroyed: its handle stops standing for its Metal pipeline.
 void Forget(vk::Pipeline pipeline);
 #else
+struct GameBuildScope {};
 inline bool Enabled() {
     return false;
 }

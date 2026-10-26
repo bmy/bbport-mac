@@ -280,6 +280,17 @@ has no tessellator, so the frame encoder (`BB_METAL_FRAME=1`) now encodes classi
 - **Strips without primitive restart in Metal:** Metal always restarts at the all-ones index,
   which only matters for a draw that uses vertex 65535 (or 2^32 - 1);
   `BB_METAL_STRIP_RESTART=0` sends them to KosmicKrisp as before.
+- **The renderer's own pipelines in Metal** (presentation, copies, upscaling, motion vectors,
+  the HLE shaders: about 2,100 draws and dispatches a second at the lamp had "no Metal
+  pipeline"): the layer now sees every shader module and pipeline the renderer creates
+  (`vkCreateShaderModule`, `vkCreateGraphicsPipelines`, `vkCreateComputePipelines`,
+  `vkDestroyPipeline`); those made outside a `GameBuildScope` (the game's pipelines are made
+  inside one, `render/pipeline.cpp`, and come with their keys as before) are built in Metal from
+  their Vulkan create infos at creation: specialization constants fixed into the SPIR-V, the
+  dynamic rendering formats, blend states, vertex input, topology, and the state they fix rather
+  than take from the dynamic state (cull mode, front face, depth and stencil tests, depth bias),
+  which the frame encoder applies for their draws. As Wooloomooloo2's MoltenVK layer at 78b59f5.
+  Only vertex and fragment stages; render pass objects are not handled (the renderer has none).
 - **Switches for bisecting:** `BB_METAL_TESS=0` and `BB_METAL_GEOMETRY=0` keep those draws on
   KosmicKrisp (with `BB_METAL_PRECISE=all` and `BB_METAL_TRANSFERS`).
 - **Self-test:** `BB_METAL_FRAME_TEST=1` (with `BB_METAL_FRAME=1`) runs 32 rounds of fills on a

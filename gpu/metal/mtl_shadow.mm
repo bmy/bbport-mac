@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport (macOS): the Metal shadow build (vk_metal_shadow.h; docs/MACOS_METAL_RENDERER.md, stage 2).
 // From Wooloomooloo2/bloodborne_mac_port (78b59f5, GPL-2.0-or-later), renderer_metal/mtl_shadow.mm,
-// without its MoltenVK layer's generic (host pass) pipelines. Every pipeline the Vulkan path
+// with its generic (host pass) pipelines, which its MoltenVK layer built from Vulkan create infos. Every pipeline the Vulkan path
 // creates is built again as a Metal pipeline state from the same key, SPIR-V and blend states;
 // the counts show how much of the game the Metal command path's pipelines cover.
 // BB_METAL_SHADOW=1.
@@ -18,6 +18,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -27,6 +28,7 @@
 #include "common/path_util.h"
 #include "shader/runtime_info.h"
 #include "metal/mtl_device.h"
+#include "metal/mtl_device_impl.h"
 #include "metal/mtl_pso_cache.h"
 #include "metal/mtl_shader.h"
 #include "metal/mtl_shadow.h"
@@ -528,6 +530,9 @@ void BuildGraphics(const Vulkan::GraphicsPipelineKey& key, const ModuleRefs& mod
         // RectList: the vertex shader rewritten to emit two triangles per rectangle (MoltenVK
         // emulates it with a tessellation control shader instead).
         const bool rect_list = key.prim_type == Gcn::PrimitiveType::RectList;
+        // The guest's [-w, w] clip space: the Vulkan pipeline has VK_EXT_depth_clip_control for
+        // it (KosmicKrisp has the extension, so the recompiler does not convert z itself:
+        // Profile emulate_depth_negative_one_to_one); the Metal vertex function converts it.
         const auto* vs = s.Get(modules[u32(Stage::Vertex)], key.stage_hashes[u32(Stage::Vertex)],
                                "vertex", rect_list,
                                key.clip_space == Gcn::ClipSpace::MinusWToW);
@@ -609,6 +614,377 @@ void Compute(const Vulkan::ComputePipelineKey& key, vk::ShaderModule module,
         ++(p ? s.compute_ok : s.compute_failed);
         s.Report();
     });
+}
+
+// ---- Generic pipelines (the renderer's own passes): built from their Vulkan create infos ----
+// After Wooloomooloo2/bloodborne_mac_port's mtl_shadow.mm at 78b59f5 (GPL-2.0-or-later).
+
+namespace {
+thread_local int game_build_depth = 0;
+
+/// Fixes the SPIR-V specialization constants at the values given (or their defaults) and turns
+/// them into plain constants, so SPIRV-Cross emits no Metal function constants (a pipeline state
+/// would then need a specialized function): OpSpecConstant's literal, OpSpecConstantTrue/False by
+/// value, the SpecId decorations dropped. OpSpecConstantOp stays (none in the host shaders).
+std::vector<u32> Specialize(const std::vector<u32>& words, const VkSpecializationInfo* info) {
+    if (words.size() < 5) {
+        return words;
+    }
+    std::unordered_map<u32, u32> spec_ids; // result id -> SpecId
+    for (size_t i = 5; i < words.size();) {
+        const u32 count = words[i] >> 16, op = words[i] & 0xffff;
+        if (!count || i + count > words.size()) {
+            break;
+        }
+        if (op == 71 && count >= 4 && words[i + 2] == 1) { // OpDecorate id SpecId n
+            spec_ids[words[i + 1]] = words[i + 3];
+        }
+        i += count;
+    }
+    std::vector<u32> out(words.begin(), words.begin() + 5);
+    out.reserve(words.size());
+    for (size_t i = 5; i < words.size();) {
+        const u32 count = words[i] >> 16, op = words[i] & 0xffff;
+        if (!count || i + count > words.size()) {
+            break;
+        }
+        if (op == 71 && count >= 4 && words[i + 2] == 1) {
+            i += count; // SpecId on what is now a plain constant
+            continue;
+        }
+        const size_t at = out.size();
+        out.insert(out.end(), words.begin() + i, words.begin() + i + count);
+        // OpSpecConstantTrue 48, False 49, OpSpecConstant 50, Composite 51 -> 41, 42, 43, 44
+        if ((op == 48 || op == 49 || op == 50 || op == 51) && count >= 3) {
+            u32 new_op = op == 48 ? 41u : op == 49 ? 42u : op == 50 ? 43u : 44u;
+            const auto it = spec_ids.find(words[i + 2]);
+            if (info && it != spec_ids.end()) {
+                for (u32 e = 0; e < info->mapEntryCount; ++e) {
+                    const auto& entry = info->pMapEntries[e];
+                    if (entry.constantID != it->second ||
+                        size_t(entry.offset) + entry.size > info->dataSize) {
+                        continue;
+                    }
+                    const u8* data = static_cast<const u8*>(info->pData) + entry.offset;
+                    if (op == 50) {
+                        for (u32 w = 0; w + 3 < count && w * 4 < entry.size; ++w) {
+                            u32 v = 0;
+                            std::memcpy(&v, data + w * 4, std::min<size_t>(4, entry.size - w * 4));
+                            out[at + 3 + w] = v;
+                        }
+                    } else if (op == 48 || op == 49) {
+                        bool value = false;
+                        for (size_t b = 0; b < entry.size; ++b) {
+                            value |= data[b] != 0;
+                        }
+                        new_op = value ? 41u : 42u;
+                    }
+                }
+            }
+            out[at] = (count << 16) | new_op;
+        }
+        i += count;
+    }
+    return out;
+}
+
+std::mutex generic_mutex;
+/// By the specialized SPIR-V's hash: translated once, kept (pipeline states point at them).
+std::unordered_map<u64, std::unique_ptr<Metal::CompiledShader>> generic_shaders;
+std::vector<std::unique_ptr<Metal::RenderPipeline>> generic_pipelines;
+std::atomic<u32> generic_ok{0}, generic_failed{0};
+
+const Metal::CompiledShader* CompileStage(State& s, const VkPipelineShaderStageCreateInfo& stage,
+                                          const char* what) {
+    std::shared_ptr<ShaderEntry> entry = s.Lookup(vk::ShaderModule(stage.module));
+    if (!entry) {
+        ++s.no_spirv;
+        return nullptr;
+    }
+    const std::vector<u32> spec = Specialize(*entry->words, stage.pSpecializationInfo);
+    const u64 hash = XXH3_64bits(spec.data(), spec.size() * sizeof(u32));
+    {
+        std::scoped_lock lock{generic_mutex};
+        if (const auto it = generic_shaders.find(hash); it != generic_shaders.end()) {
+            return it->second.get();
+        }
+    }
+    auto result = s.compiler.Compile(spec, hash, what);
+    std::scoped_lock lock{generic_mutex};
+    auto& slot = generic_shaders[hash];
+    if (!slot && result.status == Metal::CompileStatus::Ok) {
+        slot = std::move(result.shader);
+    }
+    return slot.get();
+}
+
+void NoteGeneric(bool ok, const std::string& why) {
+    const u32 n = ++(ok ? generic_ok : generic_failed);
+    if (!ok && n <= 20) {
+        Print("Metal shadow: a pipeline of the renderer's own not built in Metal: %s\n",
+              why.c_str());
+    }
+    if (ok && (n == 1 || n % 25 == 0)) {
+        Print("Metal shadow: %u pipelines of the renderer's own built in Metal, %u not\n", n,
+              generic_failed.load());
+    }
+}
+
+bool GenericWanted(VkPipeline pipeline) {
+    return pipeline && !game_build_depth && Enabled();
+}
+} // namespace
+
+GameBuildScope::GameBuildScope() {
+    ++game_build_depth;
+}
+GameBuildScope::~GameBuildScope() {
+    --game_build_depth;
+}
+
+void ModuleCreated(VkShaderModule module, const VkShaderModuleCreateInfo* info) {
+    if (!Enabled() || !module || !info || !info->pCode) {
+        return;
+    }
+    RegisterModule(vk::ShaderModule(module),
+                   std::span<const u32>(info->pCode, info->codeSize / sizeof(u32)));
+}
+
+void PipelineDestroyed(VkPipeline pipeline) {
+    Forget(vk::Pipeline(pipeline));
+}
+
+void ComputeCreated(const VkComputePipelineCreateInfo* info, VkPipeline pipeline) {
+    if (!GenericWanted(pipeline)) {
+        return;
+    }
+    auto& s = Get();
+    u64 build;
+    {
+        std::scoped_lock lock{s.pipelines_mutex};
+        build = s.Expect(pipeline);
+    }
+    const auto* cs = CompileStage(s, info->stage, "host compute");
+    const Metal::ComputePipeline* p = nullptr;
+    if (cs) {
+        Vulkan::ComputePipelineKey key{};
+        key.value = size_t(XXH3_64bits(&cs, sizeof cs)); // one pipeline per translated shader
+        p = s.pso.GetComputePipeline(key, cs);
+    }
+    if (p) {
+        s.PublishCompute(pipeline, build, p);
+    } else {
+        s.Abandon(pipeline, build);
+    }
+    NoteGeneric(p != nullptr, cs ? "its compute pipeline state" : "its compute shader");
+}
+
+void GraphicsCreated(const VkGraphicsPipelineCreateInfo* info, VkPipeline pipeline) {
+    if (!GenericWanted(pipeline)) {
+        return;
+    }
+    using namespace Metal::VkToMtl;
+    auto& s = Get();
+    u64 build;
+    {
+        std::scoped_lock lock{s.pipelines_mutex};
+        build = s.Expect(pipeline);
+    }
+    const auto fail = [&](const std::string& why) {
+        s.Abandon(pipeline, build);
+        NoteGeneric(false, why);
+    };
+    const Metal::CompiledShader* vs = nullptr;
+    const Metal::CompiledShader* fs = nullptr;
+    for (u32 i = 0; i < info->stageCount; ++i) {
+        const auto& stage = info->pStages[i];
+        if (stage.stage == VK_SHADER_STAGE_VERTEX_BIT) {
+            vs = CompileStage(s, stage, "host vertex");
+        } else if (stage.stage == VK_SHADER_STAGE_FRAGMENT_BIT) {
+            fs = CompileStage(s, stage, "host fragment");
+            if (!fs) {
+                return fail("its fragment shader");
+            }
+        } else {
+            return fail("a stage other than vertex and fragment");
+        }
+    }
+    if (!vs) {
+        return fail("its vertex shader");
+    }
+    auto entry = std::make_unique<Metal::RenderPipeline>();
+    GraphicsEntry ge;
+    ge.generic = true;
+    @autoreleasepool {
+        MTLRenderPipelineDescriptor* d = [MTLRenderPipelineDescriptor new];
+        d.vertexFunction = (__bridge id<MTLFunction>)vs->function;
+        if (fs) {
+            d.fragmentFunction = (__bridge id<MTLFunction>)fs->function;
+        }
+        const VkPipelineRenderingCreateInfo* rendering = nullptr;
+        for (auto* n = static_cast<const VkBaseInStructure*>(info->pNext); n; n = n->pNext) {
+            if (n->sType == VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO) {
+                rendering = reinterpret_cast<const VkPipelineRenderingCreateInfo*>(n);
+            }
+        }
+        if (!rendering) {
+            return fail("no dynamic rendering formats (a render pass object)");
+        }
+        const auto* blend = info->pColorBlendState;
+        if (rendering->colorAttachmentCount > entry->color_pixel_formats.size()) {
+            return fail("more color attachments than Metal has");
+        }
+        for (u32 i = 0; i < rendering->colorAttachmentCount; ++i) {
+            const VkFormat vk_format = rendering->pColorAttachmentFormats[i];
+            if (vk_format == VK_FORMAT_UNDEFINED) {
+                continue;
+            }
+            const u32 format = PixelFormat(vk::Format(vk_format));
+            if (!format || IsDepthPixelFormat(format)) {
+                return fail("color attachment " + std::to_string(i) + " format " +
+                            vk::to_string(vk::Format(vk_format)));
+            }
+            if (!(FormatSwizzle(vk::Format(vk_format)) == IdentitySwizzle)) {
+                // Stored swizzled: the frame encoder renders only into identity formats.
+                return fail("color attachment " + std::to_string(i) + " stored swizzled");
+            }
+            entry->color_pixel_formats[i] = format;
+            d.colorAttachments[i].pixelFormat = MTLPixelFormat(format);
+            if (blend && i < blend->attachmentCount) {
+                const auto& a = blend->pAttachments[i];
+                entry->key.write_masks[i] = vk::ColorComponentFlags(a.colorWriteMask);
+                d.colorAttachments[i].writeMask =
+                    MTLColorWriteMask(ColorWriteMask(vk::ColorComponentFlags(a.colorWriteMask)));
+                d.colorAttachments[i].blendingEnabled = a.blendEnable;
+                if (a.blendEnable) {
+                    d.colorAttachments[i].sourceRGBBlendFactor =
+                        MTLBlendFactor(BlendFactor(vk::BlendFactor(a.srcColorBlendFactor)));
+                    d.colorAttachments[i].destinationRGBBlendFactor =
+                        MTLBlendFactor(BlendFactor(vk::BlendFactor(a.dstColorBlendFactor)));
+                    d.colorAttachments[i].rgbBlendOperation =
+                        MTLBlendOperation(BlendOp(vk::BlendOp(a.colorBlendOp)));
+                    d.colorAttachments[i].sourceAlphaBlendFactor =
+                        MTLBlendFactor(BlendFactor(vk::BlendFactor(a.srcAlphaBlendFactor)));
+                    d.colorAttachments[i].destinationAlphaBlendFactor =
+                        MTLBlendFactor(BlendFactor(vk::BlendFactor(a.dstAlphaBlendFactor)));
+                    d.colorAttachments[i].alphaBlendOperation =
+                        MTLBlendOperation(BlendOp(vk::BlendOp(a.alphaBlendOp)));
+                }
+            } else {
+                entry->key.write_masks[i] = vk::ColorComponentFlags(0xf);
+            }
+        }
+        entry->num_color_attachments = rendering->colorAttachmentCount;
+        if (rendering->depthAttachmentFormat) {
+            entry->depth_pixel_format = PixelFormat(vk::Format(rendering->depthAttachmentFormat));
+            d.depthAttachmentPixelFormat = MTLPixelFormat(entry->depth_pixel_format);
+        }
+        if (rendering->stencilAttachmentFormat) {
+            entry->stencil_pixel_format =
+                PixelFormat(vk::Format(rendering->stencilAttachmentFormat));
+            d.stencilAttachmentPixelFormat = MTLPixelFormat(entry->stencil_pixel_format);
+        }
+        entry->sample_count = 1;
+        if (info->pMultisampleState) {
+            d.rasterSampleCount = info->pMultisampleState->rasterizationSamples;
+            entry->sample_count = info->pMultisampleState->rasterizationSamples;
+        }
+        // Vertex input: binding b at buffer slot kVertexBufferBase - b, dynamic stride.
+        if (const auto* vi = info->pVertexInputState; vi && vi->vertexAttributeDescriptionCount) {
+            MTLVertexDescriptor* vd = [MTLVertexDescriptor vertexDescriptor];
+            for (u32 i = 0; i < vi->vertexAttributeDescriptionCount; ++i) {
+                const auto& a = vi->pVertexAttributeDescriptions[i];
+                const u32 format = VertexFormat(vk::Format(a.format));
+                if (!format || a.binding >= Metal::kMaxVertexBuffers || a.location >= 31) {
+                    return fail("vertex attribute format " + vk::to_string(vk::Format(a.format)));
+                }
+                vd.attributes[a.location].format = MTLVertexFormat(format);
+                vd.attributes[a.location].offset = a.offset;
+                vd.attributes[a.location].bufferIndex = Metal::kVertexBufferBase - a.binding;
+            }
+            for (u32 i = 0; i < vi->vertexBindingDescriptionCount; ++i) {
+                const auto& b = vi->pVertexBindingDescriptions[i];
+                if (b.binding >= Metal::kMaxVertexBuffers) {
+                    return fail("a vertex binding beyond Metal's slots");
+                }
+                const u32 slot = Metal::kVertexBufferBase - b.binding;
+                vd.layouts[slot].stride = MTLBufferLayoutStrideDynamic;
+                vd.layouts[slot].stepFunction = b.inputRate == VK_VERTEX_INPUT_RATE_INSTANCE
+                                                    ? MTLVertexStepFunctionPerInstance
+                                                    : MTLVertexStepFunctionPerVertex;
+                ge.strides[b.binding] = b.stride;
+                auto& vslot = entry->vertex_slots[entry->num_vertex_slots++];
+                vslot.location = b.binding;
+                vslot.slot = slot;
+            }
+            d.vertexDescriptor = vd;
+        }
+        const auto topology =
+            info->pInputAssemblyState
+                ? PrimitiveType(vk::PrimitiveTopology(info->pInputAssemblyState->topology))
+                : PrimitiveType(vk::PrimitiveTopology::eTriangleList);
+        entry->primitive_type = topology.type;
+        entry->primitive_emulated = topology.needs_emulation;
+        d.inputPrimitiveTopology = topology.type == MTLPrimitiveTypePoint ? MTLPrimitiveTopologyClassPoint
+                                   : topology.type == MTLPrimitiveTypeLine ||
+                                           topology.type == MTLPrimitiveTypeLineStrip
+                                       ? MTLPrimitiveTopologyClassLine
+                                       : MTLPrimitiveTopologyClassTriangle;
+        NSError* error = nil;
+        id<MTLRenderPipelineState> state =
+            [s.device.GetImpl().device newRenderPipelineStateWithDescriptor:d error:&error];
+        if (!state) {
+            return fail(std::string("Metal: ") +
+                        (error ? error.localizedDescription.UTF8String : "unknown error"));
+        }
+        entry->state = (__bridge_retained void*)state;
+        entry->vertex_function = (__bridge_retained void*)d.vertexFunction;
+        if (fs) {
+            entry->fragment_function = (__bridge_retained void*)d.fragmentFunction;
+        }
+    }
+    entry->vs = vs;
+    entry->fs = fs;
+    entry->fill_mode = MTLTriangleFillModeFill;
+    entry->depth_clip = true;
+    // The state Vulkan fixes unless it is dynamic.
+    std::vector<VkDynamicState> dynamic;
+    if (info->pDynamicState) {
+        dynamic.assign(info->pDynamicState->pDynamicStates,
+                       info->pDynamicState->pDynamicStates + info->pDynamicState->dynamicStateCount);
+    }
+    const auto is_dynamic = [&](VkDynamicState d) {
+        return std::find(dynamic.begin(), dynamic.end(), d) != dynamic.end();
+    };
+    if (const auto* r = info->pRasterizationState) {
+        ge.fixed.cull = !is_dynamic(VK_DYNAMIC_STATE_CULL_MODE);
+        ge.fixed.cull_mode = r->cullMode;
+        ge.fixed.front_face = !is_dynamic(VK_DYNAMIC_STATE_FRONT_FACE);
+        ge.fixed.front = r->frontFace;
+        ge.fixed.depth_bias = !is_dynamic(VK_DYNAMIC_STATE_DEPTH_BIAS_ENABLE);
+        ge.fixed.depth_bias_enable = r->depthBiasEnable;
+        entry->depth_clip = !r->depthClampEnable;
+        if (r->polygonMode == VK_POLYGON_MODE_LINE) {
+            entry->fill_mode = MTLTriangleFillModeLines;
+        }
+    }
+    if (const auto* ds = info->pDepthStencilState) {
+        ge.fixed.depth = !is_dynamic(VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE);
+        ge.fixed.depth_test = ds->depthTestEnable;
+        ge.fixed.depth_write = ds->depthWriteEnable;
+        ge.fixed.depth_compare = ds->depthCompareOp;
+        ge.fixed.stencil = !is_dynamic(VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE);
+        ge.fixed.stencil_test = ds->stencilTestEnable;
+    } else {
+        ge.fixed.depth = ge.fixed.stencil = true; // no depth/stencil state: both off
+    }
+    ge.render = entry.get();
+    {
+        std::scoped_lock lock{generic_mutex};
+        generic_pipelines.push_back(std::move(entry));
+    }
+    s.PublishGraphics(pipeline, build, ge);
+    NoteGeneric(true, "");
 }
 
 } // namespace MetalShadow

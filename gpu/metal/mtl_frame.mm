@@ -1294,7 +1294,8 @@ const char* DrawBlocker(const Owned& o) {
 }
 
 /// Indexed strips without primitive restart: Metal always restarts at the all-ones index, which
-/// only matters for a draw that really uses vertex 65535 (or 2^32 - 1). They are drawn in Metal;
+/// only matters for a draw that really uses vertex 65535 (or 2^32 - 1; lists have never been
+/// checked here either). They are drawn in Metal;
 /// BB_METAL_STRIP_RESTART=0 sends them to KosmicKrisp (as before; for bisecting).
 bool RestartDiffers(const Owned& o) {
     static const bool strict = [] {
@@ -1311,13 +1312,59 @@ bool RestartDiffers(const Owned& o) {
            (type == MTLPrimitiveTypeTriangleStrip || type == MTLPrimitiveTypeLineStrip);
 }
 
+/// The draw's state where a generic pipeline (the renderer's own passes) fixes it instead of
+/// taking it from the dynamic state (MetalShadow::FixedState); the game's pipelines take it all
+/// from the dynamic state.
+struct Effective {
+    VkCullModeFlags cull_mode;
+    VkFrontFace front_face;
+    bool depth_test, depth_write;
+    VkCompareOp depth_compare;
+    bool stencil_test, depth_bias_enable;
+};
+Effective EffectiveState(const Owned& o) {
+    Effective e{o.cull_mode,    o.front_face,   o.depth_test,       o.depth_write,
+                o.depth_compare, o.stencil_test, o.depth_bias_enable};
+    if (o.graphics && o.graphics->generic) {
+        const MetalShadow::FixedState& f = o.graphics->fixed;
+        if (f.cull) {
+            e.cull_mode = f.cull_mode;
+        }
+        if (f.front_face) {
+            e.front_face = f.front;
+        }
+        if (f.depth) {
+            e.depth_test = f.depth_test;
+            e.depth_write = f.depth_write;
+            e.depth_compare = f.depth_compare;
+        }
+        if (f.stencil) {
+            e.stencil_test = f.stencil_test;
+        }
+        if (f.depth_bias) {
+            e.depth_bias_enable = f.depth_bias_enable;
+        }
+    }
+    return e;
+}
+
+/// A vertex buffer's stride: as bound, else (bound without one) a generic pipeline's own.
+u64 VertexStride(const Owned& o, const Owned::VertexBuffer& vb, u32 location) {
+    if (vb.stride || !o.graphics || !o.graphics->generic ||
+        location >= o.graphics->strides.size()) {
+        return vb.stride;
+    }
+    return o.graphics->strides[location];
+}
+
 /// The depth/stencil state of the draw.
 Metal::DepthStencilKey DepthStencilKeyOf(const Owned& o, const Metal::RenderPipeline& p) {
+    const Effective e = EffectiveState(o);
     Metal::DepthStencilKey ds;
-    ds.depth_test = o.depth_test && p.depth_pixel_format;
-    ds.depth_write = o.depth_write && p.depth_pixel_format;
-    ds.depth_compare = vk::CompareOp(o.depth_compare);
-    ds.stencil_test = o.stencil_test && p.stencil_pixel_format;
+    ds.depth_test = e.depth_test && p.depth_pixel_format;
+    ds.depth_write = e.depth_write && p.depth_pixel_format;
+    ds.depth_compare = vk::CompareOp(e.depth_compare);
+    ds.stencil_test = e.stencil_test && p.stencil_pixel_format;
     const auto face = [](const Owned::Face& f) {
         Metal::DepthStencilKey::Face out;
         out.fail_op = vk::StencilOp(f.fail);
@@ -1352,12 +1399,13 @@ bool PrepareDraw(Owned& o, const char*& why) {
             why = "a vertex buffer without a Metal buffer";
             return false;
         }
-        if (vb.buffer && !vb.stride && !slot.constant) {
+        if (vb.buffer && !VertexStride(o, vb, slot.location) && !slot.constant) {
             why = "a vertex stride of 0"; // every vertex reads one element: no Metal layout
             return false;
         }
     }
-    const auto cull = Metal::VkToMtl::CullMode(vk::CullModeFlags(o.cull_mode));
+    const Effective effective = EffectiveState(o);
+    const auto cull = Metal::VkToMtl::CullMode(vk::CullModeFlags(effective.cull_mode));
     // Scissors first: an empty one draws nothing (and stays out of Metal, which rejects it).
     std::array<MTLScissorRect, 16> scissors;
     const u32 ns = u32(std::min<size_t>(o.scissors.size(), scissors.size()));
@@ -1386,7 +1434,7 @@ bool PrepareDraw(Owned& o, const char*& why) {
     [enc setDepthClipMode:p.depth_clip ? MTLDepthClipModeClip : MTLDepthClipModeClamp];
     [enc setCullMode:cull.cull_all ? MTLCullModeNone : MTLCullMode(cull.mode)];
     [enc setFrontFacingWinding:MTLWinding(
-                                   Metal::RasterUtil::FrontWinding(vk::FrontFace(o.front_face)))];
+                                   Metal::RasterUtil::FrontWinding(vk::FrontFace(effective.front_face)))];
     std::array<MTLViewport, 16> viewports;
     const u32 nv = u32(std::min<size_t>(o.viewports.size(), viewports.size()));
     for (u32 i = 0; i < nv; ++i) {
@@ -1417,7 +1465,7 @@ bool PrepareDraw(Owned& o, const char*& why) {
     } else {
         [enc setDepthTestMinBound:0.0f maxBound:1.0f];
     }
-    if (o.depth_bias_enable) {
+    if (effective.depth_bias_enable) {
         [enc setDepthBias:o.depth_bias[0] slopeScale:o.depth_bias[2] clamp:o.depth_bias[1]];
     } else {
         [enc setDepthBias:0.0f slopeScale:0.0f clamp:0.0f];
@@ -1441,7 +1489,7 @@ bool PrepareDraw(Owned& o, const char*& why) {
             buffer = ref.buffer;
             offset = ref.offset + vb.offset;
         }
-        u64 stride = vb.stride;
+        u64 stride = VertexStride(o, vb, slot.location);
         if (slot.constant || !stride) {
             stride = 16;
         }
@@ -1461,7 +1509,7 @@ void Draw(Owned& o, const char* extra_blocker, Encode&& encode, KkRecord&& kk) {
     const char* why = KkOnly(o)       ? KkOnly(o)
                       : extra_blocker ? extra_blocker
                                       : DrawBlocker(o);
-    if (!why && o.cull_mode == VK_CULL_MODE_FRONT_AND_BACK) {
+    if (!why && EffectiveState(o).cull_mode == VK_CULL_MODE_FRONT_AND_BACK) {
         why = "culling front and back"; // Metal has no such mode (points and lines still draw)
     }
     if (!why && PrepareDraw(o, why)) {

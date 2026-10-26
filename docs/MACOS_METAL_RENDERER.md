@@ -237,7 +237,9 @@ which is why `BB_SPIRV_PRECISE=vertex` made no difference there. The Metal path 
 geometry stages keep it, so every pass computes the same positions); Wooloomooloo2's port measured
 the same change on its Metal path at 19.6 -> 12.1 ms a frame. `BB_METAL_PRECISE=all` keeps it
 everywhere. The MSL of each mode has its own cache file (`_np`). Checked on the 100 modules: all
-pass `spirv-val` after the strip, and the translation has no helper calls left.
+pass `spirv-val` after the strip, and the translation has no helper calls left. Not exact any more:
+a pixel shader writing its own depth, and positions a compute shader computes; the other port
+ships the same split.
 
 ## Results so far (M5 Max, 2560x1600, MetalFX native AA)
 

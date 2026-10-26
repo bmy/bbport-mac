@@ -860,8 +860,8 @@ MetalObjects BuildLibrary(id<MTLDevice> device, const std::string& msl, const st
 
 /// bbport: whether the Metal translation of this variant keeps SPIR-V NoContraction. SPIRV-Cross
 /// makes each such add, multiply and FMA a call to an `[[clang::optnone]]` helper (spvFAdd,
-/// spvFMul, ...), which the Metal compiler cannot optimise: in 94 of 100 of the game's modules,
-/// 11,213 calls. KosmicKrisp compiles the same SPIR-V with a safe-math pragma instead, so this
+/// spvFMul, ...), which the Metal compiler cannot optimise: 10,933 calls in 100 of the game's
+/// modules. KosmicKrisp compiles the same SPIR-V with a safe-math pragma instead, so this
 /// cost is the Metal path's own. Wooloomooloo2's port measured the same change on its Metal path
 /// (precise only in the vertex stages: 19.6 -> 12.1 ms a frame). The recompiler marks float ops
 /// exact so that every pass computes the same positions; only the stages that compute positions
@@ -893,6 +893,7 @@ std::vector<u32> StripNoContraction(std::span<const u32> spirv, u32& removed) {
     while (at < spirv.size()) {
         const u32 count = spirv[at] >> 16;
         if (count == 0 || at + count > spirv.size()) {
+            removed = 0;
             return {}; // malformed: left as it is (the translation reports it)
         }
         const bool strip = (spirv[at] & 0xffff) == kOpDecorate && count == 3 &&

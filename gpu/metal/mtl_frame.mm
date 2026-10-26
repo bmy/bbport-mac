@@ -3177,7 +3177,7 @@ void CmdEndRendering(Owned& o) {
     @autoreleasepool {
         if (!o.pass_begun) {
             // Never opened (no draws): its clears are still due.
-            if (o.kk || !o.pass_metal) {
+            if (o.kk || !o.pass_metal || KkOnly(o)) {
                 Kk(o, true);
             } else {
                 RenderEncoder(o);

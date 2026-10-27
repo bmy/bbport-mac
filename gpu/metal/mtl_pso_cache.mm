@@ -298,10 +298,14 @@ namespace {
 /// Makes `archive`'s handling of one descriptor uniform for render and compute: a lookup with
 /// FailOnBinaryArchiveMiss first (an archive hit skips the compiler), the regular creation
 /// otherwise, then the descriptor is added to the archive.
+/// bbport: `archivable` false keeps the descriptor out of the archive: a render pipeline without
+/// a fragment function adds without an error, but then the whole archive fails to serialize
+/// ("expecting 'fragment' stage in pipeline no. N"), so nothing was ever saved for the next run.
 template <typename Descriptor, typename Create, typename Add>
 id CreateWithArchive(PsoCache::Impl& impl, bool archive_loaded, Descriptor* descriptor,
-                     Create create, Add add, bool& from_archive, std::string& error) {
-    id<MTLBinaryArchive> archive = impl.archive;
+                     Create create, Add add, bool& from_archive, std::string& error,
+                     bool archivable = true) {
+    id<MTLBinaryArchive> archive = archivable ? impl.archive : nil;
     from_archive = false;
     NSError* ns_error = nil;
     if (archive) {
@@ -593,7 +597,7 @@ const RenderPipeline* PsoCache::GetRenderPipeline(const Vulkan::GraphicsPipeline
                 [](id<MTLBinaryArchive> archive, MTLRenderPipelineDescriptor* d, NSError** err) {
                     return [archive addRenderPipelineFunctionsWithDescriptor:d error:err];
                 },
-                from_archive, error);
+                from_archive, error, desc.fragmentFunction != nil);
             elapsed_us = UsSince(start);
             if (!state) {
                 break;
@@ -617,11 +621,18 @@ const RenderPipeline* PsoCache::GetRenderPipeline(const Vulkan::GraphicsPipeline
         }
         ++counters.failures;
     }
+    if (elapsed_us >= 500000 && !from_archive) {
+        static std::atomic<u32> slow_logged{0};
+        if (slow_logged++ < 30) {
+            LOG_WARNING(Render, "Metal render pipeline ({}{}): {} ms to build", StageHashes(key),
+                        input.tessellation_eval ? ", tessellation" : "", elapsed_us / 1000);
+        }
+    }
     ++counters.render_pipelines;
     counters.render_us += elapsed_us;
     counters.archive_hits += from_archive;
-    if (!from_archive && pipeline->state && impl->archive) {
-        ++counters.archive_adds;
+    if (!from_archive && pipeline->state && impl->archive && pipeline->fragment_function) {
+        ++counters.archive_adds; // (depth-only pipelines stay out of the archive)
     }
 
     std::unique_lock lock{impl->mutex};

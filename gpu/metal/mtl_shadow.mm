@@ -734,7 +734,21 @@ const GraphicsEntry* FindGraphicsWaiting(VkPipeline pipeline, u32 timeout_ms, bo
                 std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
         }
         const auto deadline = *it->second.deadline;
+        const bool is_tess = it->second.tess; // (`it` may not survive the wait: the map changes)
+        const auto start = std::chrono::steady_clock::now();
         s.built_cv.wait_until(lock, deadline, [&] { return !s.waitable.contains(pipeline); });
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - start)
+                            .count();
+        static std::atomic<u32> logged{0};
+        if (ms >= 100 && logged++ < 50) {
+            const bool built = s.graphics.contains(pipeline);
+            Print("Metal shadow: a draw waited %lld ms for a %s pipeline's Metal build (%s)\n",
+                  (long long)ms, is_tess ? "tessellated" : "geometry-shader",
+                  built                                   ? "built"
+                  : s.waitable.contains(pipeline)         ? "not ready: to KosmicKrisp"
+                                                          : "not built: to KosmicKrisp");
+        }
     }
     const auto it = s.graphics.find(pipeline);
     return it == s.graphics.end() ? nullptr : &it->second;

@@ -2269,7 +2269,7 @@ bool TessInMetal() {
 /// Metal build still pending (MetalShadow::FindGraphicsWaiting) rather than sending its draws to
 /// KosmicKrisp's emulation of those stages, which a heavy scene can hang the GPU with (its
 /// generated geometry outgrows the driver's heap; patch 0010). BB_METAL_EMULATED_WAIT_MS (0: no
-/// wait), 5000 by default; none when both kinds stay on KosmicKrisp anyway.
+/// wait), 1000 by default; none when both kinds stay on KosmicKrisp anyway.
 u32 EmulatedWaitMs();
 
 bool GeometryInMetal() {
@@ -2283,7 +2283,10 @@ u32 EmulatedWaitMs() {
             return 0u;
         }
         const char* env = std::getenv("BB_METAL_EMULATED_WAIT_MS");
-        const u32 value = env ? u32(std::strtoul(env, nullptr, 10)) : 5000u;
+        // 1 s by default: with KosmicKrisp patch 0010 its emulation no longer hangs the GPU
+        // when its heap runs out, and several new pipelines at a load used to add up to tens
+        // of seconds while their Metal builds were compiled from source.
+        const u32 value = env ? u32(std::strtoul(env, nullptr, 10)) : 1000u;
         Print("Metal frame: a tessellated or geometry-shader draw waits up to %u ms for its Metal "
               "pipeline (BB_METAL_EMULATED_WAIT_MS)\n", value);
         return value;

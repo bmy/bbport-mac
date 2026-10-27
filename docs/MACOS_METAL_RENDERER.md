@@ -317,7 +317,10 @@ has no tessellator, so the frame encoder (`BB_METAL_FRAME=1`) now encodes classi
   the geometry into a fixed driver heap; up close the game's tessellation outgrew it and the
   overflowing draw hung the GPU (KosmicKrisp patch 0010 handles that side). Binding such a
   pipeline now waits for its Metal build (queued first) up to `BB_METAL_EMULATED_WAIT_MS`
-  (5000 by default; 0: no wait); a build that fails still falls back.
+  (1000 by default, per pipeline; 0: no wait); a build that fails still falls back. The binary
+  archive of Metal pipeline states had never been written (a render pipeline without a fragment
+  function made its serialization fail): such pipelines stay out of it now, so a second launch
+  finds the others there instead of compiling them again.
 - **After a GPU error, Metal is off:** a Metal command buffer that fails on the GPU (a fault, a
   timeout) turns the Metal path off for everything recorded after it (it all goes to
   KosmicKrisp): each hang makes macOS reset the GPU, and repeated resets have taken the

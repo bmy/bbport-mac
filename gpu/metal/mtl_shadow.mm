@@ -21,6 +21,7 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -191,7 +192,13 @@ struct State {
     u64 next_build = 0;
     /// bbport: pending builds a draw waits for rather than falling back (FindGraphicsWaiting):
     /// tessellated and geometry-shader pipelines, whose fallback is KosmicKrisp's emulation.
-    std::unordered_set<VkPipeline> waitable;
+    /// Its kind (tessellated or not) and, once a draw waited for it, the deadline every later
+    /// wait shares (a build slower than the timeout stalls the recording once, not per bind).
+    struct Waitable {
+        bool tess{};
+        std::optional<std::chrono::steady_clock::time_point> deadline;
+    };
+    std::unordered_map<VkPipeline, Waitable> waitable;
     std::condition_variable built_cv; ///< a waitable build was published, abandoned or dropped
 
     /// Starts a build for `pipeline` (under pipelines_mutex): what an earlier pipeline with the
@@ -702,7 +709,8 @@ void Graphics(const Vulkan::GraphicsPipelineKey& key, std::span<const vk::Shader
         std::scoped_lock lock{s.pipelines_mutex};
         id = s.Expect(pipeline);
         if (emulated) {
-            s.waitable.insert(pipeline);
+            s.waitable[pipeline] = {.tess = stages[u32(Stage::TessellationControl)] ||
+                                            stages[u32(Stage::TessellationEval)]};
         } else {
             s.waitable.erase(pipeline);
         }
@@ -715,12 +723,18 @@ void Graphics(const Vulkan::GraphicsPipelineKey& key, std::span<const vk::Shader
         emulated);
 }
 
-const GraphicsEntry* FindGraphicsWaiting(VkPipeline pipeline, u32 timeout_ms) {
+const GraphicsEntry* FindGraphicsWaiting(VkPipeline pipeline, u32 timeout_ms, bool tess,
+                                         bool geometry) {
     auto& s = Get();
     std::unique_lock lock{s.pipelines_mutex};
-    if (timeout_ms && s.waitable.contains(pipeline)) {
-        s.built_cv.wait_for(lock, std::chrono::milliseconds(timeout_ms),
-                            [&] { return !s.waitable.contains(pipeline); });
+    if (const auto it = s.waitable.find(pipeline);
+        timeout_ms && it != s.waitable.end() && (it->second.tess ? tess : geometry)) {
+        if (!it->second.deadline) {
+            it->second.deadline =
+                std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+        }
+        const auto deadline = *it->second.deadline;
+        s.built_cv.wait_until(lock, deadline, [&] { return !s.waitable.contains(pipeline); });
     }
     const auto it = s.graphics.find(pipeline);
     return it == s.graphics.end() ? nullptr : &it->second;

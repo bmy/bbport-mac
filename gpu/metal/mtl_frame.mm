@@ -3221,7 +3221,10 @@ void CmdBindPipeline(Owned& o, VkPipelineBindPoint point, VkPipeline pipeline) {
         o.compute_metal = MetalShadow::FindCompute(pipeline);
     } else {
         o.graphics_pipeline = pipeline;
-        o.graphics = MetalShadow::FindGraphicsWaiting(pipeline, EmulatedWaitMs());
+        // (No wait when the draws go to KosmicKrisp anyway: after a GPU error.)
+        o.graphics = MetalShadow::FindGraphicsWaiting(
+            pipeline, gpu_failed.load(std::memory_order_relaxed) ? 0 : EmulatedWaitMs(),
+            TessInMetal(), GeometryInMetal());
     }
     Mirror(o, [&](VkCommandBuffer cb) { driver.vkCmdBindPipeline(cb, point, pipeline); });
 }

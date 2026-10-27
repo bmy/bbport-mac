@@ -54,6 +54,10 @@ struct Batch {
 /// states. Called with the queue's submissions serialized (the renderer's lock).
 VkResult Submit(VkQueue queue, const Batch* batches, uint32_t count, VkFence fence);
 
+/// A present on the queue, for the queue watchdog (KosmicKrisp submits it itself). Called with the
+/// queue's submissions serialized, before the driver's vkQueuePresentKHR.
+void Presenting(const VkPresentInfoKHR* info);
+
 // Objects the encoder keeps Metal counterparts for.
 void SamplerCreated(VkSampler sampler, const VkSamplerCreateInfo* info);
 void SamplerDestroyed(VkSampler sampler);

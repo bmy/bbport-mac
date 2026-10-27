@@ -71,7 +71,7 @@ namespace {
     X(vkUpdateDescriptorSets) X(vkFreeDescriptorSets) X(vkResetDescriptorPool)                     \
     X(vkDestroyDescriptorPool) X(vkAllocateCommandBuffers) X(vkResetCommandPool)                   \
     X(vkDestroyCommandPool) X(vkDestroyDevice) X(vkGetDeviceProcAddr)                              \
-    X(vkGetInstanceProcAddr)
+    X(vkGetInstanceProcAddr) X(vkQueuePresentKHR)
 
 enum Id : unsigned {
 #define BB_ID(name) Id_##name,
@@ -425,7 +425,7 @@ struct Hook<I, R (*)(A...)> {
                I == Id_vkFreeDescriptorSets || I == Id_vkResetDescriptorPool ||
                I == Id_vkDestroyDescriptorPool || I == Id_vkAllocateCommandBuffers ||
                I == Id_vkResetCommandPool || I == Id_vkDestroyCommandPool ||
-               I == Id_vkDestroyDevice;
+               I == Id_vkDestroyDevice || I == Id_vkQueuePresentKHR;
     }
 
     static R Frame(A... args) {
@@ -485,6 +485,9 @@ struct Hook<I, R (*)(A...)> {
             return original(args...);
         } else if constexpr (I == Id_vkDestroyDevice) {
             F::Shutdown();
+            return original(args...);
+        } else if constexpr (I == Id_vkQueuePresentKHR) {
+            F::Presenting(std::get<1>(t)); // for the queue watchdog
             return original(args...);
         } else if constexpr (I == Id_vkCreateSampler) {
             const R result = original(args...);

@@ -329,6 +329,20 @@ has no tessellator, so the frame encoder (`BB_METAL_FRAME=1`) now encodes classi
   status on an error; encoders are labelled, and every draw and dispatch leaves a signpost with
   its guest shader hashes (as the renderer's "pipeline with the game's tessellation drawn" lines
   give them), so the log names the encoder that faulted or hung and its last work.
+- **Stall logging:** a command buffer of ours that takes 300 ms or more from its commit to its
+  end is logged with when it started and how long it ran, so a queue held back (it started
+  late) is told from slow work (it ran long). Scratch buffers stay resident and pooled (up to
+  1 GiB) instead of being added to and removed from the residency set with each commit, and the
+  per-second report counts residency changes (`BB_METAL_SCRATCH_TRIM=1`: the old small pool).
+  A watchdog thread (`BB_METAL_WATCHDOG=0`: none; not the `BB_GPU_WATCHDOG_MS` process killer
+  of the classic device) looks every 250 ms at KosmicKrisp's submissions and the presents (the
+  layer hooks `vkQueuePresentKHR` for this only): when the oldest not done is 1 s old, and again
+  at 3 s, it logs what it and the five after it wait for (our queue's `to_kk` signal, each
+  semaphore with its shared event's current value; binary semaphores have none KosmicKrisp
+  exports), says so when every readable wait of the oldest is reached (then a drawable a present
+  waits for, or the GPU, holds it), and how long it took once it is done. A present counts from
+  the submission after it (it is done with that one), and only once there is one. At most 100
+  stalls are reported.
 - **Switches for bisecting:** `BB_METAL_GENERIC=0` keeps the renderer's own pipelines on
   KosmicKrisp; `BB_METAL_TESS=0`, `BB_METAL_GEOMETRY=0`,
   `BB_METAL_FORMAT_VARIANTS=0` and `BB_METAL_DESCRIPTOR_SETS=0` keep those draws on KosmicKrisp (with `BB_METAL_PRECISE=all` and

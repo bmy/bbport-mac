@@ -24,6 +24,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <type_traits>
 #include <unordered_map>
 #include <vector>
@@ -2538,6 +2539,194 @@ bool BuildPass(Owned& o) {
     return true;
 }
 
+// ---- The queue watchdog: what KosmicKrisp's queue waits for when it is behind ----
+
+/// A KosmicKrisp submission of ours, or a present (KosmicKrisp's own submission, which the
+/// layer sees only as the present), for the watchdog: the `to_metal` value reached once it is
+/// done (a present: that of the next submission, which runs after it) and what it waits for
+/// (each wait's shared event, kept so it can be read later).
+struct KkSubmitRecord {
+    struct Wait {
+        VkSemaphore semaphore{};
+        u64 value{};
+        id<MTLSharedEvent> event; ///< nil: not exported (a binary semaphore)
+    };
+    u64 seq{};
+    u64 to_metal{};
+    double submitted{}; ///< NowSeconds()
+    u32 command_buffers{};
+    bool present = false;
+    u64 to_kk_wait{}; ///< the value of our queue's signal it waits for; 0: none
+    std::vector<Wait> waits;
+};
+
+/// Never destroyed: the watchdog thread may still run at exit.
+std::mutex& watch_mutex = *new std::mutex;
+std::deque<KkSubmitRecord>& watch_records = *new std::deque<KkSubmitRecord>; ///< oldest first
+u64 watch_seq = 0;                  ///< under watch_mutex
+std::atomic<bool> watch_enabled{false};
+
+/// BB_METAL_WATCHDOG=0: no watchdog.
+bool WatchdogWanted() {
+    const char* v = std::getenv("BB_METAL_WATCHDOG");
+    return !(v && v[0] == '0');
+}
+
+/// Keeps a record (the queue's submissions are serialized; the lock is for the watchdog).
+void WatchRecord(KkSubmitRecord&& rec, const VkSemaphore* semaphores, const u64* values,
+                 u32 count) {
+    for (u32 i = 0; i < count; ++i) {
+        VkExportMetalSharedEventInfoEXT e{
+            .sType = VK_STRUCTURE_TYPE_EXPORT_METAL_SHARED_EVENT_INFO_EXT,
+            .semaphore = semaphores[i],
+        };
+        Export(reinterpret_cast<VkBaseOutStructure*>(&e));
+        rec.waits.push_back({semaphores[i], values ? values[i] : 0, e.mtlSharedEvent});
+    }
+    rec.submitted = NowSeconds();
+    std::scoped_lock lock{watch_mutex};
+    rec.seq = ++watch_seq;
+    if (watch_records.size() >= 4096) {
+        watch_records.pop_front(); // (the watchdog pops what is done: only if it stopped)
+    }
+    watch_records.push_back(std::move(rec));
+}
+
+/// Every 250 ms: when the oldest KosmicKrisp submission (or present) not done is 1 s old, and
+/// again at 3 s, what it and the five after it wait for, read from their shared events then;
+/// and how long it took once it is done.
+void WatchQueues(id<MTLSharedEvent> metal_event, id<MTLSharedEvent> kk_event) {
+    u64 reported = 0;      ///< the seq of the record reported, while it is not done
+    double reported_at = 0.0; ///< its submission
+    bool reported_present = false;
+    u32 stage = 0, stalls = 0;
+    for (;;) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        std::vector<KkSubmitRecord> behind;
+        u64 latest = 0;
+        double age = 0.0;
+        bool done_reported = false;
+        {
+            std::scoped_lock lock{watch_mutex};
+            const u64 reached = metal_event.signaledValue;
+            while (!watch_records.empty() && watch_records.front().to_metal <= reached) {
+                done_reported = done_reported || watch_records.front().seq == reported;
+                watch_records.pop_front();
+            }
+            // A present counts from the submission after it (it is done with that one): without
+            // one (the game paused, minimised) it is not behind.
+            if (!done_reported && !watch_records.empty() &&
+                !(watch_records.front().present && watch_records.size() < 2)) {
+                const KkSubmitRecord& front = watch_records.front();
+                const double since =
+                    front.present ? watch_records[1].submitted : front.submitted;
+                age = NowSeconds() - since;
+                if (front.seq != reported) {
+                    stage = 0;
+                }
+                const u32 due = age >= 3.0 ? 2 : age >= 1.0 ? 1 : 0;
+                if (due > stage && (stage > 0 || stalls < 100)) {
+                    if (stage == 0) {
+                        ++stalls;
+                    }
+                    stage = due;
+                    reported = front.seq;
+                    reported_at = since;
+                    reported_present = front.present;
+                    latest = watch_records.back().to_metal;
+                    for (const KkSubmitRecord& r : watch_records) {
+                        if (behind.size() >= 6) {
+                            break;
+                        }
+                        behind.push_back(r);
+                    }
+                }
+            }
+        }
+        if (done_reported) {
+            Print("Metal frame: KosmicKrisp's %s reported behind was done %.0f ms after it was "
+                  "submitted (a present: the submission after it; to within 250 ms)\n",
+                  reported_present ? "present" : "submission", (NowSeconds() - reported_at) * 1e3);
+            reported = 0;
+            stage = 0;
+            continue;
+        }
+        if (behind.empty()) {
+            continue;
+        }
+        @autoreleasepool {
+            const double now = NowSeconds();
+            Print("Metal frame: KosmicKrisp's queue is behind: its oldest %s not done was "
+                  "submitted (a present: the submission after it) %.0f ms ago (done at to_metal %llu, the latest %llu); to_metal at "
+                  "%llu, to_kk at %llu\n",
+                  behind.front().present ? "present" : "submission", age * 1e3,
+                  (unsigned long long)behind.front().to_metal, (unsigned long long)latest,
+                  (unsigned long long)metal_event.signaledValue,
+                  (unsigned long long)kk_event.signaledValue);
+            bool oldest_all_reached = true, oldest_unknown = false;
+            for (size_t n = 0; n < behind.size(); ++n) {
+                const KkSubmitRecord& r = behind[n];
+                std::string waits;
+                char line[192];
+                if (r.to_kk_wait) {
+                    const u64 at = kk_event.signaledValue;
+                    std::snprintf(line, sizeof(line), " our queue %llu (at %llu: %s);",
+                                  (unsigned long long)r.to_kk_wait, (unsigned long long)at,
+                                  at >= r.to_kk_wait ? "reached" : "NOT YET");
+                    waits += line;
+                    oldest_all_reached = oldest_all_reached && (n > 0 || at >= r.to_kk_wait);
+                }
+                for (const KkSubmitRecord::Wait& w : r.waits) {
+                    if (!w.event) {
+                        std::snprintf(line, sizeof(line), " semaphore %p (binary: unknown);",
+                                      (void*)w.semaphore);
+                        oldest_unknown = oldest_unknown || n == 0;
+                    } else {
+                        const u64 at = w.event.signaledValue;
+                        std::snprintf(line, sizeof(line),
+                                      " semaphore %p value %llu (its event at %llu: %s);",
+                                      (void*)w.semaphore, (unsigned long long)w.value,
+                                      (unsigned long long)at,
+                                      at >= w.value ? "reached" : "NOT YET");
+                        oldest_all_reached = oldest_all_reached && (n > 0 || at >= w.value);
+                    }
+                    waits += line;
+                }
+                if (r.present) {
+                    Print("    present, submitted %.0f ms ago, after to_metal %llu; waits for:%s\n",
+                          (now - r.submitted) * 1e3, (unsigned long long)(r.to_metal - 1),
+                          waits.empty() ? " nothing" : waits.c_str());
+                } else {
+                    Print("    submission to_metal %llu: %u command buffers, submitted %.0f ms "
+                          "ago; waits for:%s\n",
+                          (unsigned long long)r.to_metal, r.command_buffers,
+                          (now - r.submitted) * 1e3, waits.empty() ? " nothing" : waits.c_str());
+                }
+            }
+            if (oldest_all_reached) {
+                Print("    (every wait of the oldest that can be read is reached%s: what holds it "
+                      "is not one of those semaphores; a drawable a present waits for, or the "
+                      "GPU)\n",
+                      oldest_unknown ? ", binary ones unknown" : "");
+            }
+        }
+    }
+}
+
+void StartWatchdog() {
+    static bool started = false;
+    if (started) {
+        // A second device: the thread keeps the first one's events.
+        watch_enabled.store(false, std::memory_order_relaxed);
+        return;
+    }
+    if (WatchdogWanted()) {
+        started = true;
+        watch_enabled.store(true, std::memory_order_relaxed);
+        std::thread(WatchQueues, to_metal_event, to_kk_event).detach();
+    }
+}
+
 } // namespace
 
 // ---- The interface ----
@@ -2670,6 +2859,7 @@ bool Init(VkDevice vkdev, PFN_vkGetDeviceProcAddr driver_proc) {
                       "off\n");
                 return false;
             }
+            StartWatchdog();
             Print("Metal frame: encoding owned command buffers in Metal on %s, on a queue of its "
                   "own; what it does not encode goes to KosmicKrisp segments (BB_METAL_FRAME=1)\n",
                   device.name.UTF8String);
@@ -2710,6 +2900,16 @@ void Discard(Owned* o) {
         }
     }
     delete o;
+}
+
+void Presenting(const VkPresentInfoKHR* info) {
+    if (!info || !watch_enabled.load(std::memory_order_relaxed)) {
+        return;
+    }
+    // KosmicKrisp's present submission runs before the next submission of ours: done when that
+    // one's `to_metal` value is reached.
+    WatchRecord({.to_metal = to_metal_value + 1, .present = true}, info->pWaitSemaphores, nullptr,
+                info->waitSemaphoreCount);
 }
 
 VkResult Submit(VkQueue vkqueue, const Batch* batches, uint32_t count, VkFence fence) {
@@ -2774,6 +2974,18 @@ VkResult Submit(VkQueue vkqueue, const Batch* batches, uint32_t count, VkFence f
             if (r == VK_SUCCESS) {
                 ++to_metal_value;
                 kk_ahead = true;
+                if (watch_enabled.load(std::memory_order_relaxed)) {
+                    std::vector<VkSemaphore> sems(wait_count);
+                    std::vector<u64> values(wait_count);
+                    for (u32 i = 0; i < wait_count; ++i) {
+                        sems[i] = waits[i].semaphore;
+                        values[i] = waits[i].value;
+                    }
+                    WatchRecord({.to_metal = to_metal_value,
+                                 .command_buffers = u32(kk_run.size()),
+                                 .to_kk_wait = waited_metal ? to_kk_value : 0},
+                                sems.data(), values.data(), wait_count);
+                }
             } else {
                 // Nothing of it reached the queue: no value to wait for, our work still ahead.
                 result = r;

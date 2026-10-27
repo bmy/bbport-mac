@@ -70,7 +70,8 @@ struct Counters {
         fallback_draws{},
         fallback_dispatches{}, fallback_other{}, metal_buffers{}, kk_segments{}, switches{},
         metal_passes{}, pass_breaks{}, kk_reopens{}, gpu_errors{}, tess_draws{}, geometry_draws{},
-        encoders{}, epochs{}; ///< bbport: Metal encoders; barrier groups (BB_METAL_ORDER=barriers)
+        encoders{}, epochs{}, ///< bbport: Metal encoders; barrier groups (BB_METAL_ORDER=barriers)
+        residency_adds{}, residency_removes{}, residency_slow_commits{}; ///< bbport: our set
 };
 Counters counters;
 std::atomic<unsigned long long> transfers_total{0}; ///< TransfersTotal
@@ -256,10 +257,41 @@ id<MTLSamplerState> null_sampler;
 id<MTLResidencySet> residency;
 std::mutex residency_mutex;
 
+/// bbport: a commit of our residency set, timed (a slow one is counted and the first logged).
+void CommitResidency() {
+    const auto start = std::chrono::steady_clock::now();
+    [residency commit];
+    const double ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    if (ms >= 20.0 && counters.residency_slow_commits++ < 20) {
+        Print("Metal frame: committing our residency set took %.0f ms\n", ms);
+    }
+}
+
 void MakeResident(id<MTLAllocation> allocation) {
     std::scoped_lock lock{residency_mutex};
     [residency addAllocation:allocation];
-    [residency commit];
+    CommitResidency();
+    ++counters.residency_adds;
+}
+
+/// bbport: scratch buffers stay resident and pooled (BB_METAL_SCRATCH_TRIM=1: the old caps, the
+/// rest removed from the residency set when given back): adding and removing allocations of a
+/// queue's residency set while its work is in flight is a suspect in the stalls where none of
+/// our command buffers started for 4 s.
+bool TrimScratch() {
+    static const bool trim = [] {
+        const char* env = std::getenv("BB_METAL_SCRATCH_TRIM");
+        return env && env[0] == '1';
+    }();
+    return trim;
+}
+
+void Unresident(id<MTLAllocation> allocation) {
+    std::scoped_lock residency_lock{residency_mutex};
+    [residency removeAllocation:allocation];
+    CommitResidency();
+    ++counters.residency_removes;
 }
 
 // ---- KosmicKrisp's objects ----
@@ -397,12 +429,10 @@ id<MTLBuffer> TakeScratch() {
 void GiveScratch(std::vector<id<MTLBuffer>>& chunks) {
     std::scoped_lock lock{scratch_mutex};
     for (id<MTLBuffer> b : chunks) {
-        if (scratch_pool.size() < 64) {
+        if (scratch_pool.size() < (TrimScratch() ? 64u : 4096u)) {
             scratch_pool.push_back(b);
         } else {
-            std::scoped_lock residency_lock{residency_mutex}; // freed: out of the set too
-            [residency removeAllocation:b];
-            [residency commit];
+            Unresident(b); // freed: out of the set too
         }
     }
     chunks.clear();
@@ -413,18 +443,32 @@ void GiveScratch(std::vector<id<MTLBuffer>>& chunks) {
 constexpr u64 GpuScratchChunk = 64ull << 20;
 std::mutex gpu_scratch_mutex;
 std::vector<id<MTLBuffer>> gpu_scratch_pool;
+u64 gpu_scratch_pooled = 0; ///< bytes in the pool (bbport: at most GpuScratchPoolBytes)
+constexpr u64 GpuScratchPoolBytes = 1ull << 30; ///< as the old 16 chunks of 64 MiB
 
-/// A chunk of at least `size` bytes (a pooled one of GpuScratchChunk when it fits).
+/// A chunk of at least `size` bytes: the smallest pooled one that fits, else a new one of a
+/// multiple of GpuScratchChunk (bbport: larger ones are pooled too, up to GpuScratchPoolBytes in
+/// all, so that heavy tessellation does not add and remove allocations of the residency set
+/// every frame).
 id<MTLBuffer> TakeGpuScratch(u64 size) {
-    if (size <= GpuScratchChunk) {
+    {
         std::scoped_lock lock{gpu_scratch_mutex};
-        if (!gpu_scratch_pool.empty()) {
-            id<MTLBuffer> b = gpu_scratch_pool.back();
-            gpu_scratch_pool.pop_back();
+        auto best = gpu_scratch_pool.end();
+        for (auto it = gpu_scratch_pool.begin(); it != gpu_scratch_pool.end(); ++it) {
+            if ((*it).length >= size && (best == gpu_scratch_pool.end() || (*it).length < (*best).length)) {
+                best = it;
+            }
+        }
+        if (best != gpu_scratch_pool.end()) {
+            id<MTLBuffer> b = *best;
+            gpu_scratch_pool.erase(best);
+            gpu_scratch_pooled -= b.length;
             return b;
         }
     }
-    id<MTLBuffer> b = [device newBufferWithLength:std::max(size, GpuScratchChunk)
+    const u64 rounded = TrimScratch() ? std::max(size, GpuScratchChunk)
+                                      : (size + GpuScratchChunk - 1) / GpuScratchChunk * GpuScratchChunk;
+    id<MTLBuffer> b = [device newBufferWithLength:std::max(rounded, GpuScratchChunk)
                                           options:MTLResourceStorageModePrivate |
                                                   MTLResourceHazardTrackingModeUntracked];
     b.label = @"bbport Metal frame GPU scratch";
@@ -435,12 +479,14 @@ id<MTLBuffer> TakeGpuScratch(u64 size) {
 void GiveGpuScratch(std::vector<id<MTLBuffer>>& chunks) {
     std::scoped_lock lock{gpu_scratch_mutex};
     for (id<MTLBuffer> b : chunks) {
-        if (b.length == GpuScratchChunk && gpu_scratch_pool.size() < 16) {
+        const bool keep = TrimScratch()
+                              ? b.length == GpuScratchChunk && gpu_scratch_pool.size() < 16
+                              : gpu_scratch_pooled + b.length <= GpuScratchPoolBytes;
+        if (keep) {
             gpu_scratch_pool.push_back(b);
+            gpu_scratch_pooled += b.length;
         } else {
-            std::scoped_lock residency_lock{residency_mutex};
-            [residency removeAllocation:b];
-            [residency commit];
+            Unresident(b);
         }
     }
     chunks.clear();
@@ -4404,15 +4450,16 @@ void Report(double seconds) {
           "draws and %.0f dispatches and %.0f other commands to KosmicKrisp (%.0f segments, %.0f "
           "switches); %.0f Metal command buffers; render passes ended in Metal %.0f, split %.0f "
           "times in Metal, reopened %.0f times on KosmicKrisp; %.0f tessellated and %.0f "
-          "geometry-shader draws in Metal; %.0f Metal encoders, %.0f barrier groups; GPU errors "
-          "so far %llu; to KosmicKrisp because: %s\n",
+          "geometry-shader draws in Metal; %.0f Metal encoders, %.0f barrier groups; residency "
+          "set: %.0f added, %.0f removed; GPU errors so far %llu; to KosmicKrisp because: %s\n",
           take(counters.metal_draws), take(counters.metal_dispatches),
           take(counters.metal_transfers),
           take(counters.fallback_draws), take(counters.fallback_dispatches),
           take(counters.fallback_other), take(counters.kk_segments), take(counters.switches),
           take(counters.metal_buffers), take(counters.metal_passes), take(counters.pass_breaks),
           take(counters.kk_reopens), take(counters.tess_draws), take(counters.geometry_draws),
-          take(counters.encoders), take(counters.epochs), counters.gpu_errors.load(),
+          take(counters.encoders), take(counters.epochs), take(counters.residency_adds),
+          take(counters.residency_removes), counters.gpu_errors.load(),
           top.empty() ? "-" : top.c_str());
 }
 

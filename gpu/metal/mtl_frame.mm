@@ -29,6 +29,7 @@
 #include <vector>
 
 #include <xxhash.h>
+#include <mach/mach_time.h>
 
 #include "metal/kk_exports.h"
 #include "metal/mtl_frame.h"
@@ -106,6 +107,35 @@ __attribute__((format(printf, 2, 3))) void Signpost(id<MTLCommandEncoder> enc, c
     std::vsnprintf(text, sizeof text, format, args);
     va_end(args);
     [enc insertDebugSignpost:[NSString stringWithUTF8String:text]];
+}
+
+/// bbport: seconds on the clock of MTLCommandBuffer's GPUStartTime / GPUEndTime (mach absolute
+/// time, as CACurrentMediaTime).
+double NowSeconds() {
+    static const double scale = [] {
+        mach_timebase_info_data_t info{};
+        mach_timebase_info(&info);
+        return double(info.numer) / double(info.denom) * 1e-9;
+    }();
+    return double(mach_absolute_time()) * scale;
+}
+
+/// bbport: a command buffer of ours that took 300 ms or more from its commit to its end on the
+/// GPU: how long it waited to start (earlier work, its event waits) and how long it ran. `what`
+/// says which (the wait for KosmicKrisp before a run, a run's command buffer).
+void NoteSlow(id<MTLCommandBuffer> done, double committed, const char* what, u32 index, u32 count) {
+    const double start = done.GPUStartTime, end = done.GPUEndTime;
+    if (end <= 0.0 || end - committed < 0.3) {
+        return;
+    }
+    static std::atomic<u32> logged{0};
+    if (logged++ >= 200) {
+        return;
+    }
+    Print("Metal frame: slow on the GPU: %s %u of %u: %.0f ms from commit to end (started %.0f ms "
+          "after its commit, ran %.0f ms)\n",
+          what, index + 1, count, (end - committed) * 1e3,
+          start > 0.0 ? (start - committed) * 1e3 : -1.0, start > 0.0 ? (end - start) * 1e3 : -1.0);
 }
 
 /// The failed command buffer's encoders that did not complete, with their last signposts.
@@ -2729,6 +2759,11 @@ VkResult Submit(VkQueue vkqueue, const Batch* batches, uint32_t count, VkFence f
                 [blit waitForFence:chain];
                 [blit updateFence:chain];
                 [blit endEncoding];
+                const double gate_committed = NowSeconds();
+                [gate addCompletedHandler:^(id<MTLCommandBuffer> done) {
+                  NoteSlow(done, gate_committed, "the wait for KosmicKrisp's work before a run", 0,
+                           1);
+                }];
                 [gate commit];
                 kk_ahead = false;
             }
@@ -2746,8 +2781,15 @@ VkResult Submit(VkQueue vkqueue, const Batch* batches, uint32_t count, VkFence f
                 r->pending.fetch_add(1, std::memory_order_relaxed);
             }
             std::vector<std::shared_ptr<Retire>> retires = std::move(metal_retires);
+            const u32 run_size = u32(metal_run.size());
+            u32 run_index = 0;
             for (id<MTLCommandBuffer> cb : metal_run) {
                 const bool is_last = cb == last;
+                const double committed = NowSeconds();
+                const u32 index = run_index++;
+                [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {
+                  NoteSlow(done, committed, "a run's command buffer", index, run_size);
+                }];
                 // Held by the handler: the queue keeps an uncommitted command buffer, not a
                 // committed one, alive for its handlers (they run once it completed).
                 [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {

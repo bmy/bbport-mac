@@ -117,7 +117,8 @@ size_t IdOperandEnd(spv::Op op, size_t count) {
 
 class Rewriter {
 public:
-    explicit Rewriter(std::span<const u32> in, u32 skip_set) : spirv{in}, skip_set{skip_set} {}
+    Rewriter(std::span<const u32> in, u32 skip_set, bool fixed_unchecked)
+        : spirv{in}, skip_set{skip_set}, fixed_unchecked{fixed_unchecked} {}
 
     RobustRewrite Run() {
         RobustRewrite out;
@@ -160,6 +161,7 @@ private:
 
     std::span<const u32> spirv;
     u32 skip_set;
+    bool fixed_unchecked;
     u32 bound{};
     size_t globals_end{};
     std::vector<size_t> function_starts;
@@ -306,6 +308,9 @@ private:
             const u32 member = u32(block->second.members.size() - 1);
             const auto array = types.find(block->second.members.back());
             if (array == types.end() || array->second.op != spv::OpTypeRuntimeArray) {
+                if (fixed_unchecked) {
+                    continue; // bbport: a fixed-size block of the renderer's own: as it is
+                }
                 throw Failure("a storage buffer without a runtime array");
             }
             // SPIRV-Cross' length is (size - offset) / stride: it wraps for a size below the offset.
@@ -489,8 +494,9 @@ private:
 
 } // namespace
 
-RobustRewrite RewriteRobustBuffers(std::span<const u32> spirv, u32 skip_set) {
-    return Rewriter{spirv, skip_set}.Run();
+RobustRewrite RewriteRobustBuffers(std::span<const u32> spirv, u32 skip_set,
+                                   bool fixed_unchecked) {
+    return Rewriter{spirv, skip_set, fixed_unchecked}.Run();
 }
 
 } // namespace Metal

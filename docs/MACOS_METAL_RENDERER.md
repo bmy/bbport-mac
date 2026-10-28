@@ -369,6 +369,12 @@ has no tessellator, so the frame encoder (`BB_METAL_FRAME=1`) now encodes classi
   primitives than it holds are cut, instances after the first not drawn; a line in the report
   counts both, from the kernels' counters). A command of more than four draws stays on
   KosmicKrisp. `BB_METAL_GEOMETRY_INDIRECT=0`: all of them do.
+- **The renderer's own compute shaders with fixed-size buffers:** the robust buffer rewrite
+  refused a storage buffer without a runtime array, so two of the renderer's own compute
+  pipelines (the indirect draw guards) stayed on KosmicKrisp. For the renderer's own shaders (it binds buffers it
+  made, of the struct's size, never a null one) such a buffer is now left unchecked; the game's
+  are still refused.
+  Those shaders' cache files gain an `_h` in their tag (compiled again once).
 - **Switches for bisecting:** `BB_METAL_GENERIC=0` keeps the renderer's own pipelines on
   KosmicKrisp; `BB_METAL_TESS=0`, `BB_METAL_GEOMETRY=0`,
   `BB_METAL_FORMAT_VARIANTS=0` and `BB_METAL_DESCRIPTOR_SETS=0` keep those draws on KosmicKrisp (with `BB_METAL_PRECISE=all` and

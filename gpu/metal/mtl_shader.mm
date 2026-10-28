@@ -1162,6 +1162,9 @@ CompileResult ShaderCompiler::Compile(std::span<const u32> spirv, u64 hash, std:
     if (variant.clip_fixup) {
         tag += "_cf"; // bbport: the clip space z conversion
     }
+    if (variant.host) {
+        tag += "_h"; // bbport: the renderer's own (fixed-size storage blocks unchecked)
+    }
     // bbport: the MSL without NoContraction has a file of its own (BB_METAL_PRECISE switches).
     const bool keep_precise = KeepsNoContraction(scan.stage);
     if (!keep_precise) {
@@ -1220,7 +1223,7 @@ CompileResult ShaderCompiler::Compile(std::span<const u32> spirv, u64 hash, std:
         }
         // bbport: every buffer access bounds-checked, as robustBufferAccess2 and nullDescriptor
         // promise the renderer (the geometry kernel's own buffers have no size: left alone).
-        RobustRewrite robust = RewriteRobustBuffers(module, kGeometryKernelSet);
+        RobustRewrite robust = RewriteRobustBuffers(module, kGeometryKernelSet, variant.host);
         if (!robust.ok) {
             return fail(CompileStatus::Failed, "robust buffer access: " + robust.error);
         }

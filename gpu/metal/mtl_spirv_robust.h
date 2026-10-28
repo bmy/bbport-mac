@@ -41,6 +41,9 @@ struct RobustRewrite {
 /// integer, variable pointers, and a store or atomic in a loop header block.
 /// Known limit: a load is not split, so with a bound range smaller than one element it still
 /// reads that first element (up to its stride past the range) before the result is replaced.
-RobustRewrite RewriteRobustBuffers(std::span<const u32> spirv, u32 skip_set);
+/// bbport: `fixed_unchecked`: a fixed-size storage block (no runtime array last) is left
+/// unchecked instead of failing (the renderer's own shaders: CompileVariant::host).
+RobustRewrite RewriteRobustBuffers(std::span<const u32> spirv, u32 skip_set,
+                                   bool fixed_unchecked = false);
 
 } // namespace Metal

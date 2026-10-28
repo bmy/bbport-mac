@@ -112,6 +112,10 @@ struct CompileVariant {
     /// declared as the evaluation shader's per-patch inputs so its struct has the control
     /// shader's layout even where it reads fewer of them; empty: its own.
     std::vector<InterfaceMember> patch_inputs;
+    /// bbport: a shader of the renderer's own (its passes, not the game's): a storage buffer
+    /// of a fixed size (no runtime array) is left without bounds checks rather than failing the
+    /// shader (it binds buffers it made, of their struct's size, never a null one).
+    bool host{};
     bool operator==(const CompileVariant&) const = default;
 };
 

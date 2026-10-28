@@ -1010,7 +1010,7 @@ const Metal::CompiledShader* CompileStage(State& s, const VkPipelineShaderStageC
             return it->second.get();
         }
     }
-    auto result = s.compiler.Compile(spec, hash, what);
+    auto result = s.compiler.Compile(spec, hash, what, {.host = true});
     std::scoped_lock lock{generic_mutex};
     auto& slot = generic_shaders[hash];
     if (!slot && result.status == Metal::CompileStatus::Ok) {

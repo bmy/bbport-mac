@@ -72,7 +72,11 @@ struct Counters {
         fallback_dispatches{}, fallback_other{}, metal_buffers{}, kk_segments{}, switches{},
         metal_passes{}, pass_breaks{}, kk_reopens{}, gpu_errors{}, tess_draws{}, geometry_draws{},
         encoders{}, epochs{}, ///< bbport: Metal encoders; barrier groups (BB_METAL_ORDER=barriers)
-        residency_adds{}, residency_removes{}, residency_slow_commits{}; ///< bbport: our set
+        residency_adds{}, residency_removes{}, residency_slow_commits{}, ///< bbport: our set
+        /// bbport: our encoders by kind, and the barriers that reached Metal by kind (where the
+        /// encoders come from: each barrier ends the open ones).
+        render_encoders{}, compute_encoders{}, blit_encoders{}, barriers{}, barriers_in_pass{},
+        barriers_transfer{}, barriers_compute{};
 };
 Counters counters;
 std::atomic<unsigned long long> transfers_total{0}; ///< TransfersTotal
@@ -757,6 +761,8 @@ struct Owned {
         primitive_restart{}, rasterizer_discard{};
     u32 feedback_loop{};
     u32 active_queries{}; ///< occlusion queries begun and not ended (QueryBegun)
+    /// bbport: CmdPipelineBarrier1 counted the barrier it hands CmdPipelineBarrier (NoteBarrier).
+    bool barrier_noted{};
     VkCompareOp depth_compare{VK_COMPARE_OP_ALWAYS};
     float depth_bounds[2]{0.0f, 1.0f};
     float depth_bias[3]{}; ///< constant, clamp, slope
@@ -1296,6 +1302,7 @@ id<MTLRenderCommandEncoder> RenderEncoder(Owned& o) {
     const bool reopen = o.pass_begun || o.draw_kernels;
     o.draw_kernels = false;
     o.render = [cmd renderCommandEncoderWithDescriptor:o.pass_begun ? o.pass_reopen : o.pass_first];
+    ++counters.render_encoders;
     o.pass_begun = true;
     if (o.render) {
         OrderStart(o, o.render, reopen);
@@ -1315,6 +1322,7 @@ id<MTLComputeCommandEncoder> ComputeEncoder(Owned& o) {
     EndBlit(o);
     // Concurrent: Vulkan orders dispatches only through barriers (CmdPipelineBarrier).
     o.compute = [cmd computeCommandEncoderWithDispatchType:MTLDispatchTypeConcurrent];
+    ++counters.compute_encoders;
     OrderStart(o, o.compute, false);
     if (GpuDiag()) {
         o.compute.label = @"compute";
@@ -1330,6 +1338,7 @@ id<MTLBlitCommandEncoder> BlitEncoder(Owned& o) {
     CloseRender(o, false);
     EndCompute(o);
     o.blit = [cmd blitCommandEncoder];
+    ++counters.blit_encoders;
     OrderStart(o, o.blit, false);
     if (GpuDiag()) {
         o.blit.label = @"transfers";
@@ -3571,12 +3580,48 @@ void BreakPass(Owned& o, bool pass_end = false) {
 }
 } // namespace
 
+/// bbport: a barrier that reaches Metal, by kind (the per-second report). `src` / `dst`: the
+/// union of its stages.
+static void NoteBarrier(const Owned& o, VkPipelineStageFlags2 src, VkPipelineStageFlags2 dst) {
+    constexpr VkPipelineStageFlags2 transfer =
+        VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT | VK_PIPELINE_STAGE_2_COPY_BIT |
+        VK_PIPELINE_STAGE_2_BLIT_BIT | VK_PIPELINE_STAGE_2_CLEAR_BIT |
+        VK_PIPELINE_STAGE_2_RESOLVE_BIT;
+    ++counters.barriers;
+    if (o.render) {
+        ++counters.barriers_in_pass;
+    }
+    if (src && dst && !((src | dst) & ~transfer)) {
+        ++counters.barriers_transfer;
+    } else if (src == VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT &&
+               dst == VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT) {
+        ++counters.barriers_compute;
+    }
+}
+
 void CmdPipelineBarrier(Owned& o, VkCommandBuffer, const VkDependencyInfo* info) {
     @autoreleasepool {
         if (o.kk) {
             driver.vkCmdPipelineBarrier2(o.kk->cb, info);
             return;
         }
+        if (!o.barrier_noted) {
+            VkPipelineStageFlags2 src = 0, dst = 0;
+            for (u32 i = 0; i < info->memoryBarrierCount; ++i) {
+                src |= info->pMemoryBarriers[i].srcStageMask;
+                dst |= info->pMemoryBarriers[i].dstStageMask;
+            }
+            for (u32 i = 0; i < info->bufferMemoryBarrierCount; ++i) {
+                src |= info->pBufferMemoryBarriers[i].srcStageMask;
+                dst |= info->pBufferMemoryBarriers[i].dstStageMask;
+            }
+            for (u32 i = 0; i < info->imageMemoryBarrierCount; ++i) {
+                src |= info->pImageMemoryBarriers[i].srcStageMask;
+                dst |= info->pImageMemoryBarriers[i].dstStageMask;
+            }
+            NoteBarrier(o, src, dst);
+        }
+        o.barrier_noted = false;
         if (OrderByBarriers()) {
             if (o.render) {
                 BreakPass(o);
@@ -3616,6 +3661,9 @@ void CmdPipelineBarrier1(Owned& o, VkCommandBuffer cb, VkPipelineStageFlags src,
                                     buffer_barriers, image_count, images);
         return;
     }
+    // (Counted by its own stages: the barrier made of it below has all of them.)
+    NoteBarrier(o, src, dst);
+    o.barrier_noted = true;
     // Metal: one full barrier stands for it (CmdPipelineBarrier, with no segment open).
     const VkMemoryBarrier2 full{
         .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
@@ -4575,6 +4623,7 @@ void ClearPass(Owned& o, MTLRenderPassDescriptor* rp) {
     id<MTLCommandBuffer> cmd = Metal(o);
     EndEncoders(o);
     id<MTLRenderCommandEncoder> enc = [cmd renderCommandEncoderWithDescriptor:rp];
+    ++counters.render_encoders;
     if (GpuDiag()) {
         enc.label = @"color clear";
     }
@@ -4911,7 +4960,10 @@ void Report(double seconds) {
           "times in Metal, reopened %.0f times on KosmicKrisp; %.0f tessellated and %.0f "
           "geometry-shader draws in Metal; %.0f Metal encoders, %.0f barrier groups; residency "
           "set: %.0f added, %.0f removed; our queue on the GPU %.0f ms/s working, %.0f ms/s "
-          "waiting for KosmicKrisp; GPU errors so far %llu; to KosmicKrisp because: %s\n",
+          "waiting for KosmicKrisp; encoders %.0f render, %.0f compute, %.0f blit; barriers in "
+          "Metal %.0f (%.0f ending a render encoder, %.0f transfer to transfer, %.0f compute to "
+          "compute); "
+          "GPU errors so far %llu; to KosmicKrisp because: %s\n",
           take(counters.metal_draws), take(counters.metal_dispatches),
           take(counters.metal_transfers),
           take(counters.fallback_draws), take(counters.fallback_dispatches),
@@ -4919,7 +4971,11 @@ void Report(double seconds) {
           take(counters.metal_buffers), take(counters.metal_passes), take(counters.pass_breaks),
           take(counters.kk_reopens), take(counters.tess_draws), take(counters.geometry_draws),
           take(counters.encoders), take(counters.epochs), take(counters.residency_adds),
-          take(counters.residency_removes), gpu_busy_ms, gpu_waiting_ms, counters.gpu_errors.load(),
+          take(counters.residency_removes), gpu_busy_ms, gpu_waiting_ms,
+          take(counters.render_encoders), take(counters.compute_encoders),
+          take(counters.blit_encoders), take(counters.barriers), take(counters.barriers_in_pass),
+          take(counters.barriers_transfer), take(counters.barriers_compute),
+          counters.gpu_errors.load(),
           top.empty() ? "-" : top.c_str());
 }
 

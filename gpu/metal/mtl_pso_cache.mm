@@ -289,14 +289,15 @@ bool PsoCache::Flush() {
                 LOG_WARNING(Render, "Metal binary archive {} could not be written: {}",
                             archive_path.string(), ok ? ec.message() : FirstLine(error));
                 std::string recent;
-                for (size_t i = 0; i < impl->archive_recent.size(); ++i) {
+                const size_t added = impl->archive_recent.size();
+                for (size_t i = 0; i < added; ++i) {
                     recent += fmt::format("{}{}: {}", i ? "; " : "", i + 1,
                                           impl->archive_recent[i]);
                 }
                 impl->archive_recent.clear();
                 LOG_WARNING(Render, "Metal binary archive: the {} pipelines added since it was "
                                     "last written: {}",
-                            impl->archive_recent.size(), recent.empty() ? "-" : recent);
+                            added, recent.empty() ? "-" : recent);
             }
             std::filesystem::remove(temp, ec);
             return false;
@@ -617,7 +618,9 @@ const RenderPipeline* PsoCache::GetRenderPipeline(const Vulkan::GraphicsPipeline
                 [](id<MTLBinaryArchive> archive, MTLRenderPipelineDescriptor* d, NSError** err) {
                     return [archive addRenderPipelineFunctionsWithDescriptor:d error:err];
                 },
-                from_archive, error, desc.fragmentFunction != nil,
+                // (A tessellated one too: with its post-tessellation vertex function the
+                // archive fails to serialize, "missing 'vertex' stage in pipeline no. N".)
+                from_archive, error, desc.fragmentFunction != nil && !tessellation,
                 tessellation ? (input.formats_override ? " (tessellation, format variant)"
                                                         : " (tessellation)")
                 : input.geometry ? (input.formats_override ? " (geometry, format variant)"
@@ -659,8 +662,9 @@ const RenderPipeline* PsoCache::GetRenderPipeline(const Vulkan::GraphicsPipeline
     ++counters.render_pipelines;
     counters.render_us += elapsed_us;
     counters.archive_hits += from_archive;
-    if (!from_archive && pipeline->state && impl->archive && pipeline->fragment_function) {
-        ++counters.archive_adds; // (depth-only pipelines stay out of the archive)
+    if (!from_archive && pipeline->state && impl->archive && pipeline->fragment_function &&
+        !pipeline->tessellation) {
+        ++counters.archive_adds; // (depth-only and tessellated pipelines stay out of it)
     }
 
     std::unique_lock lock{impl->mutex};

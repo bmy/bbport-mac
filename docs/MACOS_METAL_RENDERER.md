@@ -320,7 +320,8 @@ has no tessellator, so the frame encoder (`BB_METAL_FRAME=1`) now encodes classi
   (1000 by default, per pipeline; 0: no wait); a build that fails still falls back. The binary
   archive of Metal pipeline states had never been written (a render pipeline without a fragment
   function made its serialization fail): such pipelines stay out of it now, so a second launch
-  finds the others there instead of compiling them again.
+  finds the others there instead of compiling them again. Tessellated ones do too: with their
+  post-tessellation vertex function the archive failed the same way ("missing 'vertex' stage").
 - **After a GPU error, Metal is off:** a Metal command buffer that fails on the GPU (a fault, a
   timeout) turns the Metal path off for everything recorded after it (it all goes to
   KosmicKrisp): each hang makes macOS reset the GPU, and repeated resets have taken the
@@ -353,7 +354,10 @@ has no tessellator, so the frame encoder (`BB_METAL_FRAME=1`) now encodes classi
   gate's wait counts from its commit. When the binary archive fails to serialize (logged once),
   the pipelines added since it last did are logged in order with their kind (render,
   tessellation, geometry, rect list, format variant, compute, kernel): the one it names is
-  among them.
+  among them. Our encoders are counted by kind, and the barriers that reach Metal by kind
+  (ending a render encoder, transfer to transfer, compute to compute): a barrier ends the open
+  render and blit encoders (a compute encoder takes a memory barrier instead), so those say
+  where the encoders come from.
 - **Patch constants the evaluation shader reads fewer of:** a control shader that writes more
   patch constants than its evaluation shader reads made the evaluation shader index the patch
   buffer with a smaller struct, so those pipelines (four of the game's) stayed with

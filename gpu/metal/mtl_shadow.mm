@@ -395,6 +395,19 @@ const Metal::ComputePipeline* FindCompute(VkPipeline pipeline) {
     return it == s.compute.end() ? nullptr : it->second;
 }
 
+const Metal::Geometry::IndirectKernels* GeometryIndirectKernels() {
+    static const Metal::Geometry::IndirectKernels* kernels = [] {
+        auto* k = new Metal::Geometry::IndirectKernels(Get().device); // (never freed)
+        if (!k->Ok()) {
+            Print("Metal shadow: %s; indirect geometry-shader draws stay on KosmicKrisp\n",
+                  k->Error().c_str());
+            return static_cast<const Metal::Geometry::IndirectKernels*>(nullptr);
+        }
+        return static_cast<const Metal::Geometry::IndirectKernels*>(k);
+    }();
+    return kernels;
+}
+
 void* DepthStencil(const Metal::DepthStencilKey& key) {
     return Get().pso.GetDepthStencilState(key);
 }

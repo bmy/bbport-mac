@@ -2353,6 +2353,121 @@ bool EncodeGeometry(Owned& o, const TessArgs& a, const char*& why) {
     return true;
 }
 
+/// bbport: an indirect geometry-shader draw (mtl_geometry.h, "Indirect draws"): the prep kernel
+/// reads the guest's arguments on the GPU and sizes the export and geometry kernels and the
+/// strip draw, within one scratch span of a fixed budget (more primitives than it holds are
+/// cut, instances after the first not drawn, as the native renderer's).
+std::atomic<const Metal::Geometry::IndirectKernels*> indirect_kernels_made{nullptr};
+/// The kernels once an indirect geometry draw made them (for the report; never made there).
+const Metal::Geometry::IndirectKernels* IndirectKernelsIfMade() {
+    return indirect_kernels_made.load(std::memory_order_acquire);
+}
+
+bool EncodeGeometryIndirect(Owned& o, const BufferRef& args, u64 args_offset, bool indexed,
+                            const char*& why) {
+    const Metal::GeometryPipeline& g = *o.graphics->geometry;
+    const Metal::RenderPipeline& p = *g.render;
+    const Metal::Geometry::IndirectKernels* kernels = MetalShadow::GeometryIndirectKernels();
+    indirect_kernels_made.store(kernels, std::memory_order_release);
+    if (!kernels) {
+        why = "an indirect geometry-shader draw (no prep kernel)";
+        return false;
+    }
+    Metal::Geometry::IndirectDraw draw;
+    draw.args = (__bridge void*)args.buffer;
+    draw.args_offset = args_offset;
+    if (indexed) {
+        const BufferRef index = ResolveBuffer(o.index_buffer);
+        if (!index.buffer) {
+            why = "no Metal index buffer";
+            return false;
+        }
+        if (o.index_type != VK_INDEX_TYPE_UINT32 && o.index_type != VK_INDEX_TYPE_UINT16) {
+            why = "an indirect geometry-shader draw with 8-bit indices";
+            return false;
+        }
+        draw.index_size = o.index_type == VK_INDEX_TYPE_UINT32 ? 4 : 2;
+        draw.index_buffer = (__bridge void*)index.buffer;
+        draw.index_offset = index.offset + o.index_offset;
+        // The guest's buffer (its MTLBuffer can be bigger): indices past it are not read.
+        draw.index_limit =
+            index.size > o.index_offset ? (index.size - o.index_offset) / draw.index_size : 0;
+    }
+    // The export kernel reads plain vertices, or (indexed) the indices copied as uint32.
+    const Metal::TessKernel& es = g.es[indexed ? 2 : 0];
+    if (!es.state || !es.shader || !g.gs.state || !g.gs.shader) {
+        why = "a geometry kernel not built";
+        return false;
+    }
+    if (g.gs.max_total_threads < 64) {
+        // The prep kernel sizes the geometry kernel's grid in groups of 64 threads.
+        why = "an indirect geometry-shader draw (a geometry kernel under 64 threads a group)";
+        return false;
+    }
+    constexpr auto graphics = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    if (!StageResolvable(o, graphics, es.shader, why) ||
+        !StageResolvable(o, graphics, g.gs.shader, why) ||
+        !StageResolvable(o, graphics, p.vs, why) || !StageResolvable(o, graphics, p.fs, why)) {
+        return false;
+    }
+    if (EmptyScissor(o)) {
+        why = "an empty scissor";
+        return false;
+    }
+    if (!MetalShadow::DepthStencil(DepthStencilKeyOf(o, p))) {
+        why = "no Metal depth/stencil state";
+        return false;
+    }
+    KernelStreams streams;
+    if (!streams.Resolve(o, std::span{g.vertex_slots.data(), g.num_vertex_slots}, why)) {
+        return false;
+    }
+    const Metal::Geometry::IndirectPlan plan = Metal::Geometry::PlanIndirect(g, indexed);
+    id<MTLBuffer> buffer;
+    u64 offset = 0;
+    GpuScratch(o, plan.total, &buffer, &offset);
+    const auto bind = [&](const Metal::CompiledShader& shader) {
+        const char* bind_why = nullptr;
+        BindStage(o, Stage::Compute, graphics, &shader, bind_why);
+    };
+    id<MTLComputeCommandEncoder> enc = ComputeEncoder(o);
+    o.draw_kernels = true;
+    if (GpuDiag()) {
+        const auto& h = o.graphics->hashes;
+        Signpost(enc, "indirect geometry kernels: vertex %#llx geometry %#llx",
+                 (unsigned long long)h[0], (unsigned long long)h[3]);
+    }
+    Metal::Geometry::EncodeIndirectKernels((__bridge void*)enc, g, *kernels, draw, streams.Span(),
+                                           (__bridge void*)buffer, offset, plan, bind, bind);
+    if (!PrepareDraw(o, why)) {
+        return false; // the kernels' output goes unused
+    }
+    id<MTLRenderCommandEncoder> r = o.render;
+    [r setVertexBuffer:buffer offset:offset + plan.plan.record_offset atIndex:0];
+    [r drawIndexedPrimitives:MTLPrimitiveType(p.primitive_type)
+                   indexType:MTLIndexTypeUInt32
+                 indexBuffer:buffer
+           indexBufferOffset:offset + plan.plan.index_offset
+              indirectBuffer:buffer
+        indirectBufferOffset:offset + Metal::Geometry::kControlDraw];
+    ++counters.geometry_draws;
+    return true;
+}
+
+/// BB_METAL_GEOMETRY_INDIRECT=0: indirect geometry-shader draws stay on KosmicKrisp.
+bool GeometryIndirectInMetal() {
+    static const bool on = [] {
+        const char* v = std::getenv("BB_METAL_GEOMETRY_INDIRECT");
+        const bool off = v && v[0] == '0';
+        if (off) {
+            Print("Metal frame: indirect geometry-shader draws stay on KosmicKrisp "
+                  "(BB_METAL_GEOMETRY_INDIRECT=0)\n");
+        }
+        return !off;
+    }();
+    return on;
+}
+
 /// BB_METAL_TESS=0 / BB_METAL_GEOMETRY=0: those draws stay on KosmicKrisp (for bisecting a broken
 /// picture). Read once, logged once.
 bool KindInMetal(const char* variable, const char* what) {
@@ -2414,6 +2529,48 @@ void DrawTessellated(Owned& o, const TessArgs& a, KkRecord&& kk) {
     ++counters.fallback_draws;
     if (VkCommandBuffer cb = KkWithState(o, VK_PIPELINE_BIND_POINT_GRAPHICS)) {
         kk(cb);
+    }
+}
+
+/// bbport: an indirect geometry-shader command in Metal if it can be (each of its draws), else
+/// all of it in a KosmicKrisp segment.
+void DrawGeometryIndirect(Owned& o, const BufferRef& args, VkDeviceSize offset, u32 count,
+                          u32 stride, bool indexed, VkBuffer buffer) {
+    const char* why = KkOnly(o)            ? KkOnly(o)
+                      : !GeometryInMetal() ? "a geometry shader (BB_METAL_GEOMETRY=0)"
+                                           : DrawBlocker(o);
+    if (!why && o.cull_mode == VK_CULL_MODE_FRONT_AND_BACK) {
+        why = "culling front and back";
+    }
+    if (!why) {
+        u32 drawn = 0;
+        for (; drawn < count; ++drawn) {
+            const u64 at = args.offset + offset + u64(drawn) * stride;
+            if (!EncodeGeometryIndirect(o, args, at, indexed, why)) {
+                break;
+            }
+            ++counters.metal_draws;
+        }
+        if (drawn == count) {
+            return;
+        }
+        if (drawn) {
+            // (A later draw of the command failed after earlier ones were encoded: the rest go
+            // to KosmicKrisp, one at a time.)
+            Reason(why);
+            ++counters.fallback_draws;
+            if (VkCommandBuffer cb = KkWithState(o, VK_PIPELINE_BIND_POINT_GRAPHICS)) {
+                (indexed ? driver.vkCmdDrawIndexedIndirect : driver.vkCmdDrawIndirect)(
+                    cb, buffer, offset + u64(drawn) * stride, count - drawn, stride);
+            }
+            return;
+        }
+    }
+    Reason(why);
+    ++counters.fallback_draws;
+    if (VkCommandBuffer cb = KkWithState(o, VK_PIPELINE_BIND_POINT_GRAPHICS)) {
+        (indexed ? driver.vkCmdDrawIndexedIndirect : driver.vkCmdDrawIndirect)(cb, buffer, offset,
+                                                                               count, stride);
     }
 }
 
@@ -4006,6 +4163,13 @@ void CmdDrawIndirect(Owned& o, VkBuffer buffer, VkDeviceSize offset, uint32_t co
     @autoreleasepool {
         const BufferRef args = ResolveBuffer(buffer);
         const BufferRef index = indexed ? ResolveBuffer(o.index_buffer) : BufferRef{};
+        if (o.graphics && o.graphics->geometry && args.buffer && count <= 4 &&
+            GeometryIndirectInMetal()) {
+            // bbport: each draw of the command its own kernels and scratch span (12 MiB: a
+            // command of more draws stays on KosmicKrisp).
+            DrawGeometryIndirect(o, args, offset, count, stride, indexed, buffer);
+            return;
+        }
         const char* blocker = o.graphics && o.graphics->tess       ? "an indirect tessellated draw"
                               : o.graphics && o.graphics->geometry ? "an indirect geometry-shader draw"
                               : !args.buffer                ? "no Metal indirect buffer"
@@ -4717,6 +4881,21 @@ void Report(double seconds) {
             std::snprintf(item, sizeof item, "%s%s %.0f", top.empty() ? "" : ", ",
                           sorted[i].second.c_str(), double(sorted[i].first) / seconds);
             top += item;
+        }
+    }
+    if (GeometryIndirectInMetal()) {
+        // (Cumulative, from the kernels' counters on the GPU; created on the first such draw.)
+        static u64 last_draws = 0;
+        if (const Metal::Geometry::IndirectKernels* k = IndirectKernelsIfMade()) {
+            const auto c = k->Read();
+            if (c.draws != last_draws) {
+                last_draws = c.draws;
+                Print("Metal frame: indirect geometry-shader draws so far %llu: %llu instanced "
+                      "(instance 0 drawn), %llu cut at the scratch's capacity, %llu primitives at "
+                      "most\n",
+                      (unsigned long long)c.draws, (unsigned long long)c.instanced,
+                      (unsigned long long)c.truncated, (unsigned long long)c.max_primitives);
+            }
         }
     }
     double gpu_busy_ms = 0.0, gpu_waiting_ms = 0.0;

@@ -17,6 +17,9 @@ struct ComputePipeline;
 struct TessellationPipeline;
 struct GeometryPipeline;
 struct DepthStencilKey;
+namespace Geometry {
+class IndirectKernels;
+}
 } // namespace Metal
 
 namespace MetalShadow {
@@ -96,6 +99,9 @@ const Metal::ComputePipeline* FindCompute(VkPipeline pipeline);
 /// bbport: why a pipeline has no Metal counterpart now, for the fallback counts (a static
 /// string): still being built, its build gave none, built after its bind, or never given.
 const char* WhyMissing(VkPipeline pipeline, bool compute);
+/// bbport: the prep and index-copy kernels of indirect geometry-shader draws, built on first
+/// use; null when they could not be (logged once).
+const Metal::Geometry::IndirectKernels* GeometryIndirectKernels();
 /// id<MTLDepthStencilState> for the key (the pipeline cache's), null on failure.
 void* DepthStencil(const Metal::DepthStencilKey& key);
 

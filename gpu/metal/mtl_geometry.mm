@@ -240,8 +240,12 @@ IndirectKernels::IndirectKernels(Device& device) {
         };
         id<MTLComputePipelineState> prep_state = make(@"bb_gs_prep");
         id<MTLComputePipelineState> copy_state = make(@"bb_gs_copy_indices");
-        id<MTLBuffer> stats = [mtl_device newBufferWithLength:64
-                                                      options:MTLResourceStorageModeShared];
+        // bbport: untracked: every indirect draw's kernels write it (atomics only); tracked, it
+        // would order their encoders after each other.
+        id<MTLBuffer> stats =
+            [mtl_device newBufferWithLength:64
+                                    options:MTLResourceStorageModeShared |
+                                            MTLResourceHazardTrackingModeUntracked];
         if (!prep_state || !copy_state || !stats) {
             error = "indirect geometry kernels: a pipeline or buffer could not be created";
             return;

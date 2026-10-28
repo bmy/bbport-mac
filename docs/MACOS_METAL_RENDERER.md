@@ -362,6 +362,13 @@ has no tessellator, so the frame encoder (`BB_METAL_FRAME=1`) now encodes classi
   those it does not read, by location), so both lay them out alike
   (`BB_METAL_TESS_PATCH_INPUTS=0`: not). The control shaders' cache files gain their patch
   constants' members (a `p` in their tag: compiled again once).
+- **Indirect geometry-shader draws in Metal:** about 150 a second went to KosmicKrisp (each a
+  split pass and two hand-overs). They run the native renderer's indirect path
+  (`mtl_geometry.h`, "Indirect draws"): a prep kernel reads the guest's arguments on the GPU and
+  sizes the export and geometry kernels and the strip draw within a 12 MiB scratch span (more
+  primitives than it holds are cut, instances after the first not drawn; a line in the report
+  counts both, from the kernels' counters). A command of more than four draws stays on
+  KosmicKrisp. `BB_METAL_GEOMETRY_INDIRECT=0`: all of them do.
 - **Switches for bisecting:** `BB_METAL_GENERIC=0` keeps the renderer's own pipelines on
   KosmicKrisp; `BB_METAL_TESS=0`, `BB_METAL_GEOMETRY=0`,
   `BB_METAL_FORMAT_VARIANTS=0` and `BB_METAL_DESCRIPTOR_SETS=0` keep those draws on KosmicKrisp (with `BB_METAL_PRECISE=all` and

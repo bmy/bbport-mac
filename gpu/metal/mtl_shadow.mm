@@ -97,6 +97,8 @@ struct State {
     std::mutex pipelines_mutex;
     std::unordered_map<VkPipeline, GraphicsEntry> graphics;
     std::unordered_map<VkPipeline, const Metal::ComputePipeline*> compute;
+    /// bbport: handles whose last build gave no Metal pipeline (Abandon), for WhyMissing.
+    std::unordered_set<VkPipeline> abandoned;
 
     static std::filesystem::path Dir() {
         auto dir = Common::FS::GetUserPath(Common::FS::PathType::CacheDir) / "metal-shadow";
@@ -206,6 +208,7 @@ struct State {
     u64 Expect(VkPipeline pipeline) {
         graphics.erase(pipeline);
         compute.erase(pipeline);
+        abandoned.erase(pipeline);
         if (waitable.erase(pipeline)) {
             built_cv.notify_all(); // (a waiter for the handle's earlier pipeline)
         }
@@ -238,7 +241,9 @@ struct State {
     }
     void Abandon(VkPipeline pipeline, u64 id) {
         std::scoped_lock lock{pipelines_mutex};
-        Current(pipeline, id);
+        if (Current(pipeline, id)) {
+            abandoned.insert(pipeline);
+        }
     }
 
     std::mutex queue_mutex;
@@ -350,6 +355,39 @@ const GraphicsEntry* FindGraphics(VkPipeline pipeline) {
     return it == s.graphics.end() ? nullptr : &it->second;
 }
 
+/// bbport: BB_METAL_TESS_PATCH_INPUTS=0: an evaluation shader keeps its own patch constants
+/// struct (a size differing from the control shader's leaves the pipeline to KosmicKrisp).
+static bool PatchInputsWanted() {
+    static const bool on = [] {
+        const char* v = std::getenv("BB_METAL_TESS_PATCH_INPUTS");
+        return !(v && v[0] == '0');
+    }();
+    return on;
+}
+
+const char* WhyMissing(VkPipeline pipeline, bool compute) {
+    if (!pipeline) {
+        return "no Metal pipeline: none bound";
+    }
+    auto& s = Get();
+    std::scoped_lock lock{s.pipelines_mutex};
+    if (s.pending.contains(pipeline)) {
+        return "no Metal pipeline: still being built";
+    }
+    if (s.abandoned.contains(pipeline)) {
+        return "no Metal pipeline: its build gave none";
+    }
+    if (compute ? s.compute.contains(pipeline) : s.graphics.contains(pipeline)) {
+        // A graphics entry without a render pipeline (its stages failed), or one published
+        // after the bind that looked it up.
+        if (!compute && !s.graphics.at(pipeline).render) {
+            return "no Metal pipeline: its entry has no render pipeline";
+        }
+        return "no Metal pipeline: built after its bind";
+    }
+    return "no Metal pipeline: not one the shadow build was given";
+}
+
 const Metal::ComputePipeline* FindCompute(VkPipeline pipeline) {
     auto& s = Get();
     std::scoped_lock lock{s.pipelines_mutex};
@@ -370,6 +408,7 @@ void Forget(vk::Pipeline vk_pipeline) {
     std::scoped_lock lock{s.pipelines_mutex};
     s.graphics.erase(pipeline);
     s.compute.erase(pipeline);
+    s.abandoned.erase(pipeline);
     s.pending.erase(pipeline); // a build still running for it is dropped when done
     if (s.waitable.erase(pipeline)) {
         s.built_cv.notify_all();
@@ -535,11 +574,25 @@ void BuildGraphics(const Vulkan::GraphicsPipelineKey& key, const ModuleRefs& mod
             if (ok) {
                 input.control = s.Variant(tcs_module, key.stage_hashes[u32(Stage::TessellationControl)],
                                           {.kind = Kind::TessControl, .domain = tes_info.domain});
+                Metal::CompileVariant eval_variant{
+                    .kind = Kind::TessEval,
+                    .output_vertices = tcs_info.output_vertices,
+                    .clip_fixup = key.clip_space == Gcn::ClipSpace::MinusWToW};
                 input.eval = s.Variant(tes_module, key.stage_hashes[u32(Stage::TessellationEval)],
-                                       {.kind = Kind::TessEval,
-                                        .output_vertices = tcs_info.output_vertices,
-                                        .clip_fixup = key.clip_space ==
-                                                      Gcn::ClipSpace::MinusWToW});
+                                       eval_variant);
+                // bbport: an evaluation shader that reads fewer patch constants than the control
+                // shader writes indexes the patch buffer with a smaller struct: again with the
+                // control shader's declared, so the two lay them out alike.
+                if (input.control && input.eval && PatchInputsWanted() &&
+                    input.eval->tess_layout.patch_input != 0 &&
+                    input.eval->tess_layout.patch_input <
+                        input.control->tess_layout.patch_output &&
+                    !input.control->tess_layout.patch_members.empty()) {
+                    eval_variant.patch_inputs = input.control->tess_layout.patch_members;
+                    input.eval = s.Variant(tes_module,
+                                           key.stage_hashes[u32(Stage::TessellationEval)],
+                                           eval_variant);
+                }
                 ok = input.control && input.eval;
             }
         }

@@ -343,6 +343,25 @@ has no tessellator, so the frame encoder (`BB_METAL_FRAME=1`) now encodes classi
   waits for, or the GPU, holds it), and how long it took once it is done. A present counts from
   the submission after it (it is done with that one), and only once there is one. At most 100
   stalls are reported.
+- **Where the time and the fallbacks go:** the per-second report gives our queue's time on the
+  GPU (the union of its command buffers' GPU intervals: working, and waiting in a gate for
+  KosmicKrisp's work), so a frame limited by the GPU is told from one limited by the hand-overs.
+  "No Metal pipeline" is split by cause (still being built, its build gave none, built after its
+  bind, never given to the shadow build), and a color clear KosmicKrisp makes by why its image
+  has no texture of ours (not created through the layer, as the swapchain's images; no Metal
+  texture; a format without a Metal twin; stored in another format; not exact in Metal). A
+  gate's wait counts from its commit. When the binary archive fails to serialize (logged once),
+  the pipelines added since it last did are logged in order with their kind (render,
+  tessellation, geometry, rect list, format variant, compute, kernel): the one it names is
+  among them.
+- **Patch constants the evaluation shader reads fewer of:** a control shader that writes more
+  patch constants than its evaluation shader reads made the evaluation shader index the patch
+  buffer with a smaller struct, so those pipelines (four of the game's) stayed with
+  KosmicKrisp's tessellation emulation. The evaluation shader is compiled again with the
+  control shader's patch constants declared as its inputs (SPIRV-Cross pads its struct with
+  those it does not read, by location), so both lay them out alike
+  (`BB_METAL_TESS_PATCH_INPUTS=0`: not). The control shaders' cache files gain their patch
+  constants' members (a `p` in their tag: compiled again once).
 - **Switches for bisecting:** `BB_METAL_GENERIC=0` keeps the renderer's own pipelines on
   KosmicKrisp; `BB_METAL_TESS=0`, `BB_METAL_GEOMETRY=0`,
   `BB_METAL_FORMAT_VARIANTS=0` and `BB_METAL_DESCRIPTOR_SETS=0` keep those draws on KosmicKrisp (with `BB_METAL_PRECISE=all` and

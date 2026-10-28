@@ -93,6 +93,9 @@ const GraphicsEntry* FindGraphics(VkPipeline pipeline);
 const GraphicsEntry* FindGraphicsWaiting(VkPipeline pipeline, u32 timeout_ms, bool tess,
                                          bool geometry);
 const Metal::ComputePipeline* FindCompute(VkPipeline pipeline);
+/// bbport: why a pipeline has no Metal counterpart now, for the fallback counts (a static
+/// string): still being built, its build gave none, built after its bind, or never given.
+const char* WhyMissing(VkPipeline pipeline, bool compute);
 /// id<MTLDepthStencilState> for the key (the pipeline cache's), null on failure.
 void* DepthStencil(const Metal::DepthStencilKey& key);
 

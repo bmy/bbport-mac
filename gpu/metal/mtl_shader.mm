@@ -229,6 +229,7 @@ public:
         }
         if (patch_stage_out_var_id) {
             layout.patch_output = InterfaceStructSize(get_patch_stage_out_struct_type());
+            layout.patch_members = InterfaceMembers(get_patch_stage_out_struct_type());
         }
         return layout;
     }
@@ -456,6 +457,21 @@ std::string Convert(std::span<const u32> spirv, const SpirvScan& scan,
             break;
         case VariantKind::TessEval:
             options.raw_buffer_tese_input = true;
+            // bbport: the control shader's patch constants, so the struct the evaluation shader
+            // indexes the patch buffer with is the control shader's (SPIRV-Cross pads it with
+            // the declared inputs it does not read, sorted by location).
+            for (const InterfaceMember& m : variant.patch_inputs) {
+                if (m.position || m.location == ~0u) {
+                    continue;
+                }
+                sc::MSLShaderInterfaceVariable input;
+                input.location = m.location;
+                input.component = 0;
+                input.vecsize = m.components;
+                input.format = sc::MSL_SHADER_VARIABLE_FORMAT_ANY32;
+                input.rate = sc::MSL_SHADER_VARIABLE_RATE_PER_PATCH;
+                comp.add_msl_shader_input(input);
+            }
             break;
         case VariantKind::Plain:
         case VariantKind::GeometryKernel:
@@ -569,6 +585,14 @@ std::string CacheText(const CompiledShader& shader, const std::string& msl) {
             text << ':' << m.offset << ':' << m.components << ':' << u32(m.type);
         }
         text << '\n';
+        if (shader.variant.kind == CompileVariant::Kind::TessControl) {
+            text << "// tesspatch " << shader.tess_layout.patch_members.size();
+            for (const InterfaceMember& m : shader.tess_layout.patch_members) {
+                text << ' ' << (m.position ? ~0u : m.location) << ':' << m.offset << ':'
+                     << m.components << ':' << u32(m.type);
+            }
+            text << '\n';
+        }
     }
     text << "// stagein " << shader.stage_inputs.size();
     for (const StageInput& input : shader.stage_inputs) {
@@ -693,6 +717,29 @@ bool ParseCache(const std::string& text, CompiledShader& shader, std::string& ms
                 m.components = components;
                 m.type = static_cast<ScalarType>(type);
                 shader.tess_layout.members.push_back(m);
+            }
+            continue;
+        }
+        if (line.starts_with("// tesspatch ")) {
+            // bbport: a control shader's patch constants (written since the _tcNp tag).
+            std::istringstream members(line.substr(13));
+            size_t count = 0;
+            members >> count;
+            for (size_t i = 0; i < count; ++i) {
+                std::string token;
+                unsigned location = 0, offset = 0, components = 0, type = 0;
+                if (!(members >> token) ||
+                    std::sscanf(token.c_str(), "%u:%u:%u:%u", &location, &offset, &components,
+                                &type) != 4 ||
+                    type > 3) {
+                    return false;
+                }
+                InterfaceMember m;
+                m.location = location;
+                m.offset = offset;
+                m.components = components;
+                m.type = static_cast<ScalarType>(type);
+                shader.tess_layout.patch_members.push_back(m);
             }
             continue;
         }
@@ -1086,10 +1133,20 @@ CompileResult ShaderCompiler::Compile(std::span<const u32> spirv, u64 hash, std:
         tag = fmt::format("_tv{}", variant.index_type);
         break;
     case VariantKind::TessControl:
-        tag = fmt::format("_tc{}", u32(variant.domain));
+        // bbport: "p": the file has the patch constants' members (// tesspatch).
+        tag = fmt::format("_tc{}p", u32(variant.domain));
         break;
     case VariantKind::TessEval:
         tag = fmt::format("_te{}", variant.output_vertices);
+        if (!variant.patch_inputs.empty()) {
+            std::vector<u32> layout;
+            for (const InterfaceMember& m : variant.patch_inputs) {
+                layout.insert(layout.end(), {m.location, u32(m.position), m.offset, m.components,
+                                             u32(m.type)});
+            }
+            tag += fmt::format("_pi{:016x}",
+                               XXH3_64bits(layout.data(), layout.size() * sizeof(u32)));
+        }
         break;
     case VariantKind::GeometryKernel: {
         // The rewritten module depends on the export layout.

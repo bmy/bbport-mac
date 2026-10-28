@@ -108,6 +108,10 @@ struct CompileVariant {
     /// bbport: Plain vertex and TessEval: clip space z from [-w, w] (the guest's) to Metal's
     /// [0, w] at the end of the shader (SPIRV-Cross' fixup_clipspace: z = (z + w) / 2).
     bool clip_fixup{};
+    /// bbport: TessEval: the control shader's patch constants (TessLayout::patch_members),
+    /// declared as the evaluation shader's per-patch inputs so its struct has the control
+    /// shader's layout even where it reads fewer of them; empty: its own.
+    std::vector<InterfaceMember> patch_inputs;
     bool operator==(const CompileVariant&) const = default;
 };
 
@@ -183,6 +187,8 @@ struct CompiledShader {
         u32 patch_output{};  ///< TCS: the patch constants it writes
         /// Vertex kernel: the members of the output struct (location / position, byte offset).
         std::vector<InterfaceMember> members;
+        /// bbport: TCS: the members of the patch constants struct it writes.
+        std::vector<InterfaceMember> patch_members;
     } tess_layout;
     /// Fragment shaders: the used non-builtin stage inputs (sorted by location).
     std::vector<StageInput> stage_inputs;

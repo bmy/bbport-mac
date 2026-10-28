@@ -11,6 +11,7 @@
 #include <mutex>
 #include <shared_mutex>
 #include <string>
+#include <vector>
 #include <unordered_map>
 #include <xxhash.h>
 
@@ -190,6 +191,9 @@ struct PsoCache::Impl {
     id<MTLBinaryArchive> archive; ///< nil: none (yet / any more)
     bool archive_dirty{};
     bool archive_error_logged{};
+    /// bbport: the labels of the pipelines added since the archive last serialized, in order,
+    /// logged when it fails to: the one it names ("pipeline no. N") is among them.
+    std::vector<std::string> archive_recent;
 };
 
 RenderPipeline::~RenderPipeline() {
@@ -284,12 +288,22 @@ bool PsoCache::Flush() {
                 impl->archive_error_logged = true;
                 LOG_WARNING(Render, "Metal binary archive {} could not be written: {}",
                             archive_path.string(), ok ? ec.message() : FirstLine(error));
+                std::string recent;
+                for (size_t i = 0; i < impl->archive_recent.size(); ++i) {
+                    recent += fmt::format("{}{}: {}", i ? "; " : "", i + 1,
+                                          impl->archive_recent[i]);
+                }
+                impl->archive_recent.clear();
+                LOG_WARNING(Render, "Metal binary archive: the {} pipelines added since it was "
+                                    "last written: {}",
+                            impl->archive_recent.size(), recent.empty() ? "-" : recent);
             }
             std::filesystem::remove(temp, ec);
             return false;
         }
     }
     impl->archive_dirty = false;
+    impl->archive_recent.clear();
     return true;
 }
 
@@ -301,10 +315,11 @@ namespace {
 /// bbport: `archivable` false keeps the descriptor out of the archive: a render pipeline without
 /// a fragment function adds without an error, but then the whole archive fails to serialize
 /// ("expecting 'fragment' stage in pipeline no. N"), so nothing was ever saved for the next run.
+/// `kind`: what the label leaves out, for the log of recent additions.
 template <typename Descriptor, typename Create, typename Add>
 id CreateWithArchive(PsoCache::Impl& impl, bool archive_loaded, Descriptor* descriptor,
                      Create create, Add add, bool& from_archive, std::string& error,
-                     bool archivable = true) {
+                     bool archivable = true, const char* kind = "") {
     id<MTLBinaryArchive> archive = archivable ? impl.archive : nil;
     from_archive = false;
     NSError* ns_error = nil;
@@ -329,6 +344,11 @@ id CreateWithArchive(PsoCache::Impl& impl, bool archive_loaded, Descriptor* desc
         NSError* add_error = nil;
         if (add(archive, descriptor, &add_error)) {
             impl.archive_dirty = true;
+            if (!impl.archive_error_logged) { // (logged once: not kept after that)
+                impl.archive_recent.emplace_back(
+                    std::string(descriptor.label ? descriptor.label.UTF8String : "(no label)") +
+                    kind);
+            }
         } else if (!impl.archive_error_logged) {
             impl.archive_error_logged = true;
             LOG_WARNING(Render, "Metal binary archive: adding a pipeline failed ({}), continuing "
@@ -597,7 +617,15 @@ const RenderPipeline* PsoCache::GetRenderPipeline(const Vulkan::GraphicsPipeline
                 [](id<MTLBinaryArchive> archive, MTLRenderPipelineDescriptor* d, NSError** err) {
                     return [archive addRenderPipelineFunctionsWithDescriptor:d error:err];
                 },
-                from_archive, error, desc.fragmentFunction != nil);
+                from_archive, error, desc.fragmentFunction != nil,
+                tessellation ? (input.formats_override ? " (tessellation, format variant)"
+                                                        : " (tessellation)")
+                : input.geometry ? (input.formats_override ? " (geometry, format variant)"
+                                                           : " (geometry)")
+                : input.rect_list_triangles
+                    ? (input.formats_override ? " (rect list, format variant)" : " (rect list)")
+                : input.formats_override ? " (format variant)"
+                                         : " (render)");
             elapsed_us = UsSince(start);
             if (!state) {
                 break;
@@ -691,7 +719,7 @@ const ComputePipeline* PsoCache::GetComputePipeline(const Vulkan::ComputePipelin
                 [](id<MTLBinaryArchive> archive, MTLComputePipelineDescriptor* d, NSError** err) {
                     return [archive addComputePipelineFunctionsWithDescriptor:d error:err];
                 },
-                from_archive, error);
+                from_archive, error, true, " (compute)");
             elapsed_us = UsSince(start);
             if (!state) {
                 break;
@@ -756,7 +784,7 @@ bool MakeKernel(PsoCache::Impl& impl, bool archive_loaded, TessKernel& kernel,
         [](id<MTLBinaryArchive> archive, MTLComputePipelineDescriptor* d, NSError** err) {
             return [archive addComputePipelineFunctionsWithDescriptor:d error:err];
         },
-        archived, error);
+        archived, error, true, " (kernel)");
     from_archive = from_archive && archived;
     if (!state) {
         return false;

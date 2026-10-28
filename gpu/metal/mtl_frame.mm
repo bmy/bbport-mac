@@ -140,6 +140,31 @@ void NoteSlow(id<MTLCommandBuffer> done, double committed, const char* what, u32
           start > 0.0 ? (start - committed) * 1e3 : -1.0, start > 0.0 ? (end - start) * 1e3 : -1.0);
 }
 
+/// Our queue's time on the GPU (the union of its command buffers' GPU intervals, as they
+/// complete in order): working, or in a gate waiting for KosmicKrisp's work. Per report.
+struct GpuClock {
+    std::mutex mutex;
+    double last_end = 0.0;
+    double busy = 0.0, waiting = 0.0;
+};
+GpuClock& gpu_clock = *new GpuClock;
+
+/// A gate's wait counts from its commit (`committed`, NowSeconds()), wherever Metal puts an
+/// event wait relative to GPUStartTime; 0: from its start (our other command buffers).
+void NoteGpuTime(id<MTLCommandBuffer> done, bool gate, double committed = 0.0) {
+    const double start = done.GPUStartTime, end = done.GPUEndTime;
+    if (start <= 0.0 || end <= start) {
+        return;
+    }
+    std::scoped_lock lock{gpu_clock.mutex};
+    const double from = std::max(gate && committed > 0.0 ? std::min(start, committed) : start,
+                                 gpu_clock.last_end);
+    if (end > from) {
+        (gate ? gpu_clock.waiting : gpu_clock.busy) += end - from;
+    }
+    gpu_clock.last_end = std::max(gpu_clock.last_end, end);
+}
+
 /// The failed command buffer's encoders that did not complete, with their last signposts.
 void PrintEncoderStatus(id<MTLCommandBuffer> done) {
     NSArray* infos = done.error.userInfo[MTLCommandBufferEncoderInfoErrorKey];
@@ -1754,7 +1779,7 @@ const char* DrawBlocker(Owned& o) {
     }
     const auto* entry = o.graphics;
     if (!entry || !entry->render) {
-        return "no Metal pipeline";
+        return MetalShadow::WhyMissing(o.graphics_pipeline, false);
     }
     const Metal::RenderPipeline& p = *entry->render; // (a format variant differs in formats only)
     if (p.primitive_emulated && !entry->rect_list) {
@@ -2019,7 +2044,7 @@ template <typename Encode, typename KkRecord>
 void Dispatch(Owned& o, Encode&& encode, KkRecord&& kk) {
     const char* why = KkOnly(o)         ? KkOnly(o)
                       : o.compute_metal ? nullptr
-                                        : "no Metal pipeline";
+                                        : MetalShadow::WhyMissing(o.compute_pipeline, true);
     if (!why) {
         StageResolvable(o, VK_PIPELINE_BIND_POINT_COMPUTE, o.compute_metal->shader, why);
     }
@@ -3021,6 +3046,7 @@ VkResult Submit(VkQueue vkqueue, const Batch* batches, uint32_t count, VkFence f
                 [gate addCompletedHandler:^(id<MTLCommandBuffer> done) {
                   NoteSlow(done, gate_committed, "the wait for KosmicKrisp's work before a run", 0,
                            1);
+                  NoteGpuTime(done, true, gate_committed);
                 }];
                 [gate commit];
                 kk_ahead = false;
@@ -3047,6 +3073,7 @@ VkResult Submit(VkQueue vkqueue, const Batch* batches, uint32_t count, VkFence f
                 const u32 index = run_index++;
                 [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {
                   NoteSlow(done, committed, "a run's command buffer", index, run_size);
+                  NoteGpuTime(done, false);
                 }];
                 // Held by the handler: the queue keeps an uncommitted command buffer, not a
                 // committed one, alive for its handlers (they run once it completed).
@@ -4158,6 +4185,37 @@ id<MTLTexture> ImageTexture(VkImage image, VkFormat& format) {
     return texture;
 }
 
+/// bbport: why ImageTexture gave nil for a color clear, for the fallback counts.
+const char* WhyNoClearTexture(VkImage image) {
+    VkFormat format{};
+    {
+        std::scoped_lock lock{objects_mutex};
+        const auto it = images.find(image);
+        if (it == images.end()) {
+            // (a swapchain image: made by the driver's swapchain, not vkCreateImage)
+            return "a color clear of an image the layer did not see created";
+        }
+        format = it->second.format;
+    }
+    VkExportMetalTextureInfoEXT out{
+        .sType = VK_STRUCTURE_TYPE_EXPORT_METAL_TEXTURE_INFO_EXT,
+        .image = image,
+        .plane = VK_IMAGE_ASPECT_PLANE_0_BIT,
+    };
+    Export(reinterpret_cast<VkBaseOutStructure*>(&out));
+    if (!out.mtlTexture) {
+        return "a color clear of an image without a Metal texture";
+    }
+    const u32 ours = Metal::VkToMtl::PixelFormat(vk::Format(format));
+    if (!ours) {
+        return "a color clear of a format without a Metal twin";
+    }
+    if (ours != u32(out.mtlTexture.pixelFormat)) {
+        return "a color clear of an image KosmicKrisp stores in another format";
+    }
+    return "a color clear of a format not exact in Metal";
+}
+
 /// Bytes and block size of a pixel format, for buffer <-> texture copies.
 struct Block {
     u32 bytes{}, width{1}, height{1};
@@ -4532,7 +4590,10 @@ void CmdClearColorImage(Owned& o, VkImage image, VkImageLayout layout,
                 }
             }
         }
-        const char* why = !texture                       ? "a color clear KosmicKrisp makes"
+        const char* why = !texture ? (!TransfersInMetal(Transfer::Clear)
+                                          ? "a color clear (BB_METAL_TRANSFERS)"
+                                      : KkOnly(o) ? KkOnly(o)
+                                                  : WhyNoClearTexture(image))
                           : !ClearableTexture(texture)   ? "a color clear of an image Metal cannot render into"
                           : Metal::VkToMtl::IsDepthPixelFormat(u32(texture.pixelFormat))
                               ? "a color clear of a depth format"
@@ -4658,12 +4719,20 @@ void Report(double seconds) {
             top += item;
         }
     }
+    double gpu_busy_ms = 0.0, gpu_waiting_ms = 0.0;
+    {
+        std::scoped_lock lock{gpu_clock.mutex};
+        gpu_busy_ms = gpu_clock.busy * 1e3 / seconds;
+        gpu_waiting_ms = gpu_clock.waiting * 1e3 / seconds;
+        gpu_clock.busy = gpu_clock.waiting = 0.0;
+    }
     Print("Metal frame: per second %.0f draws, %.0f dispatches and %.0f transfers in Metal, %.0f "
           "draws and %.0f dispatches and %.0f other commands to KosmicKrisp (%.0f segments, %.0f "
           "switches); %.0f Metal command buffers; render passes ended in Metal %.0f, split %.0f "
           "times in Metal, reopened %.0f times on KosmicKrisp; %.0f tessellated and %.0f "
           "geometry-shader draws in Metal; %.0f Metal encoders, %.0f barrier groups; residency "
-          "set: %.0f added, %.0f removed; GPU errors so far %llu; to KosmicKrisp because: %s\n",
+          "set: %.0f added, %.0f removed; our queue on the GPU %.0f ms/s working, %.0f ms/s "
+          "waiting for KosmicKrisp; GPU errors so far %llu; to KosmicKrisp because: %s\n",
           take(counters.metal_draws), take(counters.metal_dispatches),
           take(counters.metal_transfers),
           take(counters.fallback_draws), take(counters.fallback_dispatches),
@@ -4671,7 +4740,7 @@ void Report(double seconds) {
           take(counters.metal_buffers), take(counters.metal_passes), take(counters.pass_breaks),
           take(counters.kk_reopens), take(counters.tess_draws), take(counters.geometry_draws),
           take(counters.encoders), take(counters.epochs), take(counters.residency_adds),
-          take(counters.residency_removes), counters.gpu_errors.load(),
+          take(counters.residency_removes), gpu_busy_ms, gpu_waiting_ms, counters.gpu_errors.load(),
           top.empty() ? "-" : top.c_str());
 }
 

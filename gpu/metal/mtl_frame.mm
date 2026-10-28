@@ -4840,7 +4840,7 @@ void ImageDestroyed(VkImage image) {
 
 VkCommandBuffer FallbackBuffer(Owned& o, const char* name, bool in_pass) {
     @autoreleasepool {
-        (void)name;
+        Reason(name); // (the Vulkan command's name: these always go to KosmicKrisp)
         ++counters.fallback_other;
         if (!in_pass) {
             BreakPass(o);
@@ -4876,7 +4876,7 @@ void Report(double seconds) {
         }
         reasons.clear();
         std::sort(sorted.rbegin(), sorted.rend());
-        for (size_t i = 0; i < sorted.size() && i < 6; ++i) {
+        for (size_t i = 0; i < sorted.size() && i < 10; ++i) {
             char item[160];
             std::snprintf(item, sizeof item, "%s%s %.0f", top.empty() ? "" : ", ",
                           sorted[i].second.c_str(), double(sorted[i].first) / seconds);

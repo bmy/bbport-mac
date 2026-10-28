@@ -310,6 +310,17 @@ bool PsoCache::Flush() {
 
 namespace {
 
+/// bbport: whether the render pipeline writes a color attachment (a format and a write mask).
+bool WritesColor(MTLRenderPipelineDescriptor* desc) {
+    for (u32 i = 0; i < 8; ++i) {
+        MTLRenderPipelineColorAttachmentDescriptor* att = desc.colorAttachments[i];
+        if (att.pixelFormat != MTLPixelFormatInvalid && att.writeMask != MTLColorWriteMaskNone) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /// Makes `archive`'s handling of one descriptor uniform for render and compute: a lookup with
 /// FailOnBinaryArchiveMiss first (an archive hit skips the compiler), the regular creation
 /// otherwise, then the descriptor is added to the archive.
@@ -394,6 +405,7 @@ const RenderPipeline* PsoCache::GetRenderPipeline(const Vulkan::GraphicsPipeline
     pipeline->fs = fs;
     std::string error;
     bool from_archive = false;
+    bool archivable = false; ///< bbport: added to the binary archive (CreateWithArchive)
     u64 elapsed_us = 0;
     @autoreleasepool {
         do {
@@ -606,6 +618,7 @@ const RenderPipeline* PsoCache::GetRenderPipeline(const Vulkan::GraphicsPipeline
                 !logic_op_warned.exchange(true)) {
                 LOG_WARNING(Render, "Metal has no logic ops; the pipelines ignore them");
             }
+            archivable = desc.fragmentFunction != nil && !tessellation && WritesColor(desc);
             const auto start = Clock::now();
             id state = CreateWithArchive(
                 *impl, archive_loaded, desc,
@@ -619,8 +632,10 @@ const RenderPipeline* PsoCache::GetRenderPipeline(const Vulkan::GraphicsPipeline
                     return [archive addRenderPipelineFunctionsWithDescriptor:d error:err];
                 },
                 // (A tessellated one too: with its post-tessellation vertex function the
-                // archive fails to serialize, "missing 'vertex' stage in pipeline no. N".)
-                from_archive, error, desc.fragmentFunction != nil && !tessellation,
+                // archive fails to serialize, "missing 'vertex' stage in pipeline no. N". And
+                // one whose fragment function writes no color attachment: the compiler may drop
+                // that stage, and the archive fails as for a depth-only one.)
+                from_archive, error, archivable,
                 tessellation ? (input.formats_override ? " (tessellation, format variant)"
                                                         : " (tessellation)")
                 : input.geometry ? (input.formats_override ? " (geometry, format variant)"
@@ -662,9 +677,8 @@ const RenderPipeline* PsoCache::GetRenderPipeline(const Vulkan::GraphicsPipeline
     ++counters.render_pipelines;
     counters.render_us += elapsed_us;
     counters.archive_hits += from_archive;
-    if (!from_archive && pipeline->state && impl->archive && pipeline->fragment_function &&
-        !pipeline->tessellation) {
-        ++counters.archive_adds; // (depth-only and tessellated pipelines stay out of it)
+    if (!from_archive && pipeline->state && impl->archive && archivable) {
+        ++counters.archive_adds; // (depth-only, colorless and tessellated ones stay out of it)
     }
 
     std::unique_lock lock{impl->mutex};

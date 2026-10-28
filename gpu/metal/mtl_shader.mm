@@ -81,6 +81,7 @@ struct SpirvScan {
     bool per_vertex{};      ///< a PerVertexKHR decoration (pull-model fragment inputs)
     bool device_address{};  ///< Capability PhysicalStorageBufferAddresses
     bool bda_pagetable{};   ///< a variable named "bda_pagetable"
+    bool base_instance{};   ///< bbport: the BaseInstance builtin is declared
     std::array<u32, 3> local_size{0, 0, 0}; ///< OpExecutionMode LocalSize
     TessellationInfo tess;                  ///< the tessellation execution modes
 };
@@ -185,6 +186,16 @@ SpirvScan ScanSpirv(std::span<const u32> code) {
         case spv::OpDecorate:
             if (length >= 3 && code[i + 2] == spv::DecorationPerVertexKHR) {
                 scan.per_vertex = true;
+            }
+            if (length >= 4 && code[i + 2] == spv::DecorationBuiltIn &&
+                code[i + 3] == spv::BuiltInBaseInstance) {
+                scan.base_instance = true;
+            }
+            break;
+        case spv::OpMemberDecorate:
+            if (length >= 5 && code[i + 3] == spv::DecorationBuiltIn &&
+                code[i + 4] == spv::BuiltInBaseInstance) {
+                scan.base_instance = true;
             }
             break;
         default:
@@ -1107,6 +1118,7 @@ CompileResult ShaderCompiler::Compile(std::span<const u32> spirv, u64 hash, std:
     auto shader = std::make_unique<CompiledShader>();
     shader->stage = scan.stage;
     shader->uses_device_address = scan.device_address;
+    shader->uses_base_instance = scan.base_instance;
     shader->local_size = scan.local_size;
     shader->uses_bda_pagetable = scan.bda_pagetable;
     shader->variant = variant;

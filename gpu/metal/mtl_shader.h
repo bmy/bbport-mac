@@ -169,6 +169,8 @@ struct CompiledShader {
     u32 buffer_size_buffer{~0u};
     bool uses_device_address{};  ///< OpCapability PhysicalStorageBufferAddresses (raw gpuAddress pointers)
     bool uses_bda_pagetable{};   ///< the recompiler's "bda_pagetable" SSBO is declared
+    /// bbport: the BaseInstance builtin is declared (read from the SPIR-V on every compile).
+    bool uses_base_instance{};
     u32 num_buffers{};           ///< buffer slots used, incl. push constants and the size buffer
     u32 num_textures{};
     u32 num_samplers{};

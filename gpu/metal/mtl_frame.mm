@@ -2140,6 +2140,15 @@ bool EmptyScissor(const Owned& o) {
     return false;
 }
 
+/// bbport: BB_METAL_TESS_INSTANCED=0: instanced tessellated draws stay on KosmicKrisp.
+bool TessInstancedInMetal() {
+    static const bool on = [] {
+        const char* v = std::getenv("BB_METAL_TESS_INSTANCED");
+        return !(v && v[0] == '0');
+    }();
+    return on;
+}
+
 /// The vertex and control shaders as compute kernels writing GPU scratch, then the patch draw of
 /// the evaluation and fragment shaders in the pass (reopened, loading). False with `why` when the
 /// draw goes to KosmicKrisp: checked before the kernels are encoded, except that a render encoder
@@ -2151,8 +2160,22 @@ bool EncodeTessellated(Owned& o, const TessArgs& a, const char*& why) {
     if (!patches || !a.instances) {
         return true; // nothing to draw
     }
-    if (a.instances > 1) {
-        why = "an instanced tessellated draw";
+    // bbport: instances drawn one after another, each with kernels and scratch of its own (the
+    // kernels of all of them first, then the patch draws).
+    constexpr u32 kMaxTessInstances = 16;
+    if (a.instances > 1 && !TessInstancedInMetal()) {
+        why = "an instanced tessellated draw (BB_METAL_TESS_INSTANCED=0)";
+        return false;
+    }
+    if (a.instances > kMaxTessInstances) {
+        why = "a tessellated draw of more than 16 instances";
+        return false;
+    }
+    if (a.instances > 1 && o.graphics->tess->vertex[0].shader &&
+        o.graphics->tess->vertex[0].shader->uses_base_instance) {
+        // Each instance's kernel is its own dispatch, its region's origin the instance: its
+        // BaseInstance would read first_instance + i, where Vulkan gives first_instance.
+        why = "an instanced tessellated draw whose vertex shader reads BaseInstance";
         return false;
     }
     if (a.indexed && a.vertex_offset < 0) {
@@ -2200,9 +2223,25 @@ bool EncodeTessellated(Owned& o, const TessArgs& a, const char*& why) {
 
     // Steps 1 and 2: the kernels (after the encoder before them, the chain).
     const auto plan = Metal::Tessellation::PlanScratch(t, patches);
-    id<MTLBuffer> scratch;
-    u64 at = 0;
-    GpuScratch(o, plan.total, &scratch, &at);
+    if (a.instances > 1 && plan.total * a.instances > (256ull << 20)) {
+        why = "an instanced tessellated draw over 256 MiB of scratch";
+        return false;
+    }
+    // One span for all instances (each its own part, 256-aligned as a span of its own would be).
+    struct InstanceScratch {
+        id<MTLBuffer> buffer;
+        u64 at{};
+    };
+    std::array<InstanceScratch, kMaxTessInstances> spans;
+    {
+        const u64 stride = (plan.total + 255) & ~u64(255);
+        id<MTLBuffer> buffer;
+        u64 at = 0;
+        GpuScratch(o, stride * a.instances, &buffer, &at);
+        for (u32 i = 0; i < a.instances; ++i) {
+            spans[i] = {buffer, at + u64(i) * stride};
+        }
+    }
     id<MTLComputeCommandEncoder> enc = ComputeEncoder(o);
     o.draw_kernels = true;
     if (GpuDiag()) {
@@ -2216,8 +2255,13 @@ bool EncodeTessellated(Owned& o, const TessArgs& a, const char*& why) {
         const char* bind_why = nullptr;
         BindStage(o, Stage::Compute, graphics, &shader, bind_why);
     };
-    Metal::Tessellation::EncodeKernels((__bridge void*)enc, t, params, streams.Span(),
-                                       (__bridge void*)scratch, at, plan, bind, bind);
+    for (u32 i = 0; i < a.instances; ++i) {
+        Metal::Tessellation::DrawParams instance = params;
+        instance.first_instance = a.first_instance + i;
+        Metal::Tessellation::EncodeKernels((__bridge void*)enc, t, instance, streams.Span(),
+                                           (__bridge void*)spans[i].buffer, spans[i].at, plan,
+                                           bind, bind);
+    }
     // Step 3: the patch draw (the render encoder after the compute one, the chain).
     if (!PrepareDraw(o, why)) {
         return false; // the kernels' output goes unused
@@ -2228,17 +2272,21 @@ bool EncodeTessellated(Owned& o, const TessArgs& a, const char*& why) {
         Signpost(r, "tessellated draw: domain %#llx pixel %#llx, %u patches", (unsigned long long)h[2],
                  (unsigned long long)h[4], patches);
     }
-    [r setTessellationFactorBuffer:scratch offset:at + plan.factor_offset instanceStride:0];
-    [r setVertexBuffer:scratch offset:at + plan.control_offset atIndex:Metal::kTessInputBuffer];
-    [r setVertexBuffer:scratch offset:at + plan.patch_offset atIndex:Metal::kTessPatchBuffer];
-    [r setVertexBuffer:scratch offset:at + plan.factor_offset atIndex:Metal::kTessFactorBuffer];
-    [r drawPatches:t.output_control_points
-                   patchStart:0
-                   patchCount:patches
-             patchIndexBuffer:nil
-       patchIndexBufferOffset:0
-                instanceCount:1
-                 baseInstance:a.first_instance];
+    for (u32 i = 0; i < a.instances; ++i) {
+        id<MTLBuffer> scratch = spans[i].buffer;
+        const u64 at = spans[i].at;
+        [r setTessellationFactorBuffer:scratch offset:at + plan.factor_offset instanceStride:0];
+        [r setVertexBuffer:scratch offset:at + plan.control_offset atIndex:Metal::kTessInputBuffer];
+        [r setVertexBuffer:scratch offset:at + plan.patch_offset atIndex:Metal::kTessPatchBuffer];
+        [r setVertexBuffer:scratch offset:at + plan.factor_offset atIndex:Metal::kTessFactorBuffer];
+        [r drawPatches:t.output_control_points
+                       patchStart:0
+                       patchCount:patches
+                 patchIndexBuffer:nil
+           patchIndexBufferOffset:0
+                    instanceCount:1
+                     baseInstance:a.first_instance + i];
+    }
     ++counters.tess_draws;
     return true;
 }

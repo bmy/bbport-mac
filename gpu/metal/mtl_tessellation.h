@@ -27,7 +27,7 @@
 /// encoder, step 3 the render encoder, which the caller opens after the compute work (the
 /// hazard-tracked scratch buffer orders the encoders). Nothing here knows the rasterizer: the
 /// callers bind each stage's resources (BindStage) and the vertex/index buffers.
-/// Direct draws of one instance only (Rasterizer drops the others, counted).
+/// Direct draws of one instance (the frame encoder draws more instances one after another).
 ///
 /// Objective-C objects cross this header as `void*` (bridged), as in mtl_pso_cache.h.
 namespace Metal::Tessellation {

@@ -322,6 +322,12 @@ has no tessellator, so the frame encoder (`BB_METAL_FRAME=1`) now encodes classi
   function made its serialization fail): such pipelines stay out of it now, so a second launch
   finds the others there instead of compiling them again. Tessellated ones do too: with their
   post-tessellation vertex function the archive failed the same way ("missing 'vertex' stage").
+  So do those that write no color attachment: the compiler may drop a fragment stage that has
+  no effect, and the archive then fails as for a depth-only one.
+- **Instanced tessellated draws:** they went to KosmicKrisp (about 200 a second once the
+  game's last tessellated pipelines built in Metal). Each instance now runs the kernels into
+  scratch of its own (all of them first, in one compute encoder) and its own patch draw, up to
+  16 instances and 256 MiB of scratch. `BB_METAL_TESS_INSTANCED=0`: they stay on KosmicKrisp.
 - **After a GPU error, Metal is off:** a Metal command buffer that fails on the GPU (a fault, a
   timeout) turns the Metal path off for everything recorded after it (it all goes to
   KosmicKrisp): each hang makes macOS reset the GPU, and repeated resets have taken the

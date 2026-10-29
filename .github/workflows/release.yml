@@ -10,7 +10,10 @@
 # A push to a ci-* branch, or "Run workflow" without a version, only builds the zip (kept as a
 # workflow artifact), to try a build without releasing it; such test builds reuse what an earlier
 # test build of the same branch compiled (ccache), releases never do. The ci-* branch is deleted again
-# once its build has finished (the run keeps the result, annotations and zip).
+# once its build has finished or was cancelled (the run keeps the result, annotations and zip).
+# Caches are only shared with runs of the same ref (and the default branch): use one ci-* name per
+# line of work (ci-native07, ci-metal-2), not a new name per build, or every test build compiles
+# the dependencies and the port from scratch.
 name: Mac release
 
 on:
@@ -198,10 +201,11 @@ jobs:
           # Up to 8 annotations of 80 lines per log: the errors stay readable from the API
           # (check-run annotations) when the full log isn't.
           for log in out/gpu-errors.txt out/loader-build.log out/gpu-arm64-errors.txt \
-                     out/gpu-arm64-configure.log deps-arm64/setup.log out/package.log; do
+                     out/gpu-arm64-configure.log deps-x86_64/setup.log deps-arm64/setup.log out/package.log; do
             [[ -f $log ]] || continue
+            # The dependencies' logs: their last lines (a failed clone says "fatal:", not "error").
             { [[ $log == *errors.txt ]] && cat "$log" ||
-              { [[ $log == */package.log ]] && tail -80 "$log" || grep -E 'error' "$log"; }; } | head -640 |
+              { [[ $log == */package.log || $log == */setup.log ]] && tail -80 "$log" || grep -E 'error' "$log"; }; } | head -640 |
               split -l 80 - "/tmp/annotation-$(basename "$log")-"
             for part in /tmp/annotation-"$(basename "$log")"-*; do
               [[ -f $part ]] && echo "::error title=$log $(basename "$part")::$(python3 -c 'import sys; print(sys.stdin.read().replace("%","%25").replace("\r","%0D").replace("\n","%0A"), end="")' < "$part")"
@@ -269,12 +273,12 @@ jobs:
             --target "$GITHUB_SHA" --title "bbport-mac-$TAG" --notes-file "$notes" "$kind"
 
   # Test builds: the ci-* branch was only pushed to start this run; it goes once the build has
-  # finished, pass or fail (not when the run was cancelled). Like publish, it runs no build code:
+  # finished, pass or fail, or was cancelled. Like publish, it runs no build code:
   # write access for one call deleting a branch named ci-*. A branch already gone (a later push
   # to the same name, whose run deleted it) is not an error.
   cleanup:
     needs: build
-    if: ${{ !cancelled() && github.event_name == 'push' && startsWith(github.ref, 'refs/heads/ci-') }}
+    if: ${{ always() && github.event_name == 'push' && startsWith(github.ref, 'refs/heads/ci-') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

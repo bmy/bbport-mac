@@ -67,11 +67,28 @@ verify_rev() {  # verify_rev <dir> <commit>
     actual=$(git -C "$1" rev-parse HEAD)
     [[ $actual == "$2" ]] || die "$1: expected commit $2, got $actual (the tag moved?)"
 }
-fetch() {  # fetch <name> <git url> <tag> <commit>
-    local dir=$SRC/$1
+# Network steps are tried 3 times (a server's hiccup must not end a long build); what they fetch
+# is still checked against the pinned commit.
+retry() {  # retry <command...>
+    local try
+    for try in 1 2 3; do
+        "$@" && return 0
+        echo "attempt $try failed: $*" >&2
+        (( try < 3 )) && sleep $(( try * 15 ))
+    done
+    return 1
+}
+clone_into() {  # clone_into <dir> <tag> <git url>: a fresh shallow clone
+    rm -rf "$1"
+    git -c advice.detachedHead=false clone -q --depth 1 --branch "$2" "$3" "$1"
+}
+fetch() {  # fetch <name> <git url> <tag> <commit> [mirror url]: the mirror if the first fails
+    local dir=$SRC/$1 url
     if [[ ! -d $dir/.git ]] || [[ $(git -C "$dir" rev-parse HEAD 2>/dev/null) != "$4" ]]; then
-        rm -rf "$dir"
-        git -c advice.detachedHead=false clone -q --depth 1 --branch "$3" "$2" "$dir"
+        for url in "$2" ${5:+"$5"}; do
+            retry clone_into "$dir" "$3" "$url" && break
+        done
+        [[ -d $dir/.git ]] || die "$1: could not clone $2${5:+ or $5}"
     fi
     verify_rev "$dir" "$4"
 }
@@ -141,7 +158,7 @@ step "FFmpeg (decoders the game's movies need; $ARCH)"
 FF_TAG=n9.0.2 FF_REV=946fcce07b6dcd0331c8cc609192aeff5e1924f8
 echo "tag: $FF_TAG"
 if ! have lib/libavformat.dylib; then
-    fetch ffmpeg https://git.ffmpeg.org/ffmpeg.git "$FF_TAG" "$FF_REV"
+    fetch ffmpeg https://git.ffmpeg.org/ffmpeg.git "$FF_TAG" "$FF_REV" https://github.com/FFmpeg/FFmpeg.git
     cd "$SRC/ffmpeg"
     # Configure natively and cross-compile to x86-64 (the standard universal-build recipe);
     # arm64 is a plain native build.
@@ -180,7 +197,7 @@ XBYAK_REV=44a72f369268f7d552650891b296693e91db86bb
 if ! have include/xbyak/xbyak.h; then
     rm -rf "$SRC/xbyak" && mkdir -p "$SRC/xbyak"
     git -C "$SRC/xbyak" init -q
-    git -C "$SRC/xbyak" fetch -q --depth 1 https://github.com/herumi/xbyak.git "$XBYAK_REV"
+    retry git -C "$SRC/xbyak" fetch -q --depth 1 https://github.com/herumi/xbyak.git "$XBYAK_REV"
     git -C "$SRC/xbyak" -c advice.detachedHead=false checkout -q FETCH_HEAD
     verify_rev "$SRC/xbyak" "$XBYAK_REV"
     mkdir -p "$PREFIX/include"
@@ -203,8 +220,12 @@ echo "tag: $ZY_TAG"
 # first from the revision Zydis ships (its submodule), then Zydis.
 if ! have lib/libZydis.a || ! have lib/cmake/zycore/zycore-config.cmake; then
     rm -rf "$SRC/zydis" "$PREFIX/lib/libZydis.a" "$PREFIX/lib/cmake/zydis"
-    git -c advice.detachedHead=false clone -q --depth 1 --recurse-submodules --shallow-submodules \
-        --branch "$ZY_TAG" https://github.com/zyantific/zydis.git "$SRC/zydis"
+    zydis_clone() {
+        rm -rf "$SRC/zydis"
+        git -c advice.detachedHead=false clone -q --depth 1 --recurse-submodules --shallow-submodules \
+            --branch "$ZY_TAG" https://github.com/zyantific/zydis.git "$SRC/zydis"
+    }
+    retry zydis_clone
     verify_rev "$SRC/zydis" "$ZY_REV"
     quiet "zycore configure" cmake -S "$SRC/zydis/dependencies/zycore" -B "$SRC/zydis/build-zycore" \
         "${X86_CMAKE[@]}" -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
@@ -248,18 +269,18 @@ if ! have lib/kosmickrisp/libvulkan_kosmickrisp.dylib || [[ $(cat "$kk_stamp" 2>
         rm -rf "$kk" && mkdir -p "$kk"
         git -C "$kk" init -q
         git -C "$kk" remote add origin https://github.com/shadexternals/mesa-kosmickrisp.git
-        git -C "$kk" fetch -q --depth 1 origin "$KK_REV"
+        retry git -C "$kk" fetch -q --depth 1 origin "$KK_REV"
         git -C "$kk" -c advice.detachedHead=false checkout -q FETCH_HEAD
         verify_rev "$kk" "$KK_REV"
         echo "fetching Mesa"
-        git -C "$kk" submodule update -q --init --depth 1
+        retry git -C "$kk" submodule update -q --init --depth 1
     fi
     # Our patches on top of the pinned Mesa, applied in order to a clean checkout: a changed or
     # added patch must not meet an earlier version of the series (checking each patch on its own
     # breaks when a later patch edits the same lines as an earlier one).
     # (The submodule is checked out at its pinned commit first, in case an earlier run stopped
     # before it was.)
-    git -C "$kk" submodule update -q --init --force --depth 1
+    retry git -C "$kk" submodule update -q --init --force --depth 1
     git -C "$kk/externals/mesa" reset -q --hard
     git -C "$kk/externals/mesa" clean -q -fd
     for patch in "$REPO"/tools/macos/kosmickrisp-patches/*.patch; do

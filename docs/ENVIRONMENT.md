@@ -101,7 +101,7 @@ What players and the launchers set. The menu, bbport.ini and the launcher write 
 | `BB_UPSCALE_PRESET` | the upscaler quality preset (the menu's) |
 | `BB_USER_NAME` | the PS4 user name (default Hunter) |
 
-## Tuning (237)
+## Tuning (238)
 
 Defaults to change on a machine where they misbehave, workarounds, and switches that turn a fix off for comparison.
 
@@ -292,6 +292,7 @@ Defaults to change on a machine where they misbehave, workarounds, and switches 
 | `BB_READBACK_LINEAR` | =1: linear images read back to guest memory |
 | `BB_READBACK_QUEUE` | =0: no separate queue for readbacks |
 | `BB_REGS_FULL_RESET` | set: the whole register file reset, as before |
+| `BB_REMOTE_FRESH_SYNC` | =1 (native GPU process): the game's fresh GPU ranges reach bb-gpu as calls that return once its buffer cache has them, before the game writes there (default: messages; to measure) |
 | `BB_RENDER_RESOURCE_CACHE_MB` | =N (160: the game's own): the game's render resource cache size |
 | `BB_REPAIRED_DRAWS` | =1: repaired command buffers still draw |
 | `BB_REPAIRED_WAIT_MS` | =N (default 500): waits of repaired command buffers give up after this |

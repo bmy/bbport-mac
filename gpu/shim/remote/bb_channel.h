@@ -8,6 +8,9 @@
 // - A synchronous call is a ring message that names a reply slot; the reader runs the handler and
 //   writes the result into that slot. Calls stay in order with the asynchronous messages before
 //   them (a write fault after the mapping it touches).
+// - bbport: while it answers a call, the handler may ask the caller (Reply::Ask) through the same
+//   slot; the waiting caller runs its `serve` for it on its own thread and answers, and the
+//   handler goes on (bb-gpu's write faults: the faulting thread applies their protections).
 // - Waiting sleeps on a 32-bit word in the shared region (os_sync_wait_on_address with the shared
 //   flag on macOS 14.4+, a shared futex on Linux) after a short spin.
 // Both sides only use std::atomic with acquire/release, so x86-64 (TSO) and arm64 agree.
@@ -41,6 +44,9 @@ inline constexpr std::uint32_t RingBytes = 1u << 20;
 inline constexpr std::uint32_t MaxPayload = 4096;
 inline constexpr std::uint32_t NumReplySlots = 64;
 inline constexpr std::uint32_t NoReply = ~0u;
+/// bbport: a request a handler asks its caller (Reply::Ask) is at most this (the caller copies it
+/// onto its stack, maybe a signal handler's).
+inline constexpr std::uint32_t MaxAskPayload = 256;
 
 // ---- waiting on a shared word ------------------------------------------------------------------
 
@@ -122,13 +128,15 @@ struct alignas(64) RingControl {
 };
 
 struct alignas(64) ReplySlot {
-    std::atomic<std::uint32_t> state{0}; ///< Free, Waiting, Done
+    std::atomic<std::uint32_t> state{0}; ///< Free, Waiting, Done, Asked, Answered
     std::atomic<std::uint32_t> sleepers{0};
     std::uint32_t size = 0;
-    std::uint32_t pad = 0;
+    std::uint32_t ask_type = 0; ///< bbport: Asked: the request's message type
     std::uint8_t data[MaxPayload];
 };
-enum : std::uint32_t { SlotFree = 0, SlotWaiting = 1, SlotDone = 2 };
+/// Waiting -> Done (the reply); bbport: Waiting -> Asked (the handler's request in the slot) ->
+/// Answered (the caller's answer there) -> Waiting, any number of times before Done.
+enum : std::uint32_t { SlotFree = 0, SlotWaiting = 1, SlotDone = 2, SlotAsked = 3, SlotAnswered = 4 };
 
 struct ChannelLayout {
     std::uint32_t magic;
@@ -180,6 +188,14 @@ public:
     /// Sends a message and waits for the peer's handler to answer it; returns the answer's size.
     std::uint32_t Call(std::uint32_t type, const void* data, std::uint32_t size, void* reply,
                        std::uint32_t reply_capacity) {
+        return Call(type, data, size, reply, reply_capacity, [](const Message&, auto&&) {});
+    }
+
+    /// bbport: as Call; what the handler asks meanwhile (Reply::Ask) runs `serve(message,
+    /// answer)` on this thread, `answer(data, size)` once (unanswered: nothing goes back).
+    template <typename Serve>
+    std::uint32_t Call(std::uint32_t type, const void* data, std::uint32_t size, void* reply,
+                       std::uint32_t reply_capacity, Serve&& serve) {
         ReplySlot* slots = layout->slots[Out()];
         std::uint32_t index = 0;
         for (;; index = (index + 1) % NumReplySlots) {
@@ -194,8 +210,17 @@ public:
         }
         ReplySlot& slot = slots[index];
         Write(type, data, size, index);
-        WaitUntil(slot.state, slot.sleepers,
-                  [&] { return slot.state.load(std::memory_order_acquire) == SlotDone; });
+        for (;;) {
+            std::uint32_t state = SlotWaiting;
+            WaitUntil(slot.state, slot.sleepers, [&] {
+                state = slot.state.load(std::memory_order_acquire);
+                return state == SlotDone || state == SlotAsked;
+            });
+            if (state == SlotDone) {
+                break;
+            }
+            ServeAsk(slot, serve);
+        }
         // The peer wrote the size: read it once and keep it within the slot.
         std::uint32_t full = slot.size;
         if (full > MaxPayload) {
@@ -209,8 +234,69 @@ public:
         return full;
     }
 
+    /// The handler's side of a message (ReceiveOne): `reply(data, size)` answers a call, once.
+    class Reply {
+    public:
+        void operator()(const void* data, std::uint32_t size) {
+            if (!slot || replied) {
+                return;
+            }
+            const std::uint32_t n = !data ? 0 : size < MaxPayload ? size : MaxPayload;
+            slot->size = n;
+            if (n) {
+                std::memcpy(slot->data, data, n);
+            }
+            replied = true;
+            Publish(*slot, SlotDone);
+        }
+
+        /// bbport: a call not answered yet, whose caller Ask reaches.
+        [[nodiscard]] bool CanAsk() const {
+            return slot && !replied;
+        }
+
+        /// bbport: runs `type` with `data` (at most MaxAskPayload bytes) in the caller, its
+        /// Call's `serve`, and waits for it there; returns the answer's size (0: none, or not
+        /// CanAsk()). The caller serves nothing else meanwhile: it waits for this call only.
+        std::uint32_t Ask(std::uint32_t type, const void* data, std::uint32_t size, void* answer,
+                          std::uint32_t capacity) {
+            if (!CanAsk()) {
+                return 0;
+            }
+            ReplySlot& s = *slot;
+            size = size < MaxAskPayload ? size : MaxAskPayload;
+            s.ask_type = type;
+            s.size = size;
+            if (size) {
+                std::memcpy(s.data, data, size);
+            }
+            Publish(s, SlotAsked);
+            WaitUntil(s.state, s.sleepers,
+                      [&] { return s.state.load(std::memory_order_acquire) == SlotAnswered; });
+            // The caller wrote the size: read it once and keep it within the slot.
+            std::uint32_t full = s.size;
+            if (full > MaxPayload) {
+                full = MaxPayload;
+            }
+            const std::uint32_t n = full < capacity ? full : capacity;
+            if (n) {
+                std::memcpy(answer, s.data, n);
+            }
+            // The call goes on (the caller waits for its reply or the next request: no wake).
+            s.state.store(SlotWaiting, std::memory_order_seq_cst);
+            return full;
+        }
+
+    private:
+        friend class Channel;
+        explicit Reply(ReplySlot* slot_) : slot{slot_} {}
+        ReplySlot* slot;
+        bool replied = false;
+    };
+
     /// Reader thread: waits for the next message from the peer and runs `handler(message, reply)`
-    /// with `reply(data, size)` for synchronous calls. Returns false once `stop()` is true.
+    /// with `reply(data, size)` (a Reply) for synchronous calls. Returns false once `stop()` is
+    /// true.
     template <typename Handler, typename Stop>
     bool ReceiveOne(Handler&& handler, Stop&& stop) {
         RingControl& c = layout->control[In()];
@@ -259,23 +345,7 @@ public:
             std::memcpy(payload, ring + offset + sizeof(MessageHeader), header.payload_size);
         }
         const Message message{header.type, payload, header.payload_size};
-        const std::uint32_t reply_index = header.reply;
-        bool replied = false;
-        auto reply = [&](const void* data, std::uint32_t size) {
-            if (reply_index == NoReply || replied) {
-                return;
-            }
-            ReplySlot& slot = layout->slots[In()][reply_index];
-            slot.size = size < MaxPayload ? size : MaxPayload;
-            if (slot.size) {
-                std::memcpy(slot.data, data, slot.size);
-            }
-            replied = true;
-            slot.state.store(SlotDone, std::memory_order_release);
-            if (slot.sleepers.load(std::memory_order_seq_cst) != 0) {
-                WakeWord(slot.state);
-            }
-        };
+        Reply reply{header.reply == NoReply ? nullptr : &layout->slots[In()][header.reply]};
         handler(message, reply);
         reply(nullptr, 0); // a call the handler did not answer still returns
         c.tail.store(tail + header.size, std::memory_order_release);
@@ -294,6 +364,42 @@ private:
     [[nodiscard]] std::uint32_t In() const { return 1 - static_cast<std::uint32_t>(side); }
 
     static constexpr std::uint32_t Align8(std::uint32_t n) { return (n + 7) & ~7u; }
+
+    /// A slot's next state, its sleepers woken. bbport: seq_cst store, as Signal's fetch_add: a
+    /// release store could pass the sleepers load (x86 store buffer) and miss a waiter that had
+    /// just counted itself in.
+    static void Publish(ReplySlot& slot, std::uint32_t state) {
+        slot.state.store(state, std::memory_order_seq_cst);
+        if (slot.sleepers.load(std::memory_order_seq_cst) != 0) {
+            WakeWord(slot.state);
+        }
+    }
+
+    /// bbport: a request the handler asked (SlotAsked), run by the waiting caller.
+    template <typename Serve>
+    static void ServeAsk(ReplySlot& slot, Serve& serve) {
+        // The peer wrote the request: its size read once, kept within the copy.
+        std::uint32_t n = slot.size;
+        if (n > MaxAskPayload) {
+            n = MaxAskPayload;
+        }
+        alignas(16) std::uint8_t request[MaxAskPayload];
+        if (n) {
+            std::memcpy(request, slot.data, n);
+        }
+        const Message message{slot.ask_type, request, n};
+        std::uint32_t answer_size = 0;
+        auto answer = [&](const void* data, std::uint32_t size) {
+            if (answer_size || !size) {
+                return;
+            }
+            answer_size = size < MaxPayload ? size : MaxPayload;
+            std::memcpy(slot.data, data, answer_size);
+        };
+        serve(message, answer);
+        slot.size = answer_size;
+        Publish(slot, SlotAnswered);
+    }
 
     /// The other process broke the protocol: stop rather than read or write out of bounds.
     [[noreturn]] static void Corrupt(const char* what) {

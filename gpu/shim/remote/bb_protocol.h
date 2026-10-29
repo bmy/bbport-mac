@@ -11,14 +11,16 @@
 
 namespace BbRemote {
 
-inline constexpr std::uint32_t ProtocolVersion = 10;
+inline constexpr std::uint32_t ProtocolVersion = 11;
 
 enum Msg : std::uint32_t {
     // ---- game process -> GPU process ----
     MsgHello = 1,       ///< call: HelloArgs -> HelloReply (ranges reserved, clocks agreed)
     MsgMapMemory = 2,   ///< MapArgs: a guest mapping to mirror (before the GPU hears of it)
     MsgUnmapMemory = 3, ///< RangeArgs
-    MsgWriteFault = 4,  ///< call: FaultArgs -> FaultReply
+    /// call: FaultArgs -> FaultReply; meanwhile MsgProtect asked of the faulting thread
+    /// (Channel::Reply::Ask): it applies the fault's protections itself, as they are decided
+    MsgWriteFault = 4,
     MsgShutdown = 5,    ///< call: no payload; the GPU process exits after answering
     MsgInit = 6,        ///< call: InitArgs -> ResultReply (window, Vulkan device, GPU core)
     MsgProtectMemory = 7, ///< MirrorProtectArgs: the guest changed a mapping's protection
@@ -28,7 +30,9 @@ enum Msg : std::uint32_t {
     MsgSettingsChanged = 11, ///< the game's System menu changed bbport.ini (BbSettings::ReloadLive)
     // bbport 0.7's memory model (the GPU uses the game's memory in place).
     MsgGuestMemory = 12, ///< call -> GuestMemoryReply: how bb-gpu's GPU takes the game's memory
-    MsgFreshRange = 13,  ///< RangeArgs: the game's hooks (CoreServices::fresh_range)
+    /// RangeArgs: the game's hooks (CoreServices::fresh_range); BB_REMOTE_FRESH_SYNC=1: a call on
+    /// ControlBlock::fresh -> ResultReply, answered once bb-gpu's buffer cache has the range
+    MsgFreshRange = 13,
     MsgDeadRange = 14,   ///< RangeArgs: CoreServices::dead_range
     MsgLiveRange = 15,   ///< RangeArgs: CoreServices::live_range
     MsgGpuRemap = 16,    ///< RangeArgs: the range's GPU memory changed (a heap piece's chunk)
@@ -64,7 +68,9 @@ enum Msg : std::uint32_t {
     MsgChunkFree = 71,  ///< call: ChunkArgs -> ResultReply
 
     // ---- GPU process -> game process ----
-    MsgProtect = 100,       ///< call: ProtectArgs -> ResultReply (the game process applies it)
+    /// call: ProtectArgs -> ResultReply (the game process applies it), or asked during a
+    /// MsgWriteFault (the faulting thread applies it)
+    MsgProtect = 100,
     MsgIrq = 101,           ///< ValueArgs: BbIrq::Line
     MsgFramesRetired = 102, ///< ValueArgs (BbGnm::NoteFramesRetired)
     MsgReleaseSubmissionLock = 103,
@@ -157,14 +163,14 @@ struct FaultArgs {
     std::uint32_t reasons;   ///< the game's write trap reasons for the page (runtime_memory.c)
     std::uint32_t pad;
 };
-/// With lock_held, the protections the GPU side decided while handling the fault: the faulting
-/// thread applies them itself (the protection thread would wait for that lock). Otherwise they
-/// were applied through MsgProtect before the reply, in order with everyone else's.
-inline constexpr std::uint32_t MaxFaultProtects = 160;
+/// bbport (protocol 11): the fault's protections are no longer in the reply. The faulting thread
+/// applied each when bb-gpu's handler decided it (MsgProtect asked of it), with the runtime's
+/// lock held or not: in the handlers' order, before they went on. Applied after the reply they
+/// could land after newer ones the protection thread applied meanwhile, and the ones past the
+/// reply's room were calls the protection thread could not serve while this thread held the lock.
 struct FaultReply {
     std::int32_t handled;
-    std::uint32_t count;
-    ProtectArgs protects[MaxFaultProtects];
+    std::uint32_t pad;
 };
 
 struct InitArgs {
@@ -302,8 +308,7 @@ static_assert(sizeof(HelloArgs) == 80 && sizeof(HelloReply) == 16 + 16 * MaxTake
               sizeof(MapArgs) == 40 &&
               sizeof(RangeArgs) == 16 && sizeof(MirrorProtectArgs) == 24 &&
               sizeof(ProtectArgs) == 24 && sizeof(ResultReply) == 8 && sizeof(ValueArgs) == 8);
-static_assert(sizeof(FaultArgs) == 32 && sizeof(FaultReply) == 8 + 24 * MaxFaultProtects &&
-              sizeof(FaultReply) <= 4096);
+static_assert(sizeof(FaultArgs) == 32 && sizeof(FaultReply) == 8);
 static_assert(sizeof(InitArgs) == 16 + 128 + 32 + 1024 && sizeof(SubmitGfxArgs) == 40 &&
               sizeof(SubmitAscArgs) == 16 && sizeof(ComputeQueueArgs) == 24);
 static_assert(sizeof(VoArgs) == 8 && sizeof(VoRegisterArgs) == 16 + 40 + 128 &&

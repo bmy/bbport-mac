@@ -81,6 +81,9 @@ static_assert(sizeof(VO::ResolutionStatus) == ResolutionBytes);
 static_assert(sizeof(VO::BufferAttribute) == BufferAttributeBytes);
 static_assert(sizeof(VO::DisplayBuffer) == VideoOutBufferBytes);
 static_assert(sizeof(VO::BufferAttributeGroup) == AttributeGroupBytes);
+static_assert(sizeof(ProtectArgs) <= MaxAskPayload);
+
+void ForwardProtect(const ProtectArgs& args);
 
 namespace {
 
@@ -90,7 +93,7 @@ struct State {
     int pool_fd = -1;
     u64 pool_bytes = 0;
     ControlBlock* control = nullptr;
-    std::unique_ptr<Channel> channel, protect;
+    std::unique_ptr<Channel> channel, protect, fresh;
     MemoryMirror guest, low;
     VmaTable table;
     std::mutex hook_mutex;
@@ -112,8 +115,9 @@ struct State {
 };
 State g;
 
-/// A write fault from a thread holding the runtime's lock: its protections go back with the reply.
-thread_local std::vector<ProtectArgs>* collected_protects = nullptr;
+/// bbport: the write fault this thread is answering (WriteFault): every protection decided
+/// meanwhile is asked of the faulting thread, which applies it while it waits (ForwardProtect).
+thread_local Channel::Reply* fault_reply = nullptr;
 
 /// Write traps (runtime_memory_trap, bbport 0.5): the game process keeps the page protections
 /// (and its own table of reasons, which is the one that counts); this process keeps a copy of the
@@ -548,14 +552,33 @@ struct FaultContext {
     }
 };
 
-void WriteFault(const Message& message, auto&& reply) {
-    const auto args = Payload<FaultArgs>(message);
-    std::vector<ProtectArgs> protects;
-    collected_protects = args.lock_held ? &protects : nullptr;
-    // Reasons the game's table holds for this page that nobody here does: lifted (see TrapLimit).
-    if (const unsigned stale = args.reasons & 0xffu & ~MemoryTrapReasons(args.address)) {
-        MemoryTrap(args.address & ~u64(4095), 4096, stale, 0);
+/// Reasons the game's table holds for the page that nobody here does (see TrapLimit): lifted
+/// there by the faulting thread (fault_reply). bbport: checked and lifted under trap_mutex, which
+/// an owner's MemoryTrap takes to change the table before it sends: a trap set meanwhile is seen
+/// here (kept) or sent after the lift was applied. (Checked before, lifted after the lock: a new
+/// trap lifted in the game while it counted here, CPU writes unseen.) The wait under the lock is
+/// for the faulting thread only, which needs nothing of this process to apply it.
+bool LiftStaleTraps(u64 address, unsigned game_reasons) {
+    if (!(game_reasons & 0xffu) || address >= TrapLimit || !fault_reply) {
+        return false;
     }
+    std::scoped_lock lock{trap_mutex};
+    const u8* table = trap_reasons.load(std::memory_order_acquire);
+    const unsigned stale = game_reasons & 0xffu & ~unsigned(table ? table[address >> 12] : 0);
+    if (stale) {
+        ForwardProtect(ProtectArgs{address & ~u64(4095), 4096, ProtectTrap | stale, 0});
+    }
+    return stale != 0;
+}
+
+void WriteFault(const Message& message, Channel::Reply& reply) {
+    const auto args = Payload<FaultArgs>(message);
+    // bbport: what the handlers decide is applied by the faulting thread while it waits (asked
+    // over this call's slot), each before the handler goes on, as in one process; with the
+    // runtime's lock held there too (args.lock_held), so nothing here waits for the protection
+    // thread meanwhile. See FaultReply.
+    fault_reply = reply.CanAsk() ? &reply : nullptr;
+    const bool lifted = LiftStaleTraps(args.address, args.reasons);
     int handled = 0;
     if (Core::Memory::Instance()->GetRasterizer()) {
         // As bbgpu_handle_fault in one process: the registered handlers in their order (the
@@ -566,17 +589,10 @@ void WriteFault(const Message& message, auto&& reply) {
                       ? 1
                       : 0;
     }
-    collected_protects = nullptr;
-    FaultReply out{};
-    out.handled = handled;
-    out.count = u32(std::min<std::size_t>(protects.size(), MaxFaultProtects));
-    std::copy_n(protects.begin(), out.count, out.protects);
-    // More than fit (not expected): the rest as calls.
-    for (std::size_t i = out.count; i < protects.size(); ++i) {
-        ResultReply result{};
-        g.protect->Call(MsgProtect, &protects[i], sizeof(ProtectArgs), &result, sizeof(result));
-    }
-    reply(&out, u32(offsetof(FaultReply, protects) + out.count * sizeof(ProtectArgs)));
+    fault_reply = nullptr;
+    // Only stale reasons held the page (nobody here claims it): the write is retried.
+    const FaultReply out{handled || lifted ? 1 : 0, 0};
+    reply(&out, sizeof(out));
 }
 
 std::span<const u32> InlineCommands(const u32* words, u32 count) {
@@ -892,6 +908,29 @@ void ChunkThread() {
     }
 }
 
+/// bbport: the guest hooks' fresh ranges as calls (BB_REMOTE_FRESH_SYNC=1, ControlBlock::fresh):
+/// NoteFreshRange here before the hook's thread writes the new block, as it does itself in one
+/// process. Deadlock-free on a thread of its own: it waits only for NoteFreshRange's locks (the
+/// tracker's regions, pending_assets_mutex), whose holders may wait for the game process
+/// (protections, sends) but never for the hook's thread (game code: no runtime or HLE lock held)
+/// or for this one. Not the main reader (stuck behind a fault or a submission, and a fault's
+/// handler takes those locks), nor ChunkThread (must never wait: the runtime may hold its lock).
+/// Not ordered with the main channel's earlier messages (dead and live ranges included).
+void FreshThread() {
+    Common::SetCurrentThreadName("bb:remote-fresh");
+    for (;;) {
+        g.fresh->ReceiveOne(
+            [](const Message& message, auto&& reply) {
+                if (message.type == MsgFreshRange) {
+                    GuestHookRange(MsgFreshRange, Payload<RangeArgs>(message));
+                }
+                const ResultReply out{0, 0};
+                reply(&out, sizeof(out));
+            },
+            [] { return false; });
+    }
+}
+
 /// bb-gpu ends with the game process (its exit or exec: a restart through run.sh).
 void WatchParent() {
 #ifdef __APPLE__
@@ -1061,7 +1100,8 @@ int Main(int argc, char** argv) {
     g.backing = static_cast<u8*>(view);
     g.channel = std::make_unique<Channel>(&g.control->channel, Side::Backend);
     g.protect = std::make_unique<Channel>(&g.control->protect, Side::Backend);
-    if (!g.channel->Valid() || !g.protect->Valid()) {
+    g.fresh = std::make_unique<Channel>(&g.control->fresh, Side::Backend);
+    if (!g.channel->Valid() || !g.protect->Valid() || !g.fresh->Valid()) {
         std::fprintf(stderr, "GPU process: the control block is not initialized\n");
         return 5;
     }
@@ -1100,6 +1140,7 @@ int Main(int argc, char** argv) {
                 sysconf(_SC_PAGESIZE));
     std::thread(ReaderThread).detach();
     std::thread(ChunkThread).detach();
+    std::thread(FreshThread).detach();
 #ifdef __APPLE__
     bbgpu_main_thread_loop(); // Cocoa: the window and its events belong to the main thread
 #else
@@ -1334,14 +1375,14 @@ void MemoryReadBacking(uintptr_t address, void* data, u64 size) {
     }
 }
 
-/// A protection or trap for the game process to apply: with the reply of the fault being handled
-/// on this thread, or now.
+/// A protection or trap for the game process to apply, applied when this returns: by the thread
+/// whose write fault this thread is answering (fault_reply), else by the protection thread.
 void ForwardProtect(const ProtectArgs& args) {
-    if (collected_protects) {
-        collected_protects->push_back(args);
+    ResultReply result{};
+    if (fault_reply) {
+        fault_reply->Ask(MsgProtect, &args, sizeof(args), &result, sizeof(result));
         return;
     }
-    ResultReply result{};
     g.protect->Call(MsgProtect, &args, sizeof(args), &result, sizeof(result));
 }
 

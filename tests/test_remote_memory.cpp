@@ -4,7 +4,9 @@
 // (exec, not just fork) that reserves the guest range, mirrors the game side's mappings of one
 // shared pool at the same addresses, sees its writes and is seen, follows remaps and aliases, and
 // answers a real write fault on a write-protected guest page with a protection call back
-// (signal handler -> call -> nested call -> the game side's reader unprotects -> retry).
+// (signal handler -> call -> nested call -> the game side's reader unprotects -> retry), and
+// another one as bb-gpu does since protocol 11 (signal handler -> call -> the GPU side asks the
+// faulting thread, Reply::Ask -> it unprotects in its signal handler -> reply -> retry).
 //   c++ -std=c++20 -O2 -pthread -Igpu/shim tests/test_remote_memory.cpp -o /tmp/memory-test
 //   /tmp/memory-test
 #include <atomic>
@@ -52,6 +54,8 @@ struct Access {
 
 constexpr std::uint64_t GuestBegin = 0x7000000000ull, GuestEnd = 0x7040000000ull;
 constexpr std::uint64_t PoolBytes = 64ull << 20;
+/// Faults from here up in the guest range: the protection asked of the faulting thread.
+constexpr std::uint64_t AskFrom = GuestBegin + (20ull << 20);
 
 /// A shared memory object of `bytes` (macOS allows one ftruncate per object).
 int CreateShared(const char* what, std::uint64_t bytes) {
@@ -131,9 +135,16 @@ int GpuProcess(int channel_fd, int pool_fd) {
                                 RangeArgs page;
                                 std::memcpy(&page, m.data, sizeof(page));
                                 ProtectArgs protect{page.address, page.size, 1, 1};
-                                ResultReply result{};
-                                CHECK(channel.Call(MsgProtect, &protect, sizeof(protect), &result,
-                                                   sizeof(result)) == sizeof(result));
+                                ResultReply result{-1, 0};
+                                if (page.address >= AskFrom) {
+                                    CHECK(reply.CanAsk());
+                                    CHECK(reply.Ask(MsgProtect, &protect, sizeof(protect),
+                                                    &result, sizeof(result)) == sizeof(result));
+                                } else {
+                                    CHECK(channel.Call(MsgProtect, &protect, sizeof(protect),
+                                                       &result, sizeof(result)) == sizeof(result));
+                                }
+                                CHECK(result.result == 0);
                                 reply(&result, sizeof(result));
                                 break;
                             }
@@ -167,7 +178,12 @@ int GpuProcess(int channel_fd, int pool_fd) {
 // ---- the game process -------------------------------------------------------------------------
 
 Channel* g_channel;
-std::atomic<int> g_faults{0};
+std::atomic<int> g_faults{0}, g_asked{0};
+
+int ApplyProtect(const ProtectArgs& args) {
+    const int prot = (args.read ? PROT_READ : 0) | (args.write ? PROT_WRITE | PROT_READ : 0);
+    return mprotect(reinterpret_cast<void*>(args.address), args.size, prot);
+}
 
 void OnFault(int, siginfo_t* info, void*) {
     const auto address = reinterpret_cast<std::uint64_t>(info->si_addr);
@@ -177,7 +193,18 @@ void OnFault(int, siginfo_t* info, void*) {
     const std::uint64_t page = static_cast<std::uint64_t>(sysconf(_SC_PAGESIZE));
     RangeArgs args{address & ~(page - 1), page};
     ResultReply result{};
-    g_channel->Call(MsgWriteFault, &args, sizeof(args), &result, sizeof(result));
+    // What the GPU side asks meanwhile is applied here, in the signal handler (HandleFault).
+    g_channel->Call(MsgWriteFault, &args, sizeof(args), &result, sizeof(result),
+                    [](const Message& m, auto&& answer) {
+                        ResultReply applied{-1, 0};
+                        if (m.type == MsgProtect && m.size == sizeof(ProtectArgs)) {
+                            ProtectArgs protect;
+                            std::memcpy(&protect, m.data, sizeof(protect));
+                            applied.result = ApplyProtect(protect);
+                            g_asked.fetch_add(1);
+                        }
+                        answer(&applied, sizeof(applied));
+                    });
     g_faults.fetch_add(1);
 }
 
@@ -239,10 +266,7 @@ int GameProcess(const char* self) {
                 if (m.type == MsgProtect) {
                     ProtectArgs args;
                     std::memcpy(&args, m.data, sizeof(args));
-                    const int prot =
-                        (args.read ? PROT_READ : 0) | (args.write ? PROT_WRITE | PROT_READ : 0);
-                    ResultReply result{mprotect(reinterpret_cast<void*>(args.address), args.size,
-                                                prot)};
+                    ResultReply result{ApplyProtect(args), 0};
                     protects.fetch_add(1);
                     reply(&result, sizeof(result));
                 }
@@ -299,6 +323,10 @@ int GameProcess(const char* self) {
     CHECK(Read(channel, a + 8192) == 0x5555);
     *reinterpret_cast<volatile std::uint64_t*>(a + 8200) = 0x6666; // same page: no fault
     CHECK(g_faults.load() == 1);
+    // Past AskFrom: the GPU side asks this thread to unprotect, while it waits in the handler.
+    *reinterpret_cast<volatile std::uint64_t*>(AskFrom + 8192) = 0x7777; // faults once
+    CHECK(g_faults.load() == 2 && g_asked.load() == 1 && protects.load() == 1);
+    CHECK(Read(channel, AskFrom + 8192) == 0x7777);
 
     CHECK(channel.Call(MsgShutdown, nullptr, 0, nullptr, 0) == 0);
     int status = 0;
@@ -307,8 +335,8 @@ int GameProcess(const char* self) {
     stop = true;
     channel.WakeReader();
     reader.join();
-    std::printf("memory mirror: shared mappings, alias, remap and a write fault round trip OK "
-                "(game side %s, GPU page size %u)\n",
+    std::printf("memory mirror: shared mappings, alias, remap and write fault round trips (nested "
+                "call, asked of the faulting thread) OK (game side %s, GPU page size %u)\n",
                 ThisArch(), welcome.page_size);
     return 0;
 }

@@ -64,6 +64,9 @@ struct ControlBlock {
     /// runtime's chunk allocator (MsgChunkAlloc, MsgChunkFree), served by a bb-gpu thread that
     /// never waits for the game process: the runtime may call it with its lock held.
     ChannelLayout protect;
+    /// bbport: the guest hooks' fresh ranges as calls (BB_REMOTE_FRESH_SYNC=1, game process ->
+    /// bb-gpu), served by a bb-gpu thread that does nothing else (remote_back.cpp FreshThread).
+    ChannelLayout fresh;
     alignas(4096) SharedState state;
 };
 static_assert(sizeof(ControlBlock) <= ControlBytes);

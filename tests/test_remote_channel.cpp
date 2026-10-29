@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: the GPU process channel (gpu/shim/remote/bb_channel.h) between two real processes:
-// ordering, ring wrap-around, synchronous calls both ways (a call made from inside a handler,
-// as bb-gpu does for page protection while answering a write fault), and call latency.
+// ordering, ring wrap-around, synchronous calls both ways (a call made from inside a handler),
+// requests a handler asks its caller (Reply::Ask, as bb-gpu asks the faulting thread to apply a
+// write fault's protections: many per call, in order; a plain Call asked gets nothing back), and
+// call latency.
 //   c++ -std=c++20 -O2 -pthread -Igpu/shim tests/test_remote_channel.cpp -o /tmp/channel-test
 #include <cassert>
 #include <chrono>
@@ -19,7 +21,11 @@
 using namespace BbRemote;
 
 namespace {
-enum : std::uint32_t { Data = 1, Echo = 2, FaultLike = 3, ProtectLike = 4, Quit = 5 };
+enum : std::uint32_t {
+    Data = 1, Echo = 2, FaultLike = 3, ProtectLike = 4, Quit = 5, AskMany = 6, AskPlain = 7
+};
+/// AskMany: requests asked per call (more than a fault's reply had room for, protocol 10's 160).
+constexpr std::uint64_t AsksPerCall = 400;
 
 #define CHECK(x)                                                                                   \
     do {                                                                                           \
@@ -63,6 +69,34 @@ int Backend(void* memory) {
                                 CHECK(answer == page * 2);
                                 const std::uint64_t result = answer + 1;
                                 reply(&result, sizeof(result));
+                                break;
+                            }
+                            case AskMany: {
+                                // Requests to the caller, each answered before the next.
+                                std::uint64_t base;
+                                std::memcpy(&base, m.data, sizeof(base));
+                                CHECK(reply.CanAsk());
+                                std::uint64_t sum = 0;
+                                for (std::uint64_t i = 0; i < AsksPerCall; ++i) {
+                                    const std::uint64_t request = base + i;
+                                    std::uint64_t answer = 0;
+                                    CHECK(reply.Ask(ProtectLike, &request, sizeof(request), &answer,
+                                                    sizeof(answer)) == sizeof(answer));
+                                    CHECK(answer == request * 3); // the caller's serve
+                                    sum += answer;
+                                }
+                                reply(&sum, sizeof(sum));
+                                CHECK(!reply.CanAsk()); // answered: nobody to ask
+                                break;
+                            }
+                            case AskPlain: {
+                                // A plain Call asked: its caller answers nothing, and goes on.
+                                const std::uint64_t request = 7;
+                                std::uint64_t answer = 99;
+                                CHECK(reply.Ask(ProtectLike, &request, sizeof(request), &answer,
+                                                sizeof(answer)) == 0);
+                                CHECK(answer == 99);
+                                reply(&request, sizeof(request));
                                 break;
                             }
                             case Quit:
@@ -115,7 +149,7 @@ int main() {
 
     // 2. Calls from several threads at once, interleaved with messages.
     std::vector<std::thread> callers;
-    std::atomic<std::uint64_t> calls{0};
+    std::atomic<std::uint64_t> calls{0}, asks{0};
     for (int t = 0; t < 4; ++t) {
         callers.emplace_back([&, t] {
             for (std::uint64_t i = 0; i < 2000; ++i) {
@@ -126,6 +160,26 @@ int main() {
                 CHECK(channel.Call(FaultLike, &page, sizeof(page), &result, sizeof(result)) == 8);
                 CHECK(result == page * 2 + 1);
                 calls.fetch_add(2);
+                if (i % 16 == 0) {
+                    // Asked requests run here, in order, while this thread waits.
+                    const std::uint64_t base = value * AsksPerCall;
+                    std::uint64_t next = base, sum = 0;
+                    CHECK(channel.Call(AskMany, &base, sizeof(base), &sum, sizeof(sum),
+                                       [&](const Message& m, auto&& answer) {
+                                           CHECK(m.type == ProtectLike && m.size == 8);
+                                           std::uint64_t request;
+                                           std::memcpy(&request, m.data, sizeof(request));
+                                           CHECK(request == next++);
+                                           const std::uint64_t result = request * 3;
+                                           answer(&result, sizeof(result));
+                                       }) == 8);
+                    CHECK(next == base + AsksPerCall);
+                    CHECK(sum == 3 * (AsksPerCall * base + AsksPerCall * (AsksPerCall - 1) / 2));
+                    std::uint64_t plain = 0;
+                    CHECK(channel.Call(AskPlain, nullptr, 0, &plain, sizeof(plain)) == 8);
+                    CHECK(plain == 7);
+                    asks.fetch_add(AsksPerCall + 1);
+                }
             }
         });
     }
@@ -155,7 +209,9 @@ int main() {
     stop = true;
     channel.WakeReader();
     reader.join();
-    std::printf("channel: %llu messages in order, %llu calls (both ways), %.1f us per call\n",
-                (unsigned long long)received, (unsigned long long)calls.load(), us);
+    std::printf("channel: %llu messages in order, %llu calls (both ways), %llu asked of callers, "
+                "%.1f us per call\n",
+                (unsigned long long)received, (unsigned long long)calls.load(),
+                (unsigned long long)asks.load(), us);
     return 0;
 }

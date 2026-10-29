@@ -83,7 +83,7 @@ Backend → frontend:
 
 | Message | Today | Notes |
 |---|---|---|
-| Protect (range, read, write) | `runtime_memory_gpu_protect` | synchronous; the frontend applies it (Rosetta emulates 4 KiB protection, only it can) |
+| Protect (range, read, write) | `runtime_memory_gpu_protect` | synchronous; the frontend applies it (Rosetta emulates 4 KiB protection, only it can): its protection thread, or during a write fault the faulting thread |
 | Write trap (range, reason, on) | `runtime_memory_trap` (bbport 0.5) | as Protect (a `ProtectArgs` with `ProtectTrap`); the game process keeps the reasons that count, bb-gpu a copy for `runtime_memory_trap_reasons`, cleared on Map/Unmap |
 | Interrupt (EOP, compute, flip, vblank) | `BbIrq::Raise` → event queues | asynchronous, triggers guest events |
 | Pad and keyboard state | `runtime_pad.c` reads SDL | shared struct; the window and its events belong to bb-gpu |
@@ -199,9 +199,14 @@ cleared (or be passed explicitly) before bb-gpu is spawned.
 - Page tracking: a write fault in the game process goes to bb-gpu (`MsgWriteFault`). Every page
   protection bb-gpu decides is a call on a second channel (`ControlBlock::protect`) that a game
   process thread of its own applies, in the order they were decided; that thread takes nothing but
-  the runtime's lock. A fault from a thread that holds that lock itself (inside the runtime) gets
-  its protections back in the reply instead and applies them. Invalidations, file-read notes and
-  decoded movie frames are messages.
+  the runtime's lock. The protections bb-gpu's handlers decide for a write fault are asked of the
+  faulting thread instead (protocol 11: `Channel::Reply::Ask`, over the call's reply slot), which
+  applies each while it waits, before the handler goes on, as its own handler does in one process,
+  with the runtime's lock held there or not. (Protocol 10 sent them back in the reply when the
+  thread held that lock: applied after it, they could land after newer ones the protection thread
+  applied meanwhile, and those past the reply's 160 were calls that thread could not serve while
+  the faulting thread held the lock.) Invalidations, file-read notes and decoded movie frames are
+  messages.
 - Gnm stays in the game process; submissions, `SubmitDone`, the idle check and compute queues
   go through a small facade in `gnm_driver.cpp` (`Gpu::`; host-memory init sequences travel
   inline). Frames retired, the submission lock and every interrupt come back (`BbIrq::forward`).
@@ -296,15 +301,21 @@ How it crosses the split:
   yet: enabling growth needs a new `MIRROR_REMAP` (3: `remote_front.cpp` handles a case 3) queued next to the commit and decommit of an
   imported chunk (`heap_commit.c`). The guest hooks' fresh, dead and live ranges go to bb-gpu's
   buffer cache (`MsgFreshRange`, `MsgDeadRange`, `MsgLiveRange`; without growth, dead and live
-  do not fire). `MsgFreshRange` is a send, not a call: in one process the GPU's old data there
+  do not fire). `MsgFreshRange` is a send by default: in one process the GPU's old data there
   stops being GPU-modified before the game writes the new block; across the split a readback in
-  bb-gpu could still land after those writes (to measure before making it a call).
+  bb-gpu could still land after those writes (about 175 a second). `BB_REMOTE_FRESH_SYNC=1`
+  makes it a call on a channel of its own (`ControlBlock::fresh`) that returns once bb-gpu's
+  `FreshThread` has run `NoteFreshRange`; that thread waits for nothing but its locks, whose
+  holders never wait for the hook's thread (game code) or for it (not the main reader, which can
+  be stuck behind a fault, nor the chunk thread, which must never wait). Off until measured.
 - The BDA page table: on macOS its window has two halves (`gpu/shader/profile.h`), the low region
   and 64 GiB of the guest's user mappings from 0x7000000000: bb-gpu's own 24 GiB, placed by ASLR
   before `main`, can sit in that range, and the game's mappings go around it.
 - Write faults carry the game's trap reasons for the page; reasons bb-gpu holds none of (a trap
-  that crossed a remap) are lifted, and the fault runs through the same handlers as in one
-  process (`Core::Signals`: the layer's VRAM copy traps, then page tracking).
+  that crossed a remap) are lifted, checked and sent under bb-gpu's `trap_mutex` (an owner arming
+  the same reason meanwhile is then either seen or applied after the lift), and the fault runs
+  through the same handlers as in one process (`Core::Signals`: the layer's VRAM copy traps, then
+  page tracking). A fault only stale reasons held is retried.
 - The pad recording clock (`bbgpu_world_*`) and the Steam pad flag are in `SharedState`; the
   camera speeds and light grid setting go to the game process (`MsgGameSettings`), trophy
   pop-ups to bb-gpu (`MsgShowTrophy`).
@@ -317,7 +328,8 @@ How it crosses the split:
   the table matches every time (six runs).
 - Ordering at the process boundary, reviewed: the channel publishes a message with a release store
   of `head` after its payload and the reader takes it with an acquire load; the wait/wake handshake
-  is seq_cst on both words (no lost wake-up); reply slots are release/acquire; EOP and EOS labels
+  is seq_cst on both words (no lost wake-up); reply slots are published with seq_cst stores
+  too (protocol 11; a release store could pass the sleepers check on x86); EOP and EOS labels
   are single release stores (`StoreLabel`). The VideoOut buffer label resets were plain stores and
   are now release stores (the guest polls them from the other process).
 - `BB_GPU_QOS=1` (experiment, both branches): the command processor, recording, draw preparation,
@@ -332,6 +344,7 @@ Tests, on Linux and on the Mac:
 cc -c -std=c11 -D_GNU_SOURCE -w -Isrc -I. src/runtime_memory.c -o /tmp/rm.o
 c++ -std=c++20 -O1 -Igpu/shim tests/test_remote_table.cpp /tmp/rm.o -lpthread -o /tmp/table-test && /tmp/table-test
 c++ -std=c++20 -O1 -Igpu/shim tests/test_remote_concurrent.cpp /tmp/rm.o -lpthread -o /tmp/concurrent-test && /tmp/concurrent-test
+c++ -std=c++20 -O2 -pthread -Igpu/shim tests/test_remote_protect_order.cpp -o /tmp/order-test && /tmp/order-test
 ```
 
 With ThreadSanitizer (Linux, GCC; `setarch -R` where ASLR and TSan disagree):
@@ -340,4 +353,10 @@ With ThreadSanitizer (Linux, GCC; `setarch -R` where ASLR and TSan disagree):
 gcc -c -std=c11 -D_GNU_SOURCE -w -O1 -g -fsanitize=thread -Isrc -I. src/runtime_memory.c -o /tmp/rm-tsan.o
 g++ -std=c++20 -O1 -g -fsanitize=thread -Igpu/shim tests/test_remote_concurrent.cpp /tmp/rm-tsan.o -lpthread -o /tmp/concurrent-tsan && setarch -R /tmp/concurrent-tsan
 g++ -std=c++20 -O1 -g -fsanitize=thread -pthread -Igpu/shim tests/test_remote_channel.cpp -o /tmp/channel-tsan && setarch -R /tmp/channel-tsan
+g++ -std=c++20 -O1 -g -fsanitize=thread -pthread -Igpu/shim tests/test_remote_protect_order.cpp -o /tmp/order-tsan && setarch -R /tmp/order-tsan 2
 ```
+
+`tests/test_remote_protect_order.cpp` models the write traps' owners, handlers, the protection
+thread and faulting threads in two processes over the real channel: no trap may end armed in
+bb-gpu and missing in the game. Its `collect` and `unlocked-lift` arguments run protocol 10's ways
+and count the traps they lose (some per run with `collect`, rarely with `unlocked-lift`).

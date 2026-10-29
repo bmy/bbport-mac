@@ -40,6 +40,11 @@ int32_t* runtime_errno(void) {
 void runtime_guest_call_sites(uint64_t sites[3]) {
     sites[0] = sites[1] = sites[2] = 0;
 }
+// bbport 0.7: the GPU library's answers to the runtime's zero scan (bblayer_gpu_memory.cpp).
+int bbgpu_gpu_touched(uint64_t) {
+    return 0;
+}
+void bbgpu_straddle_report(void) {}
 uintptr_t runtime_memory_resolve(const char* name);
 int runtime_memory_host_pool(uint64_t host_bytes, int* fd, uint64_t* host_offset, uint64_t* total);
 typedef void (*MirrorHook)(int op, uintptr_t address, uint64_t size, uint64_t phys, int kind,

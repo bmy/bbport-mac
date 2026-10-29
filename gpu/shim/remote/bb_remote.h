@@ -83,6 +83,15 @@ void InvalidateMemory(u64 address, u64 size);
 /// Moves [address, address + size) (page-aligned, mapped) into shared memory with protection
 /// `prot` (PROT_*), so bb-gpu sees it at the same address. 0 on success.
 int ShareRange(void* address, u64 size, int prot);
+/// The game's hooks' GPU ranges (Game::CoreServices), for bb-gpu's buffer cache.
+void FreshRange(u64 address, u64 size);
+void DeadRange(u64 address, u64 size);
+void LiveRange(u64 address, u64 size);
+/// bb-gpu's pad recording clock (bbgpu_world_active, bbgpu_world_us).
+int WorldActive();
+unsigned long long WorldUs();
+/// A trophy's pop-up (BbOverlay::ShowTrophy): the overlay is bb-gpu's.
+void ShowTrophy(char grade, const char* name, const char* icon, float delay);
 
 int OverlayCapturesInput();
 /// bb-gpu's window keyboard (bbgpu_keyboard_state).
@@ -133,7 +142,9 @@ unsigned PadPromptGeneration();
 int PadPromptDevice();
 int PadMouseLook();
 int FileHostPath(const char* guest, char* out, u64 size);
-void ToyPadLights(std::uint32_t out[3]);
+int PadSteamOnly();
+/// The game's user folder (InitArgs::user_dir).
+const char* UserDir();
 /// The bytecode SRT walker's check (Shader::srt_guest_readable): guest memory only.
 bool GuestReadable(u64 address, u64 size);
 
@@ -153,6 +164,21 @@ using GpuRange = void (*)(uintptr_t address, u64 size);
 void SetGpuHooks(GpuRange map, GpuRange unmap, GpuRange invalidate);
 void SetNoteWriteHook(GpuRange hook);
 void SetCpuWriteHook(GpuRange hook);
+// The memory model's chunk allocator (bbport 0.7): BbGuestMemory::Install sets it here and the
+// game process's runtime calls it over the channel (MsgChunkAlloc); its chunks are imports of this
+// process's own view of the pool.
+using ChunkAlloc = int (*)(u64 phys, u64 size);
+using ChunkFree = void (*)(u64 phys, u64 size);
+using ChunkImport = int (*)(u64 phys, u64 size, void* pointer);
+void SetChunkAllocator(ChunkAlloc alloc);
+void SetChunkFree(ChunkFree free_chunk);
+void SetChunkPrivate(ChunkImport import);
+void SetChunkWhole(int whole);
+void SetGuestLazy(int lazy);
+void* BackingPointer(u64 phys);
+int PoolFd();
+void NotePinned(u64 phys, u64 size);
+void TrapStats(u64* wait_ns, u64* apply_ns, u64* calls, u64* bytes);
 u64 ProcessTimeUs();
 u64 ProcessTimeCounter();
 u64 TscFrequency();

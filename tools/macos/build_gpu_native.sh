@@ -39,10 +39,11 @@ for patch in gpu/patches/fsr-vulkan/*.patch; do
 done
 
 echo "=== GPU library (arm64)"
+# BB_NET=OFF: the online module runs in the game process (x86-64 build), never in bb-gpu.
 cmake -S gpu -B out/gpu-arm64 -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
     -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_SYSTEM_NAME=Darwin -DCMAKE_SYSTEM_PROCESSOR=arm64 \
     -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
-    -DCMAKE_PREFIX_PATH="$DEPS;$BREW_PREFIX" -DBB_LTO=OFF -DBB_PGO=off "${LAUNCHER[@]}" \
+    -DCMAKE_PREFIX_PATH="$DEPS;$BREW_PREFIX" -DBB_LTO=OFF -DBB_PGO=off -DBB_NET=OFF "${LAUNCHER[@]}" \
     > out/gpu-arm64-configure.log 2>&1 ||
     { tail -40 out/gpu-arm64-configure.log >&2; echo "STOP: configure failed (out/gpu-arm64-configure.log)" >&2; exit 1; }
 if ! ninja -C out/gpu-arm64 -k 0 -j "$JOBS" bbgpu bb-gpu > out/gpu-arm64-build.log 2>&1; then

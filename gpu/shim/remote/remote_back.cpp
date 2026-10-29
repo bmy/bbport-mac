@@ -4,6 +4,13 @@
 // core (Liverpool, caches, shader recompiler, presenter, window) for the game process, which
 // forwards to it (remote_front.cpp). The runtime's GPU interface (runtime_memory_*, clocks) is
 // served here from bb-gpu's own copy of the guest's mapping table (bb_gpu_main.cpp exports it).
+//
+// bbport 0.7's memory model (the GPU uses the game's memory in place): BbGuestMemory::Install
+// runs here and sets its chunk allocator in this file (SetChunkAllocator); the game process's
+// runtime, which places the game's direct memory, calls it over ControlBlock::protect
+// (MsgChunkAlloc, remote_front.cpp). A chunk is a host memory import of this process's own view
+// of the shared pool (BackingPointer), so the game's mappings stay the pool's and the mirror
+// stays right; dma-buf chunks and private regions (memory only one process has) are refused.
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -13,9 +20,11 @@
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <cstring>
 #include <ctime>
 #include <execinfo.h>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -38,13 +47,16 @@
 #include "../bbgpu.h"
 #include <SDL3/SDL.h>
 #include "bblayer_write_traps.h"
+#include "bbport_guest_memory.h"
 #include "bbport_overlay.h"
 #include "bbport_settings.h"
 #include "bbport_portable.h"
 #include "bbport_toggles.h"
+#include "common/signal_context.h"
 #include "common/slot_vector.h"
 #include "common/thread.h"
 #include "core/memory.h"
+#include "core/signals.h"
 #include "cp/command_processor.h"
 #include "platform/interrupts.h"
 #include "platform/videoout/videoout.h"
@@ -90,6 +102,13 @@ struct State {
     std::mutex inline_mutex;
     std::set<std::vector<u32>> inline_commands; ///< host command words (init sequences), kept
     u32 published_overlay = 2;
+    u8* backing = nullptr; ///< the whole pool (runtime_memory_backing_pointer)
+    // BbGuestMemory::Install's settings (runtime_memory_set_guest_chunk_*, _lazy).
+    std::atomic<ChunkAlloc> chunk_alloc{nullptr};
+    std::atomic<ChunkFree> chunk_free{nullptr};
+    std::atomic<ChunkImport> chunk_private{nullptr};
+    std::atomic<int> chunk_whole{0}, guest_lazy{0};
+    std::string user_dir = "user";
 };
 State g;
 
@@ -100,15 +119,16 @@ thread_local std::vector<ProtectArgs>* collected_protects = nullptr;
 /// (and its own table of reasons, which is the one that counts); this process keeps a copy of the
 /// reasons for its GPU code's questions, one byte per 4 KiB page below TrapLimit, set by its own
 /// trap calls and cleared where the game's mappings change, as runtime_memory.c's trap_forget.
-/// Limits: the copy can briefly differ from the game's (a trap set while a remap is on its way,
-/// a trap lifted here before the game lifts it), and WriteFault doesn't run the image, mirror
-/// and VRAM trap handlers. On macOS that is unreachable as shipped: Image, Mirror and VramData
-/// need BB_GUEST_IN_PLACE, which BbGuestMemory keeps off there; only BB_OCCLUSION_READ_TRACE=1
-/// (diagnostics) sets QueryReads. Make the game's table the only one before any of those runs
-/// with the native GPU process.
+/// Every owner of a trap (the layer's VRAM copies, images, occlusion and VRAM-data reads) is GPU
+/// code, so it is this process's: the copy differs from the game's only when a trap crosses a
+/// remap on its way (set here for the old mapping, applied there to the new one). A fault brings
+/// the game's reasons for its page (FaultArgs::reasons): any nobody here holds is lifted, and the
+/// fault goes through the same handlers as in one process (WriteFault).
 constexpr u64 TrapLimit = 1ull << 40;
 std::atomic<u8*> trap_reasons{nullptr};
 std::mutex trap_mutex;
+/// runtime_memory_trap_stats: waits for trap_mutex here, and the game process applying them.
+std::atomic<u64> trap_wait_ns{0}, trap_apply_ns{0}, trap_calls{0}, trap_bytes{0};
 
 u8* TrapTable() {
     if (u8* table = trap_reasons.load(std::memory_order_acquire)) {
@@ -150,6 +170,11 @@ u64 MonotonicNs() {
     timespec now{};
     clock_gettime(CLOCK_MONOTONIC, &now);
     return u64(now.tv_sec) * 1'000'000'000ull + u64(now.tv_nsec);
+}
+
+/// A range of the guest's own address space (messages naming GPU ranges).
+bool GuestRange(u64 address, u64 size) {
+    return size && address >= GuestBegin && address < GuestEnd && size <= GuestEnd - address;
 }
 
 MemoryMirror& MirrorFor(u64 address) {
@@ -255,6 +280,7 @@ void Init(const Message& message, auto&& reply) {
     std::string user_dir{args.user_dir, strnlen(args.user_dir, sizeof(args.user_dir))};
     const BbGpuConfig config{title.c_str(), serial.c_str(), user_dir.c_str(), args.sdk_version,
                              args.psf_attributes, args.width, args.height};
+    g.user_dir = user_dir.empty() ? "user" : user_dir;
     const int result = bbgpu_init(&config);
     if (result == 0) {
         g.control->state.gpu_ready.store(1, std::memory_order_release);
@@ -420,6 +446,75 @@ void UnmapMemory(const RangeArgs& args) {
     TrapForget(args.address, args.address + args.size);
 }
 
+/// A range whose GPU memory changed under the same mappings (a heap piece's chunk made or given
+/// back, runtime_memory_commit and _decommit): the GPU forgets and maps it again, as the runtime's
+/// HOOK_UNMAP and HOOK_MAP there. Only what is mapped now.
+void GpuRemap(const RangeArgs& args) {
+    if (!GuestRange(args.address, args.size)) {
+        return;
+    }
+    GpuRange map, unmap;
+    {
+        std::scoped_lock lock{g.hook_mutex};
+        map = g.hook_map;
+        unmap = g.hook_unmap;
+    }
+    for (const auto& [address, size] : g.table.Pieces(args.address, args.address + args.size)) {
+        if (unmap) {
+            unmap(address, size);
+        }
+        if (map) {
+            map(address, size);
+        }
+    }
+}
+
+/// The game's hooks' ranges (Game::CoreServices: fresh, dead, live), for the buffer cache here.
+void GuestHookRange(u32 type, const RangeArgs& args) {
+    auto* rasterizer = Core::Memory::Instance()->GetRasterizer();
+    if (!rasterizer || !GuestRange(args.address, args.size)) {
+        return;
+    }
+    auto& cache = rasterizer->GetBufferCache();
+    if (type == MsgFreshRange) {
+        cache.NoteFreshRange(args.address, args.size);
+    } else if (type == MsgDeadRange) {
+        cache.LayerDomainDead(args.address, args.size);
+    } else {
+        cache.LayerDomainAdd(args.address, args.size);
+    }
+}
+
+/// A trophy unlocked in the game process: its pop-up in this process's overlay. The icon only as
+/// a trophy package's own image file (TROPnnn.PNG).
+void ShowTrophy(const TrophyArgs& in) {
+    TrophyArgs args = in;
+    args.name[sizeof(args.name) - 1] = 0;
+    args.icon[sizeof(args.icon) - 1] = 0;
+    std::filesystem::path icon{args.icon};
+    const std::string file = icon.filename().string();
+    std::error_code error;
+    if (file.size() != 11 || !file.starts_with("TROP") || !file.ends_with(".PNG") ||
+        !std::all_of(file.begin() + 4, file.begin() + 7, [](char c) { return c >= '0' && c <= '9'; }) ||
+        !std::filesystem::is_regular_file(icon, error)) {
+        icon.clear();
+    }
+    const float delay = std::isfinite(args.delay) ? std::clamp(args.delay, 0.0f, 120.0f) : 0.0f;
+    BbOverlay::ShowTrophy(args.grade, args.name, icon, delay);
+}
+
+/// What BbGuestMemory::Install set here, for the game process's runtime (MsgGuestMemory).
+GuestMemoryReply GuestMemory() {
+    GuestMemoryReply out{};
+    out.allocator = g.chunk_alloc.load(std::memory_order_acquire) ? 1 : 0;
+    out.host_import = BbGuestMemory::HostImported() ? 1 : 0;
+    out.whole = g.chunk_whole.load(std::memory_order_relaxed) ? 1 : 0;
+    out.lazy = g.guest_lazy.load(std::memory_order_relaxed) ? 1 : 0;
+    out.free_chunks = g.chunk_free.load(std::memory_order_acquire) ? 1 : 0;
+    out.private_regions = g.chunk_private.load(std::memory_order_acquire) ? 1 : 0;
+    return out;
+}
+
 void CallHook(GpuRange State::*which, const RangeArgs& args) {
     GpuRange hook;
     {
@@ -431,24 +526,45 @@ void CallHook(GpuRange State::*which, const RangeArgs& args) {
     }
 }
 
+/// A ucontext for the in-process fault handlers (Core::Signals): the guest's instruction and
+/// whether it wrote; no stack (the guest's is the game process's).
+struct FaultContext {
+    ucontext_t uc{};
+#ifdef __APPLE__
+    std::remove_pointer_t<decltype(ucontext_t{}.uc_mcontext)> mc{};
+#endif
+    FaultContext(u64 rip, bool write) {
+#ifdef __APPLE__
+        uc.uc_mcontext = &mc;
+#if defined(__aarch64__)
+        mc.__es.__esr = write ? 1u << 6 : 0; // WnR (Common::IsWriteError)
+#else
+        mc.__es.__err = write ? 2 : 0;
+#endif
+#else
+        uc.uc_mcontext.gregs[REG_ERR] = write ? 2 : 0;
+#endif
+        Common::Gregs(&uc)[REG_RIP] = greg_t(rip);
+    }
+};
+
 void WriteFault(const Message& message, auto&& reply) {
     const auto args = Payload<FaultArgs>(message);
     std::vector<ProtectArgs> protects;
     collected_protects = args.lock_held ? &protects : nullptr;
+    // Reasons the game's table holds for this page that nobody here does: lifted (see TrapLimit).
+    if (const unsigned stale = args.reasons & 0xffu & ~MemoryTrapReasons(args.address)) {
+        MemoryTrap(args.address & ~u64(4095), 4096, stale, 0);
+    }
     int handled = 0;
-    if (auto* rasterizer = Core::Memory::Instance()->GetRasterizer()) {
-        // As page_manager.cpp's GuestFaultSignalHandler: pages trapped for reads too go to the
-        // trap's owner first.
-        const unsigned reasons = MemoryTrapReasons(args.address);
-        if (reasons & BbLayer::WriteTraps::VramData) {
-            handled = rasterizer->OnVramDataAccess(args.address, false);
-        } else if (reasons & BbLayer::WriteTraps::QueryReads) {
-            handled = rasterizer->OnOcclusionPageAccess(args.address, args.rip, args.is_write != 0,
-                                                        false);
-        } else {
-            handled = args.is_write ? rasterizer->OnWriteFault(args.address, false, args.rip)
-                                    : rasterizer->ReadMemory(args.address, 8, false);
-        }
+    if (Core::Memory::Instance()->GetRasterizer()) {
+        // As bbgpu_handle_fault in one process: the registered handlers in their order (the
+        // layer's VRAM copy traps, then page tracking: page_watch.cpp's OnFault).
+        FaultContext context{args.rip, args.is_write != 0};
+        handled = Core::Signals::Instance()->DispatchAccessViolation(
+                      &context.uc, reinterpret_cast<void*>(args.address))
+                      ? 1
+                      : 0;
     }
     collected_protects = nullptr;
     FaultReply out{};
@@ -548,6 +664,22 @@ void Handle(const Message& message, auto&& reply) {
     case MsgSettingsChanged:
         BbSettings::ReloadLive();
         std::printf("GPU process: settings from the game's menu applied\n");
+        break;
+    case MsgGuestMemory: {
+        const GuestMemoryReply out = GuestMemory();
+        reply(&out, sizeof(out));
+        break;
+    }
+    case MsgFreshRange:
+    case MsgDeadRange:
+    case MsgLiveRange:
+        GuestHookRange(message.type, Payload<RangeArgs>(message));
+        break;
+    case MsgGpuRemap:
+        GpuRemap(Payload<RangeArgs>(message));
+        break;
+    case MsgShowTrophy:
+        ShowTrophy(Payload<TrophyArgs>(message));
         break;
     case MsgWriteFault:
         WriteFault(message, reply);
@@ -721,6 +853,45 @@ void ReaderThread() {
     }
 }
 
+constexpr int ChunkImported = -3; ///< runtime_memory.c CHUNK_IMPORTED: the pool's pages imported
+
+/// The runtime's chunk calls (ControlBlock::protect, game process -> here). Nothing here waits for
+/// the game process: the runtime may hold its lock.
+void HandleChunk(const Message& message, auto&& reply) {
+    const auto args = Payload<ChunkArgs>(message);
+    ResultReply out{-1, 0};
+    const bool valid = args.size && args.phys < g.pool_bytes && args.size <= g.pool_bytes - args.phys;
+    if (message.type == MsgChunkAlloc) {
+        const ChunkAlloc alloc = g.chunk_alloc.load(std::memory_order_acquire);
+        if (valid && alloc && g.backing) {
+            const int result = alloc(args.phys, args.size);
+            if (result >= 0) {
+                // A dma-buf chunk: memory of this process only (refused at MsgGuestMemory).
+                close(result);
+                if (const ChunkFree free_chunk = g.chunk_free.load(std::memory_order_acquire)) {
+                    free_chunk(args.phys, args.size);
+                }
+            }
+            out.result = result == ChunkImported ? ChunkImported : -1;
+        }
+    } else if (message.type == MsgChunkFree) {
+        if (const ChunkFree free_chunk = g.chunk_free.load(std::memory_order_acquire); valid && free_chunk) {
+            free_chunk(args.phys, args.size);
+        }
+        out.result = 0;
+    }
+    reply(&out, sizeof(out));
+}
+
+void ChunkThread() {
+    Common::SetCurrentThreadName("bb:remote-chunks");
+    for (;;) {
+        g.protect->ReceiveOne(
+            [](const Message& message, auto&& reply) { HandleChunk(message, reply); },
+            [] { return false; });
+    }
+}
+
 /// bb-gpu ends with the game process (its exit or exec: a restart through run.sh).
 void WatchParent() {
 #ifdef __APPLE__
@@ -880,6 +1051,14 @@ int Main(int argc, char** argv) {
         return 4;
     }
     g.control = static_cast<ControlBlock*>(at);
+    // The whole pool once more, outside the guest's ranges: the memory model's chunks import it
+    // (runtime_memory_backing_pointer), as the backing view in the game process.
+    void* view = mmap(nullptr, g.pool_bytes, PROT_READ | PROT_WRITE, MAP_SHARED, g.pool_fd, 0);
+    if (view == MAP_FAILED) {
+        std::perror("GPU process: view of the game's memory");
+        return 4;
+    }
+    g.backing = static_cast<u8*>(view);
     g.channel = std::make_unique<Channel>(&g.control->channel, Side::Backend);
     g.protect = std::make_unique<Channel>(&g.control->protect, Side::Backend);
     if (!g.channel->Valid() || !g.protect->Valid()) {
@@ -920,6 +1099,7 @@ int Main(int argc, char** argv) {
     std::printf("GPU process: native (page size %ld), guest memory reserved\n",
                 sysconf(_SC_PAGESIZE));
     std::thread(ReaderThread).detach();
+    std::thread(ChunkThread).detach();
 #ifdef __APPLE__
     bbgpu_main_thread_loop(); // Cocoa: the window and its events belong to the main thread
 #else
@@ -1021,6 +1201,23 @@ void PublishWindowState() {
     if (captures != g.published_overlay) {
         g.published_overlay = captures;
         g.control->state.overlay_captures_input.store(captures, std::memory_order_release);
+    }
+    // The pad recording clock: Display::Flip runs here, the game process's pad reads it.
+    s.world_us.store(bbgpu_world_us(), std::memory_order_relaxed);
+    s.world_active.store(bbgpu_world_active() ? 1 : 0, std::memory_order_relaxed);
+    // Settings the settings menu changes here and the game's code reads there.
+    const auto& settings = BbSettings::Get();
+    GameSettingsArgs now{};
+    for (int i = 0; i < 4; ++i) {
+        now.camera_speed[i] = settings.camera_speed[i].load(std::memory_order_relaxed);
+    }
+    now.light_grid_opt = settings.light_grid_opt.load(std::memory_order_relaxed) ? 1 : 0;
+    static GameSettingsArgs sent{};
+    static bool sent_once = false;
+    if (!sent_once || std::memcmp(&now, &sent, sizeof(now)) != 0) {
+        sent_once = true;
+        sent = now;
+        g.channel->Send(MsgGameSettings, &now, sizeof(now));
     }
 }
 
@@ -1161,15 +1358,30 @@ void MemoryTrap(uintptr_t address, u64 size, unsigned reason, int on) {
         return;
     }
     const u64 end = std::min<u64>(address + size, TrapLimit);
+    const u64 t0 = MonotonicNs();
+    u64 t1 = 0;
     {
         std::scoped_lock lock{trap_mutex};
+        t1 = MonotonicNs();
         for (u64 page = address >> 12; page <= (end - 1) >> 12; ++page) {
             const u8 old = table[page];
             __atomic_store_n(&table[page], on ? u8(old | reason) : u8(old & ~reason),
                              __ATOMIC_RELEASE);
         }
     }
+    const u64 t2 = MonotonicNs();
     ForwardProtect(ProtectArgs{address, end - address, ProtectTrap | reason, on ? 1u : 0u});
+    trap_wait_ns.fetch_add(t1 - t0, std::memory_order_relaxed);
+    trap_apply_ns.fetch_add(MonotonicNs() - t2, std::memory_order_relaxed);
+    trap_calls.fetch_add(1, std::memory_order_relaxed);
+    trap_bytes.fetch_add(end - address, std::memory_order_relaxed);
+}
+
+void TrapStats(u64* wait_ns, u64* apply_ns, u64* calls, u64* bytes) {
+    *wait_ns = trap_wait_ns.load(std::memory_order_relaxed);
+    *apply_ns = trap_apply_ns.load(std::memory_order_relaxed); // the game process's part included
+    *calls = trap_calls.load(std::memory_order_relaxed);
+    *bytes = trap_bytes.load(std::memory_order_relaxed);
 }
 
 unsigned MemoryTrapReasons(uintptr_t address) {
@@ -1203,10 +1415,43 @@ void SetCpuWriteHook(GpuRange hook) {
     g.hook_cpu_write = hook;
 }
 
-void ToyPadLights(std::uint32_t out[3]) {
-    for (int i = 0; i < 3; ++i) {
-        out[i] = g.control->state.toypad_lights[i].load(std::memory_order_relaxed);
-    }
+void SetChunkAllocator(ChunkAlloc alloc) {
+    g.chunk_alloc.store(alloc, std::memory_order_release);
+}
+void SetChunkFree(ChunkFree free_chunk) {
+    g.chunk_free.store(free_chunk, std::memory_order_release);
+}
+void SetChunkPrivate(ChunkImport import) {
+    g.chunk_private.store(import, std::memory_order_release);
+}
+void SetChunkWhole(int whole) {
+    g.chunk_whole.store(whole, std::memory_order_relaxed);
+}
+void SetGuestLazy(int lazy) {
+    g.guest_lazy.store(lazy, std::memory_order_relaxed);
+}
+
+void* BackingPointer(u64 phys) {
+    return g.backing && phys < g.pool_bytes ? g.backing + phys : nullptr;
+}
+
+int PoolFd() {
+    return g.pool_fd;
+}
+
+void NotePinned(u64 phys, u64 size) {
+    // Before the import takes the pages: the game process's runtime keeps them on release.
+    const ChunkArgs args{phys, size};
+    ResultReply result{};
+    g.protect->Call(MsgNotePinned, &args, sizeof(args), &result, sizeof(result));
+}
+
+int PadSteamOnly() {
+    return g.control ? g.control->state.steam_only.load(std::memory_order_relaxed) : 0;
+}
+
+const char* UserDir() {
+    return g.user_dir.c_str();
 }
 
 bool GuestReadable(u64 address, u64 size) {

@@ -44,19 +44,25 @@ struct SharedState {
     alignas(64) std::atomic<std::uint32_t> prompt_generation{0};
     std::atomic<std::int32_t> prompt_device{0};
     std::atomic<std::int32_t> pad_mouse_look{0};
-    /// The Toy Pad's lights (runtime_toypad_lights), for bb-gpu's settings menu.
-    std::atomic<std::uint32_t> toypad_lights[3]{};
+    /// runtime_pad_steam_only, for bb-gpu's window (keys and mouse a Steam pad echoes).
+    std::atomic<std::int32_t> steam_only{0};
     /// Keys pressed since the game process's pad last read them (bbport 0.6's short taps,
     /// runtime_pad.c key_latch): bit n = SDL scancode n, set by bb-gpu's window, taken (cleared)
     /// by the game process.
     alignas(64) std::atomic<std::uint64_t> key_latch[8]{};
+    /// The pad recording clock (bbgpu_world_active, bbgpu_world_us: Display::Flip in bb-gpu),
+    /// published by bb-gpu's window loop for the game process's pad.
+    alignas(64) std::atomic<std::uint64_t> world_us{0};
+    std::atomic<std::uint32_t> world_active{0};
 };
 
 struct ControlBlock {
     ChannelLayout channel;
-    /// Page protection only (MsgProtect, bb-gpu -> game process), served by a thread of its own:
+    /// Page protection (MsgProtect, bb-gpu -> game process), served by a thread of its own:
     /// it needs nothing but the runtime's lock, so it is never stuck behind a VideoOut or event
-    /// queue lock, and protections apply in the order bb-gpu decides them.
+    /// queue lock, and protections apply in the order bb-gpu decides them. The other way the
+    /// runtime's chunk allocator (MsgChunkAlloc, MsgChunkFree), served by a bb-gpu thread that
+    /// never waits for the game process: the runtime may call it with its lock held.
     ChannelLayout protect;
     alignas(4096) SharedState state;
 };

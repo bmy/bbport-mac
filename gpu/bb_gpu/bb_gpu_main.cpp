@@ -2,6 +2,9 @@
 // bbport: bb-gpu, the native GPU process (docs/macos-native-gpu.md). The GPU library imports
 // the runtime's GPU interface from the executable that loads it (bb-probe in-process); here this
 // executable provides it from bb-gpu's own view of the guest's memory (remote_back.cpp).
+// What the library imports (build_gpu_native.sh checks it) is answered here locally, from
+// bb-gpu's own state, or by the game process over the channel (remote_back.cpp); functions only
+// the game's code hooks call (they run in the game process) are inert.
 #include <csetjmp>
 #include <cstddef>
 #include <cstdint>
@@ -72,9 +75,57 @@ void runtime_memory_trap(uintptr_t address, uint64_t size, unsigned reason, int 
 unsigned runtime_memory_trap_reasons(uintptr_t address) {
     return Back::MemoryTrapReasons(address);
 }
-// Host import of the game's direct memory (the PC memory model's chunk allocator): the backing
-// is the game process's, so never here.
-void* runtime_memory_backing_pointer(uint64_t) {
+// bbport 0.7's memory model: BbGuestMemory::Install sets its chunk allocator here; the game
+// process's runtime calls it (MsgChunkAlloc), and its chunks import bb-gpu's own view of the
+// pool. Private regions are refused there (the game's private memory is not in the pool).
+void* runtime_memory_backing_pointer(uint64_t phys) {
+    return Back::BackingPointer(phys);
+}
+int runtime_memory_pool_fd(void) {
+    return Back::PoolFd(); // the same pool, this process's descriptor
+}
+void runtime_memory_set_guest_chunk_allocator(int (*alloc)(uint64_t phys, uint64_t size)) {
+    Back::SetChunkAllocator(alloc);
+}
+void runtime_memory_set_guest_chunk_free(void (*free_chunk)(uint64_t phys, uint64_t size)) {
+    Back::SetChunkFree(free_chunk);
+}
+void runtime_memory_set_guest_chunk_private(int (*import)(uint64_t phys, uint64_t size,
+                                                          void* pointer)) {
+    Back::SetChunkPrivate(import);
+}
+void runtime_memory_set_guest_chunk_whole(int whole) {
+    Back::SetChunkWhole(whole);
+}
+void runtime_memory_set_guest_lazy(int lazy) {
+    Back::SetGuestLazy(lazy);
+}
+void runtime_memory_note_pinned(uint64_t phys, uint64_t size) {
+    Back::NotePinned(phys, size); // the game process's runtime keeps pinned pages on release
+}
+// Only Windows gives pages back there; the game process's runtime discards its own.
+void runtime_memory_discard_direct(uint64_t, uint64_t) {}
+// The game's direct allocations are placed by the game process (its bbgpu_init sets this there).
+void runtime_memory_set_host_only_allocations(uint64_t) {}
+void runtime_memory_trap_stats(uint64_t* wait_ns, uint64_t* apply_ns, uint64_t* calls,
+                               uint64_t* bytes) {
+    Back::TrapStats(wait_ns, apply_ns, calls, bytes);
+}
+// The heap growing on demand (hooks_heap.cpp) is a hook in the game's code: the game process's.
+void runtime_memory_set_grow(const uint64_t*, uint64_t) {}
+int runtime_memory_deferred(uint64_t* phys, uint64_t* end) {
+    *phys = *end = 0;
+    return 0;
+}
+int runtime_memory_commit(uint64_t, uint64_t) {
+    return -1;
+}
+int runtime_memory_decommit(uint64_t, uint64_t) {
+    return -1;
+}
+void runtime_memory_commit_ahead(uint64_t, uint64_t) {}
+// Memory near the game's code (bbport_map_near.h): for its hooks, the game process's.
+void* runtime_low_map(size_t, int) {
     return nullptr;
 }
 // Guest functions by name (the PM4 self test): the game's code runs in the game process.
@@ -124,17 +175,27 @@ int runtime_pad_prompt(const char* name, int prefer_mouse, char* label, int size
 unsigned runtime_pad_prompt_generation(void) {
     return Back::PadPromptGeneration();
 }
+int runtime_pad_steam_only(void) {
+    return Back::PadSteamOnly(); // window.cpp: keys and mouse a Steam pad echoes
+}
 int runtime_pad_prompt_device(void) {
     return Back::PadPromptDevice();
 }
 int runtime_pad_mouse_look(void) {
     return Back::PadMouseLook();
 }
-void runtime_toypad_lights(uint32_t out[3]) {
-    Back::ToyPadLights(out);
-}
 int runtime_file_host_path(const char* guest, char* out, size_t size) {
     return Back::FileHostPath(guest, out, size);
+}
+const char* runtime_file_user_dir(void) {
+    return Back::UserDir();
+}
+// The save the game uses (the BBSC kit's restore, a hook in the game's code): the game process's.
+int runtime_savedata_active_slot(char* dir, size_t size) {
+    if (dir && size) {
+        dir[0] = 0;
+    }
+    return -1;
 }
 
 uint64_t runtime_process_time_us(void) {

@@ -62,6 +62,7 @@ int runtime_memory_lock_held(void);
 int runtime_memory_exclude(uintptr_t start, uintptr_t end);
 void runtime_memory_gpu_protect(uintptr_t address, uint64_t size, int read, int write);
 void runtime_memory_trap(uintptr_t address, uint64_t size, unsigned reason, int on);
+unsigned runtime_memory_trap_reasons(uintptr_t address);
 typedef void (*RuntimeGpuRange)(uintptr_t address, uint64_t size);
 void runtime_memory_set_gpu_hooks(RuntimeGpuRange map, RuntimeGpuRange unmap,
                                   RuntimeGpuRange invalidate);
@@ -76,7 +77,13 @@ unsigned runtime_pad_prompt_generation(void);
 int runtime_pad_prompt_device(void);
 int runtime_pad_mouse_look(void);
 int runtime_file_host_path(const char* guest, char* out, size_t size);
-__attribute__((weak)) void runtime_toypad_lights(uint32_t out[3]); // runtime_toypad.c
+__attribute__((weak)) int runtime_pad_steam_only(void); // weak as in window.cpp
+// The memory model's chunks (bbport 0.7): made by bb-gpu's GPU, asked for by this runtime.
+void runtime_memory_set_guest_chunk_allocator(int (*alloc)(uint64_t phys, uint64_t size));
+void runtime_memory_set_guest_chunk_free(void (*free_chunk)(uint64_t phys, uint64_t size));
+void runtime_memory_set_guest_chunk_whole(int whole);
+void runtime_memory_set_guest_lazy(int lazy);
+void runtime_memory_note_pinned(uint64_t phys, uint64_t size);
 }
 
 namespace BbRemote {
@@ -191,6 +198,11 @@ void MirrorHook(int op, uintptr_t address, uint64_t size, uint64_t phys, int kin
         g.channel->Send(MsgProtectMemory, &args, sizeof(args));
         break;
     }
+    case 3: { // the range's GPU memory changed, its mappings did not (a heap piece's chunk)
+        const RangeArgs args{address, size};
+        g.channel->Send(MsgGpuRemap, &args, sizeof(args));
+        break;
+    }
     default:
         break;
     }
@@ -202,6 +214,52 @@ void SendRange(u32 type, uintptr_t address, uint64_t size) {
 }
 void InvalidateHook(uintptr_t address, uint64_t size) {
     SendRange(MsgInvalidate, address, size);
+}
+
+/// The runtime's chunk allocator: bb-gpu's GPU imports the pool's pages there (CHUNK_IMPORTED,
+/// -3), else -1 (the chunk stays plain pool memory). On ControlBlock::protect, whose bb-gpu side
+/// never waits for this process: the runtime may call this with its lock held.
+int RemoteChunkAlloc(uint64_t phys, uint64_t size) {
+    const ChunkArgs args{phys, size};
+    ResultReply result{-1, 0};
+    g.protect->Call(MsgChunkAlloc, &args, sizeof(args), &result, sizeof(result));
+    // Only an import keeps the game's mappings on the pool (a dma-buf would be bb-gpu's memory).
+    return result.result == -3 ? -3 : -1;
+}
+
+void RemoteChunkFree(uint64_t phys, uint64_t size) {
+    const ChunkArgs args{phys, size};
+    ResultReply result{};
+    g.protect->Call(MsgChunkFree, &args, sizeof(args), &result, sizeof(result));
+}
+
+/// The runtime places the game's direct memory in the chunks bb-gpu's GPU can use in place, as
+/// BbGuestMemory::Install set them up there (bbport 0.7: the only memory model).
+bool InstallChunks() {
+    GuestMemoryReply memory{};
+    g.channel->Call(MsgGuestMemory, nullptr, 0, &memory, sizeof(memory));
+    if (memory.private_regions) {
+        std::fprintf(stderr, "GPU process: the GPU takes the game's memory as private regions "
+                             "(BB_GUEST_MEMORY=private), which only one process can have\n");
+        return false;
+    }
+    if (!memory.allocator || !memory.host_import) {
+        std::fprintf(stderr, "GPU process: its GPU does not import the game's memory from the "
+                             "shared pool (host memory import), which this split needs\n");
+        return false;
+    }
+    if (memory.lazy) {
+        runtime_memory_set_guest_lazy(1);
+    }
+    if (memory.free_chunks) {
+        runtime_memory_set_guest_chunk_free(&RemoteChunkFree);
+    }
+    runtime_memory_set_guest_chunk_whole(memory.whole ? 1 : 0);
+    runtime_memory_set_guest_chunk_allocator(&RemoteChunkAlloc);
+    std::printf("GPU process: the game's direct memory is imported by its GPU in place (%s%s)\n",
+                memory.whole ? "a chunk per allocation" : "256 MiB chunks",
+                memory.lazy ? ", lazily" : "");
+    return true;
 }
 void NoteWriteHook(uintptr_t address, uint64_t size) {
     SendRange(MsgNoteWrite, address, size);
@@ -381,6 +439,7 @@ void Handle(const Message& message, auto&& reply) {
         for (int e = 0; e < BbSettings::EffectCount; ++e) {
             settings.effects[e] = ((mask >> e) & 1) != 0;
         }
+        settings.fxaa_forced = ((mask >> 63) & 1) != 0; // bb-gpu's SyncAntiAliasing
         BbGuestHooks::ApplyGameEffects();
         break;
     }
@@ -400,6 +459,20 @@ void Handle(const Message& message, auto&& reply) {
         if (size.width >= 320 && size.height >= 200) {
             BbSettings::NoteMonitor(size.width, size.height);
         }
+        break;
+    }
+    case MsgGameSettings: {
+        // bb-gpu's settings menu; the game's code here reads them (the camera hook, the light grid).
+        const auto args = Payload<GameSettingsArgs>(message);
+        auto& settings = BbSettings::Get();
+        for (int i = 0; i < 4; ++i) {
+            const float speed = args.camera_speed[i];
+            if (std::isfinite(speed)) {
+                settings.camera_speed[i].store(std::clamp(speed, 0.25f, 2.0f),
+                                               std::memory_order_relaxed);
+            }
+        }
+        settings.light_grid_opt.store(args.light_grid_opt != 0, std::memory_order_relaxed);
         break;
     }
     case MsgGpuFailed: {
@@ -447,6 +520,10 @@ void ProtectThread() {
             [](const Message& message, auto&& reply) {
                 if (message.type == MsgProtect) {
                     ApplyProtect(Payload<ProtectArgs>(message));
+                } else if (message.type == MsgNotePinned) {
+                    // bb-gpu's lazy import of these pages (pin_mutex only, no runtime lock).
+                    const auto args = Payload<ChunkArgs>(message);
+                    runtime_memory_note_pinned(args.phys, args.size);
                 }
                 const ResultReply result{0, 0};
                 reply(&result, sizeof(result));
@@ -455,8 +532,8 @@ void ProtectThread() {
     }
 }
 
-/// runtime_pad.c's prompt state for bb-gpu's button prompts and the Toy Pad's lights for its
-/// settings menu (SharedState): once a frame.
+/// runtime_pad.c's prompt state for bb-gpu's button prompts, and whether a Steam pad echoes keys
+/// for its window (SharedState): once a frame.
 void PublishPadState() {
     if (!g.control) {
         return;
@@ -464,14 +541,9 @@ void PublishPadState() {
     auto& s = g.control->state;
     s.prompt_device.store(runtime_pad_prompt_device(), std::memory_order_relaxed);
     s.pad_mouse_look.store(runtime_pad_mouse_look(), std::memory_order_relaxed);
+    s.steam_only.store(runtime_pad_steam_only ? runtime_pad_steam_only() : 0,
+                       std::memory_order_relaxed);
     s.prompt_generation.store(runtime_pad_prompt_generation(), std::memory_order_release);
-    if (runtime_toypad_lights) {
-        uint32_t lights[3] = {};
-        runtime_toypad_lights(lights);
-        for (int i = 0; i < 3; ++i) {
-            s.toypad_lights[i].store(lights[i], std::memory_order_relaxed);
-        }
-    }
 }
 
 /// Ends the game when bb-gpu ends (its window was closed, or it failed).
@@ -733,6 +805,9 @@ bool Init(const BbGpuConfig& config) {
         std::fprintf(stderr, "GPU process: GPU initialization failed (%d)\n", result.result);
         return false;
     }
+    if (!InstallChunks()) {
+        return false;
+    }
     front_active = true;
     std::printf("GPU process: native GPU core ready (page size %u here, %u there)\n",
                 hello.page_size, welcome.page_size);
@@ -938,8 +1013,12 @@ int HandleFault(void* context, void* address) {
     if (!runtime_memory_is_mapped(addr & ~u64(4095), 1)) {
         return 0;
     }
-    const FaultArgs args{addr, BbPortable::Rip(context), Common::IsWriteError(context) ? 1u : 0u,
-                         runtime_memory_lock_held() ? 1u : 0u};
+    const FaultArgs args{addr,
+                         BbPortable::Rip(context),
+                         Common::IsWriteError(context) ? 1u : 0u,
+                         runtime_memory_lock_held() ? 1u : 0u,
+                         runtime_memory_trap_reasons(addr),
+                         0};
     FaultReply reply{};
     g.channel->Call(MsgWriteFault, &args, sizeof(args), &reply, sizeof(reply));
     // Only when this thread holds the runtime's lock (see FaultReply).
@@ -951,6 +1030,18 @@ int HandleFault(void* context, void* address) {
 
 void InvalidateMemory(u64 address, u64 size) {
     SendRange(MsgInvalidate, address, size);
+}
+
+void FreshRange(u64 address, u64 size) {
+    SendRange(MsgFreshRange, address, size);
+}
+
+void DeadRange(u64 address, u64 size) {
+    SendRange(MsgDeadRange, address, size);
+}
+
+void LiveRange(u64 address, u64 size) {
+    SendRange(MsgLiveRange, address, size);
 }
 
 int ShareRange(void* address, u64 size, int prot) {
@@ -1002,6 +1093,23 @@ int ShareRange(void* address, u64 size, int prot) {
 }
 
 // ---- window -----------------------------------------------------------------------------------
+
+void ShowTrophy(char grade, const char* name, const char* icon, float delay) {
+    TrophyArgs args{};
+    CopyString(args.name, sizeof(args.name), name);
+    CopyString(args.icon, sizeof(args.icon), icon);
+    args.delay = delay;
+    args.grade = grade;
+    g.channel->Send(MsgShowTrophy, &args, sizeof(args));
+}
+
+int WorldActive() {
+    return g.control && g.control->state.world_active.load(std::memory_order_relaxed) ? 1 : 0;
+}
+
+unsigned long long WorldUs() {
+    return g.control ? g.control->state.world_us.load(std::memory_order_relaxed) : 0;
+}
 
 int OverlayCapturesInput() {
     return g.control && g.control->state.overlay_captures_input.load(std::memory_order_acquire)

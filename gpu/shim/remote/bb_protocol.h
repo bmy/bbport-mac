@@ -11,7 +11,7 @@
 
 namespace BbRemote {
 
-inline constexpr std::uint32_t ProtocolVersion = 9;
+inline constexpr std::uint32_t ProtocolVersion = 10;
 
 enum Msg : std::uint32_t {
     // ---- game process -> GPU process ----
@@ -26,6 +26,13 @@ enum Msg : std::uint32_t {
     MsgNoteWrite = 9,   ///< RangeArgs: data written by a path the GPU side hears of (file reads)
     MsgCpuWrite = 10,   ///< RangeArgs: libc copies over watched pages
     MsgSettingsChanged = 11, ///< the game's System menu changed bbport.ini (BbSettings::ReloadLive)
+    // bbport 0.7's memory model (the GPU uses the game's memory in place).
+    MsgGuestMemory = 12, ///< call -> GuestMemoryReply: how bb-gpu's GPU takes the game's memory
+    MsgFreshRange = 13,  ///< RangeArgs: the game's hooks (CoreServices::fresh_range)
+    MsgDeadRange = 14,   ///< RangeArgs: CoreServices::dead_range
+    MsgLiveRange = 15,   ///< RangeArgs: CoreServices::live_range
+    MsgGpuRemap = 16,    ///< RangeArgs: the range's GPU memory changed (a heap piece's chunk)
+    MsgShowTrophy = 17,  ///< TrophyArgs: a trophy unlocked (BbOverlay::ShowTrophy, bb-gpu's)
 
     MsgSubmitGfx = 20,  ///< SubmitGfxArgs, then the inline command words (host data)
     MsgSubmitAsc = 21,  ///< SubmitAscArgs
@@ -49,6 +56,13 @@ enum Msg : std::uint32_t {
     MsgTextInputBegin = 60, ///< call: TextInputArgs -> ResultReply
     MsgTextInputPoll = 61,  ///< call -> TextInputReply
 
+    // ---- game process -> GPU process, on ControlBlock::protect ----
+    // The runtime's direct memory chunk allocator (runtime_memory_set_guest_chunk_allocator),
+    // whose chunks bb-gpu's GPU imports from its own view of the pool. May come with the
+    // runtime's lock held: served by a bb-gpu thread that never waits for the game process.
+    MsgChunkAlloc = 70, ///< call: ChunkArgs -> ResultReply (-3: imported, -1: none)
+    MsgChunkFree = 71,  ///< call: ChunkArgs -> ResultReply
+
     // ---- GPU process -> game process ----
     MsgProtect = 100,       ///< call: ProtectArgs -> ResultReply (the game process applies it)
     MsgIrq = 101,           ///< ValueArgs: BbIrq::Line
@@ -67,6 +81,9 @@ enum Msg : std::uint32_t {
     MsgFrameLimit = 113,    ///< ValueArgs: BbFrameRate::SetLimit (0: none)
     MsgDisplayAspect = 114, ///< ValueArgs: float bits, BbGuestHooks::SetDisplayAspect (the output's)
     MsgMonitor = 115,       ///< ValueArgs: BbSettings::PackSize of the window's monitor (NoteMonitor)
+    /// call on ControlBlock::protect: ChunkArgs -> ResultReply (runtime_memory_note_pinned)
+    MsgNotePinned = 116,
+    MsgGameSettings = 117,  ///< GameSettingsArgs: settings the game's code reads (the menu's)
 };
 
 /// Sizes of the guest structures carried as raw bytes (checked against the real types).
@@ -137,6 +154,8 @@ struct FaultArgs {
     std::uint64_t address, rip;
     std::uint32_t is_write;
     std::uint32_t lock_held; ///< the faulting thread holds the runtime's lock (it faulted in it)
+    std::uint32_t reasons;   ///< the game's write trap reasons for the page (runtime_memory.c)
+    std::uint32_t pad;
 };
 /// With lock_held, the protections the GPU side decided while handling the fault: the faulting
 /// thread applies them itself (the protection thread would wait for that lock). Otherwise they
@@ -254,12 +273,36 @@ struct PathReply {
     std::uint32_t pad;
     char path[1024];
 };
+struct ChunkArgs {
+    std::uint64_t phys, size; ///< direct memory: offsets in the shared pool
+};
+/// What bb-gpu's BbGuestMemory::Install set (its runtime_memory_set_guest_chunk_* calls).
+struct GuestMemoryReply {
+    std::uint32_t allocator;       ///< 1: a chunk allocator is set
+    std::uint32_t host_import;     ///< 1: its chunks are host imports of the pool (the only kind
+                                   ///< the game process can map: dma-buf chunks are bb-gpu's)
+    std::uint32_t whole, lazy;     ///< runtime_memory_set_guest_chunk_whole, _lazy
+    std::uint32_t free_chunks;     ///< 1: runtime_memory_set_guest_chunk_free was called
+    std::uint32_t private_regions; ///< 1: runtime_memory_set_guest_chunk_private was called
+};
+struct TrophyArgs {
+    char name[256];
+    char icon[1024]; ///< the trophy's TROPnnn.PNG on this computer, or empty
+    float delay;     ///< seconds before it shows
+    char grade;      ///< B, S, G, P
+    std::uint8_t pad[3];
+};
+struct GameSettingsArgs {
+    float camera_speed[4];       ///< BbSettings::camera_speed
+    std::uint32_t light_grid_opt;
+    std::uint32_t pad;
+};
 
 static_assert(sizeof(HelloArgs) == 80 && sizeof(HelloReply) == 16 + 16 * MaxTakenRanges &&
               sizeof(MapArgs) == 40 &&
               sizeof(RangeArgs) == 16 && sizeof(MirrorProtectArgs) == 24 &&
               sizeof(ProtectArgs) == 24 && sizeof(ResultReply) == 8 && sizeof(ValueArgs) == 8);
-static_assert(sizeof(FaultArgs) == 24 && sizeof(FaultReply) == 8 + 24 * MaxFaultProtects &&
+static_assert(sizeof(FaultArgs) == 32 && sizeof(FaultReply) == 8 + 24 * MaxFaultProtects &&
               sizeof(FaultReply) <= 4096);
 static_assert(sizeof(InitArgs) == 16 + 128 + 32 + 1024 && sizeof(SubmitGfxArgs) == 40 &&
               sizeof(SubmitAscArgs) == 16 && sizeof(ComputeQueueArgs) == 24);
@@ -272,5 +315,7 @@ static_assert(sizeof(TextInputArgs) <= 4096 && sizeof(TextInputReply) <= 4096 &&
               sizeof(TextArgs) == 512 && sizeof(StatsArgs) == 16);
 static_assert(sizeof(PadPromptArgs) == 40 && sizeof(PadPromptReply) == 72 &&
               sizeof(PathArgs) == 1024 && sizeof(PathReply) == 1032);
+static_assert(sizeof(TrophyArgs) == 1288 && sizeof(ChunkArgs) == 16 && sizeof(GuestMemoryReply) == 24 &&
+              sizeof(GameSettingsArgs) == 24);
 
 } // namespace BbRemote

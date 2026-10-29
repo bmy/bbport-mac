@@ -69,6 +69,12 @@ public:
     /// in it are scaled to the game's resolution, as the PS4 would have counted them.
     void SetPassScale(float area_scale);
 
+    /// bbport (macOS): samples are counted now, while one of the game's queries is open
+    /// (Rasterizer::NoOutputPassArea keeps such passes at full size). Recording thread.
+    bool CountingNow() const {
+        return started && Counting();
+    }
+
     void Suspend(bool inside_render_pass) override;
     void Resume(bool inside_render_pass) override;
 

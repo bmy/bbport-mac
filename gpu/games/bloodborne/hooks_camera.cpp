@@ -35,10 +35,15 @@
 #include <pthread.h>
 #include <sys/mman.h>
 #include <sys/uio.h>
+#ifdef __APPLE__
+#include <sys/ucontext.h> // bbport: <ucontext.h> requires _XOPEN_SOURCE on macOS
+#else
 #include <ucontext.h>
+#endif
 #include <unistd.h>
 #include <utility>
 #include "games/bloodborne/hooks_internal.h"
+#include "remote/bb_remote.h"
 
 namespace BbGuestHooks {
 namespace {
@@ -540,6 +545,12 @@ std::uint64_t CameraState() {
 }
 
 void SetDisplayAspect(float aspect) {
+    // bbport (macOS native GPU process): the upscaler is bb-gpu's, the camera and HUD hooks the
+    // game process's (MsgDisplayAspect); called on a change only.
+    if (BbRemote::BackActive()) {
+        BbRemote::Back::DisplayAspect(aspect);
+        return;
+    }
     constexpr float game = 16.0f / 9.0f;
     const bool other = aspect > 0.5f && aspect < 8.0f && std::abs(aspect - game) > 0.001f;
     std::uint32_t bits = 0, fov = 0;

@@ -852,8 +852,8 @@ private:
                 if (use_summary && summary[Slot(c, 4)].load(std::memory_order_relaxed) <= done) {
                     continue; // nothing newer noted over these 2 MiB
                 }
-                const u64 lo = std::max(address, c << SummaryShift);
-                const u64 hi = std::min(end, (c + 1) << SummaryShift);
+                const u64 lo = std::max<u64>(address, c << SummaryShift);
+                const u64 hi = std::min<u64>(end, (c + 1) << SummaryShift);
                 for (u32 level = 0; level < 4; ++level) {
                     if (level_newest[level].load(std::memory_order_relaxed) <= done) {
                         continue;

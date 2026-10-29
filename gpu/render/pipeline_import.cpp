@@ -33,6 +33,9 @@
 #include <unistd.h>
 extern char** environ;
 #endif
+#ifdef __APPLE__
+#include <mach-o/dyld.h> // bbport (macOS): _NSGetExecutablePath (no /proc/self/exe)
+#endif
 
 #include "bbport_sections.h"
 #include "bbport_toggles.h"
@@ -107,6 +110,12 @@ void PipelineCache::StartShaderImport() {
     if (!pack || !*pack || !game || !*game || !std::filesystem::exists(pack, ec)) {
         return;
     }
+#if defined(__APPLE__) && !defined(__x86_64__)
+    // bbport (the native GPU process): the importer is bb-probe's x86-64 translator; its programs
+    // are not for this process's cache (SRT walkers as bytecode here).
+    std::printf("Shader recipes: no import in the native GPU process\n");
+    return;
+#endif
     const std::string dir = store.Directory().string();
     const std::string params = fmt::format("{:x}", Shader::MotionVectors::params_address);
     const std::string positions = fmt::format("{:x}", Shader::MotionVectors::positions_address);
@@ -150,7 +159,20 @@ void PipelineCache::StartShaderImport() {
         }
     }
 #else
-    if (posix_spawn(&import->pid, "/proc/self/exe", nullptr, nullptr, const_cast<char**>(argv),
+#ifdef __APPLE__
+    // bbport (macOS): this executable (bb-probe) by its path.
+    char self[4096];
+    uint32_t self_size = sizeof(self);
+    const char* exe_path = _NSGetExecutablePath(self, &self_size) == 0 ? self : nullptr;
+    if (!exe_path) {
+        std::printf("Shader recipes: no import (the executable's path is too long)\n");
+        import->done = true;
+        return;
+    }
+#else
+    const char* exe_path = "/proc/self/exe";
+#endif
+    if (posix_spawn(&import->pid, exe_path, nullptr, nullptr, const_cast<char**>(argv),
                     env.data()) != 0) {
         import->done = true;
         return;

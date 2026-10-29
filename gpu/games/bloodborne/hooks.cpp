@@ -37,10 +37,16 @@
 #include <pthread.h>
 #include <sys/mman.h>
 #include <sys/uio.h>
+#ifdef __APPLE__
+#include <sys/ucontext.h> // bbport: <ucontext.h> requires _XOPEN_SOURCE on macOS
+#else
 #include <ucontext.h>
+#endif
 #include <unistd.h>
 #include <utility>
 #include "games/bloodborne/hooks_internal.h"
+#include "bbport_portable.h"
+#include "common/signal_context.h"
 
 namespace BbGuestHooks {
 namespace {
@@ -247,7 +253,7 @@ bool InstallCallDetour(u64 offset) {
 struct sigaction previous_action {};
 
 void OnTrap(int sig, siginfo_t* info, void* context) {
-    auto* g = static_cast<ucontext_t*>(context)->uc_mcontext.gregs;
+    greg_t* g = Common::Gregs(context); // bbport: portable (macOS)
     const u64 rip = u64(g[REG_RIP]) - 1; // past the int3
     // The GX node guard (#162): its site while the detour goes in, and its null case.
     const bool gx_site = rip == ImageBase + GxNodeSite;
@@ -353,8 +359,7 @@ void OnTrap(int sig, siginfo_t* info, void* context) {
 
 bool Patch(u64 address, const unsigned char* expected, std::size_t size) {
     unsigned char bytes[16]{};
-    iovec local{bytes, size}, remote{reinterpret_cast<void*>(address), size};
-    if (process_vm_readv(getpid(), &local, 1, &remote, 1, 0) != ssize_t(size) ||
+    if (!BbPortable::ReadSelf(bytes, reinterpret_cast<const void*>(address), size) ||
         std::memcmp(bytes, expected, size) != 0) {
         return false;
     }

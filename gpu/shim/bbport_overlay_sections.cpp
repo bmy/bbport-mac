@@ -106,9 +106,8 @@ bool UpscalerSection(BbSettings::Values& s) {
         BbSettings::MenuText("Off", "Выкл"), "FSR 3.1", "FSR 4 (INT8)", "FSR 4.1.x",
         BbSettings::MenuText("TAA (native anti-aliasing)", "TAA (нативное сглаживание)"),
         "DLSS (NVIDIA RTX)", BbSettings::MenuText("FSR 1 (spatial, weak GPUs)", "FSR 1 (пространственный, слабые GPU)"),
-        BbSettings::MenuText("FSR 4 (AMD's DLL)", "FSR 4 (DLL AMD)")};
+        BbSettings::MenuText("FSR 4 (AMD's DLL)", "FSR 4 (DLL AMD)"), "MetalFX (Apple)"};
     static_assert(sizeof(upscalers) / sizeof(upscalers[0]) == BbSettings::UpscalerCount);
-    static const char* later[] = {"XeSS"};
     int upscaler = s.upscaler;
     if (ImGui::BeginCombo(BbSettings::MenuText("Upscaler", "Апскейлер"), upscalers[upscaler])) {
         for (int i = 0; i < BbSettings::UpscalerCount; ++i) {
@@ -116,7 +115,19 @@ bool UpscalerSection(BbSettings::Values& s) {
                                    : i == BbSettings::UpscalerFsr411 ? s.fsr411_supported.load()
                                    : i == BbSettings::UpscalerDlss   ? s.dlss_supported.load()
                                    : i == BbSettings::UpscalerFsrAmd ? s.fsr_amd_supported.load()
+                                   : i == BbSettings::UpscalerMetalFx ? s.metalfx_supported.load()
                                                                      : true;
+#ifdef __APPLE__
+            // bbport: FSR 4 needs INT8 dot products and compute derivatives that KosmicKrisp
+            // lacks (AMD's DLLs are Windows'); DLSS needs an NVIDIA GPU.
+            if ((BbSettings::IsFsr4(i) || i == BbSettings::UpscalerDlss) && !supported) {
+                continue;
+            }
+#else
+            if (i == BbSettings::UpscalerMetalFx) {
+                continue; // bbport: macOS only
+            }
+#endif
             ImGui::BeginDisabled(!supported);
             if (ImGui::Selectable(upscalers[i], i == upscaler)) {
                 Store(s.upscaler, i, true);
@@ -132,6 +143,8 @@ bool UpscalerSection(BbSettings::Values& s) {
                                                          "— не поддерживается видеокартой"));
             }
         }
+#ifndef __APPLE__ // bbport: XeSS is not ported to macOS.
+        static const char* later[] = {"XeSS"};
         for (const char* name : later) {
             ImGui::BeginDisabled();
             ImGui::Selectable(name, false);
@@ -139,6 +152,7 @@ bool UpscalerSection(BbSettings::Values& s) {
             ImGui::SameLine();
             ImGui::TextDisabled("%s", BbSettings::MenuText("— in development", "— в работе"));
         }
+#endif
         ImGui::EndCombo();
     }
     if (s.upscaler == BbSettings::UpscalerFsr411 || s.upscaler == BbSettings::UpscalerFsrAmd) {
@@ -198,6 +212,24 @@ bool UpscalerSection(BbSettings::Values& s) {
             "NVIDIA DLSS Super Resolution (видеокарты RTX; Native AA — это DLAA). Нужны мост DLSS "
             "и библиотека NVIDIA рядом с игрой; без них используется FSR 3.1."));
     }
+#ifdef __APPLE__
+    if (const char* problem = s.metalfx_problem.load()) {
+        char line[192];
+        std::snprintf(line, sizeof(line),
+                      BbSettings::MenuText("MetalFX unavailable: %s", "MetalFX недоступен: %s"),
+                      problem);
+        ProblemText(line);
+    }
+    if (s.upscaler == BbSettings::UpscalerMetalFx) {
+        Hint(BbSettings::MenuText(
+            "MetalFX: Apple's temporal upscaler, on the same GPU as KosmicKrisp. Slower than "
+            "FSR 3.1 here (each frame goes from Vulkan to Metal and back). Native AA (x1.0) works "
+            "only if the GPU supports a scale of 1; otherwise choose another preset.",
+            "MetalFX: временной апскейлер Apple на том же GPU, что и KosmicKrisp. Здесь медленнее "
+            "FSR 3.1 (кадр переходит из Vulkan в Metal и обратно). Native AA (x1.0) работает, "
+            "только если GPU поддерживает масштаб 1: иначе выберите другой пресет."));
+    }
+#endif
     if (const char* problem = s.dlss_problem.load(); problem && s.upscaler == BbSettings::UpscalerDlss) {
         char line[192];
         std::snprintf(line, sizeof(line), "DLSS: %s", problem);
@@ -261,16 +293,17 @@ bool UpscalerSection(BbSettings::Values& s) {
     ImGui::BeginDisabled(taa);
     int preset = taa ? BbSettings::NativeAA : s.preset.load();
     char preset_label[64];
-    std::snprintf(preset_label, sizeof(preset_label), "%s (x%.1f)", BbSettings::PresetName(preset),
+    std::snprintf(preset_label, sizeof(preset_label), "%s (x%.3g)", BbSettings::PresetName(preset),
                   BbSettings::PresetScale(preset));
     if (ImGui::BeginCombo(BbSettings::MenuText("Preset", "Пресет"), preset_label)) {
-        for (int i = 0; i < BbSettings::PresetCount; ++i) {
+        for (const int i : BbSettings::PresetOrder) {
             char label[64];
             const float scale = BbSettings::PresetScale(i);
             const auto output = BbSettings::CurrentOutput();
             std::snprintf(
                 label, sizeof(label),
-                BbSettings::MenuText("%s (x%.1f, render %dx%d)", "%s (x%.1f, рендер %dx%d)"),
+                // bbport (macOS port): %.3g shows Ultra Quality's x1.25 (x%.1f made it x1.2).
+                BbSettings::MenuText("%s (x%.3g, render %dx%d)", "%s (x%.3g, рендер %dx%d)"),
                 BbSettings::PresetName(i), scale, int(std::lround(output.width / scale / 2) * 2),
                 int(std::lround(output.height / scale / 2) * 2));
             if (ImGui::Selectable(label, i == preset)) {
@@ -339,7 +372,11 @@ bool UpscalerSection(BbSettings::Values& s) {
     Hint(BbSettings::MenuText(
         "With an upscaler: up to 1 its own sharpening (RCAS), above 1 another RCAS pass. Without "
         "one: RCAS on the finished frame (over the game's AA or FXAA), up to 1 AMD's strongest. "
+#ifdef __APPLE__ // bbport: ImGui makes Cmd its Ctrl on macOS (HandleEvent).
+        "Cmd+click the slider to enter an exact value.",
+#else
         "Ctrl+click the slider to enter an exact value.",
+#endif
         "С апскейлером: до 1 — его собственная резкость (RCAS), выше 1 — ещё один проход RCAS. "
         "Без апскейлера: RCAS по готовому кадру (поверх сглаживания игры или FXAA), 1 — "
         "максимум AMD. Ctrl+клик по ползунку — ввести точное значение."));

@@ -31,7 +31,11 @@
 #include <sys/wait.h>
 #include <csetjmp>
 #include <dlfcn.h>
+#ifdef __APPLE__
+#include <sys/ucontext.h> // bbport: <ucontext.h> requires _XOPEN_SOURCE on macOS
+#else
 #include <ucontext.h>
+#endif
 #include <csignal>
 #include <unistd.h>
 #endif

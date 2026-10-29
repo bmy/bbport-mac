@@ -11,7 +11,7 @@
 #include "bbport_affinity.h"
 #include "shim/bb_env.h"
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__APPLE__) // bbport (macOS): no cpu_set_t, SMT or /proc
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -33,7 +33,7 @@
 
 namespace BbAffinity {
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__APPLE__)
 namespace {
 
 constexpr const char* StageThreads[] = {"bb:GpuComm", "bb:DrawRec"};
@@ -89,7 +89,7 @@ void Keep(std::vector<int> stage_cpus, cpu_set_t rest) {
 #endif
 
 void Start() {
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__APPLE__)
     const char* env = bb_env("BB_CORE_RESERVE");
     if (env && env[0] == '0') {
         return;

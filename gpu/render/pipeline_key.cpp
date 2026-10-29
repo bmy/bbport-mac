@@ -556,7 +556,16 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
     }
     if (geometry) {
         if (!instance.IsGeometryStageSupported()) {
+#ifdef __APPLE__
+            // bbport (macOS port): once per run (Metal drivers have no geometry stage; logging
+            // every such draw cost frame time).
+            if (static std::atomic_flag warned; !warned.test_and_set()) {
+                LOG_WARNING(Render_Vulkan,
+                            "Geometry shader stage unsupported, skipping draws that need it");
+            }
+#else
             LOG_WARNING(Render_Vulkan, "Geometry shader stage unsupported, skipping");
+#endif
             return false;
         }
         if (regs.vgt_gs_mode.onchip || regs.vgt_strmout_config.raw) {
@@ -583,8 +592,34 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
             ASSERT_MSG(vertex_binding < MaxVertexBufferCount,
                        "Vertex attribute binding count exceeded limit: {} >= {}", vertex_binding,
                        MaxVertexBufferCount);
+#ifdef __APPLE__
+            // bbport (macOS): an impossible format is a V# read while the game rewrote it (data
+            // format 9 with number format 7, code 23 on KosmicKrisp, which has no dynamic vertex
+            // input so the format is part of the key). As GetVertexInputs (pipeline.cpp) does at
+            // draw time: 32-bit floats for this draw, so key and pipeline agree; ahead of the
+            // draw, the GPU thread is left to prepare it (as PrepareResources does).
+            vk::Format format =
+                GcnToVk::TrySurfaceFormat(buffer.GetDataFmt(), buffer.GetNumberFmt());
+            // FormatInvalid (a missing attribute, a zeroed V#) stays undefined, as before.
+            if (format == vk::Format::eUndefined &&
+                buffer.GetDataFmt() != Gcn::DataFormat::FormatInvalid) {
+                if (sel.worker) {
+                    return false;
+                }
+                static std::atomic<u32> told{0};
+                if (told.fetch_add(1, std::memory_order_relaxed) < 4) {
+                    LOG_WARNING(Render_Vulkan, "vertex attribute {} with data format {} and number "
+                                "format {} in a pipeline key: read as 32-bit floats",
+                                attrib.semantic, u32(buffer.GetDataFmt()),
+                                u32(buffer.GetNumberFmt()));
+                }
+                format = vk::Format::eR32G32B32A32Sfloat;
+            }
+            key.vertex_buffer_formats[vertex_binding++] = format;
+#else
             key.vertex_buffer_formats[vertex_binding++] =
                 GcnToVk::SurfaceFormat(buffer.GetDataFmt(), buffer.GetNumberFmt());
+#endif
         }
     }
     return true;

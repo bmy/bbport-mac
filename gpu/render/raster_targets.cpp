@@ -284,10 +284,13 @@ bool Rasterizer::NoOutputPassArea(const GraphicsPipeline* pipeline) const {
     // and no attachments (a vertex shader that only writes memory) produces no fragments, but its
     // render pass began at the device maximum, 16384x16384; Apple's tile-based GPUs walk every
     // tile of that area (~0.3 ms a pass there, ~20 passes a frame). A 16x16 area keeps the vertex
-    // work. Not while occlusion queries count samples (the PC memory model). Experiment bit 64 of
-    // BB_TOGGLE_FILE: the full area, as before (A/B while the game runs).
+    // work. Not while occlusion queries count samples: in 0.6 only the PC memory model translated
+    // them; since 0.7 every session does, so the area is kept full while one of the game's queries
+    // is open (its draws are then a pass of their own: the signature differs). Experiment bit 64
+    // of BB_TOGGLE_FILE: the full area, as before (A/B while the game runs).
 #ifdef __APPLE__
-    return !pipeline->GetStages()[u32(Shader::SwStage::Fragment)] && !OcclusionTranslated() &&
+    const bool counting = OcclusionTranslated() && occlusion && occlusion->CountingNow();
+    return !pipeline->GetStages()[u32(Shader::SwStage::Fragment)] && !counting &&
            !BbToggle::Experiment(64);
 #else
     (void)pipeline;

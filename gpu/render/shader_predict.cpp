@@ -34,12 +34,17 @@
 #include <sys/wait.h>
 #include <csetjmp>
 #include <dlfcn.h>
+#ifdef __APPLE__
+#include <sys/ucontext.h> // bbport: <ucontext.h> requires _XOPEN_SOURCE on macOS
+#else
 #include <ucontext.h>
+#endif
 #include <csignal>
 #include <unistd.h>
 #endif
 
 #include "common/hash.h"
+#include "common/signal_context.h"
 #include "common/path_util.h"
 #include "common/serdes.h"
 #include "render/pipeline.h"
@@ -65,7 +70,7 @@ sigjmp_buf* predict_recover = nullptr;
 u64 predict_fault_addr = 0, predict_fault_rip = 0;
 void PredictSigaction(int sig, siginfo_t* info, void* context) {
     predict_fault_addr = reinterpret_cast<u64>(info->si_addr);
-    predict_fault_rip = u64(static_cast<ucontext_t*>(context)->uc_mcontext.gregs[REG_RIP]);
+    predict_fault_rip = u64(Common::Gregs(context)[REG_RIP]); // bbport: portable (macOS)
     if (predict_recover) {
         siglongjmp(*predict_recover, sig);
     }

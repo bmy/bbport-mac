@@ -32,6 +32,10 @@ namespace BbFreeCheck {
 bool Enabled() {
     return false;
 }
+bool WatchEnabled() {
+    return false;
+}
+void NoteGpuWrite(std::uint64_t, std::uint64_t, std::uint64_t, Source) {}
 void Check(std::uint64_t, std::uint64_t, const void*, Source, std::uint64_t) {}
 std::uint64_t NextFenceSeq() {
     return 0;
@@ -46,6 +50,7 @@ bool OnStaleTrapFault(std::uint64_t) {
     return false;
 }
 void NoteSubmit(std::uint64_t, const void*, std::uint64_t) {}
+void DumpWrites(std::uint64_t, std::uint64_t, const char*) {}
 void DumpAtFault(std::uint64_t, std::uint64_t) {}
 } // namespace BbFreeCheck
 #else

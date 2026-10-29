@@ -159,7 +159,15 @@ public:
     [[gnu::noinline]] void EndRendering();
     /// BB_PASS_BREAK_TRACE: names the caller of the code that just ended the pass instead.
     void SetPassEndCaller(void* caller) noexcept {
-        pass_end_caller = caller;
+        // bbport: start the stack at `caller`, keeping the callers above it when it is there.
+        if (pass_end_stack[1] == caller) {
+            for (size_t i = 1; i < pass_end_stack.size(); ++i) {
+                pass_end_stack[i - 1] = pass_end_stack[i];
+            }
+            pass_end_stack.back() = nullptr;
+        } else {
+            pass_end_stack = {caller};
+        }
     }
     /// BB_PASS_BREAK_TRACE=1 (diagnostics): who ended a render pass that began again with the same
     /// state (a break: its attachments stored and loaded again), every 5 s. bbport: the caller and

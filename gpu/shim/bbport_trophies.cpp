@@ -100,6 +100,14 @@ bool Extract(const fs::path& trp_path, const std::string& np_comm_id, const std:
     for (const auto& e : entries) {
         const std::uint8_t* data = trp.data() + e.offset;
         std::string name = e.name, out;
+#ifdef __APPLE__
+        // bbport (macOS): plain file names only; a crafted package must not write outside folder.
+        if (name.empty() || name.find_first_of("/\\") != std::string::npos ||
+            name.find("..") != std::string::npos) {
+            std::printf("Trophies: skipped an entry whose name is not a plain file name\n");
+            continue;
+        }
+#endif
         if (name.size() > 5 && name.ends_with(".ESFM")) {
             if (e.size < 32) {
                 continue;

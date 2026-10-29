@@ -41,13 +41,17 @@
 
 #include <mutex>
 #include <pthread.h>
-#include <x86intrin.h>
+#include "bbport_cpu.h" // bbport: not <x86intrin.h> (arm64: the native GPU process)
 #include <cstring>
 #include <dlfcn.h>
 #include <string>
 #include <fmt/format.h>
 #include <sys/mman.h>
+#ifdef __APPLE__
+#include <sys/ucontext.h> // bbport: <ucontext.h> requires _XOPEN_SOURCE on macOS
+#else
 #include <ucontext.h>
+#endif
 #include "common/signal_context.h"
 #include "core/signals.h"
 #include <vk_mem_alloc.h>
@@ -407,7 +411,7 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
     bind_wait_tick = 0;
     const u64 signal_tick = memory_semaphore.NextTick();
     const auto signal_sema = memory_semaphore.Handle();
-    info.AddWait(signal_sema, signal_tick);
+    info.AddWait(signal_sema, signal_tick, "the memory binds before it");
 
     // The binds go into the queue right before the submission (BB_ASYNC_SUBMIT: later, from a
     // recording thread), after the submissions still on their way there.

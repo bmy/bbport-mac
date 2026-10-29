@@ -60,13 +60,14 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
     const bool use_fsr4 = UseFsr4() || UseDlss();
     const bool use_taa = BbSettings::Get().upscaler == BbSettings::UpscalerTaa;
     const bool use_spatial = BbSettings::IsSpatial(BbSettings::Get().upscaler);
+    const bool use_metalfx = UseMetalFx();
     if (use_taa && (w != ow || h != oh)) {
         std::printf("TAA: remove BB_RENDER_RES to use native-resolution TAA\n");
         return false;
     }
     if (resources_ready && w == width && h == height && ow == out_width && oh == out_height &&
         hdr == context_hdr && use_fsr4 == resources_fsr4 && use_taa == resources_taa &&
-        use_spatial == resources_spatial) {
+        use_spatial == resources_spatial && use_metalfx == resources_metalfx) {
         return true;
     }
     const auto device = instance.GetDevice();
@@ -109,14 +110,32 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
                             : 0;
     create_info.maxRenderSize = {w, h};
     create_info.maxOutputSize = {ow, oh};
-    // FSR 4 has its own model context (vk_fsr4); the images below are shared.
-    if (!use_fsr4 && !use_taa && !use_spatial) {
+    // FSR 4 has its own model context (vk_fsr4), MetalFX its own scaler (vk_metalfx); the images
+    // below are shared.
+    if (!use_fsr4 && !use_taa && !use_spatial && !use_metalfx) {
         if (const u64 issues = ffxVkPortableValidateUpscaleCreateInfo(&create_info)) {
             PrintIssues("create info", issues);
             return false;
         }
-        if (ffxVkPortableUpscaleContextCreate(&device_info, &create_info, &context) !=
-            FFX_VK_PORTABLE_OK) {
+        auto result = ffxVkPortableUpscaleContextCreate(&device_info, &create_info, &context);
+#ifdef __APPLE__
+        if (result != FFX_VK_PORTABLE_OK) {
+            // bbport: say why. -3 Vulkan call, -4 argument, -5 memory, -6 unsupported device,
+            // -7 FidelityFX backend (shader/pipeline creation). A second attempt with FFX debug
+            // checking prints the library's own messages.
+            std::printf("Upscaler: FSR 3 context creation failed (result %d); retrying with "
+                        "FidelityFX debug messages\n",
+                        static_cast<int>(result));
+            std::fflush(stdout);
+            context = nullptr;
+            create_info.flags |= FFX_VK_PORTABLE_CONTEXT_DEBUG_CHECKING;
+            result = ffxVkPortableUpscaleContextCreate(&device_info, &create_info, &context);
+            if (result == FFX_VK_PORTABLE_OK) {
+                std::printf("Upscaler: FSR 3 context created with debug checking on\n");
+            }
+        }
+#endif
+        if (result != FFX_VK_PORTABLE_OK) {
             std::printf("Upscaler: FSR 3 context creation failed\n");
             context = nullptr;
             return false;
@@ -218,6 +237,11 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
     resources_fsr4 = use_fsr4;
     resources_spatial = use_spatial;
     resources_taa = use_taa;
+    resources_metalfx = use_metalfx;
+    if (use_metalfx) {
+        std::printf("Upscaler: MetalFX inputs %ux%u -> %ux%u\n", w, h, ow, oh);
+        return true;
+    }
     if (use_taa) {
         std::printf("TAA: context %ux%u -> %ux%u (%s), no FSR model\n", w, h, ow, oh,
                     hdr ? "HDR scene color" : "tonemapped frame");

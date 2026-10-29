@@ -8,7 +8,7 @@
 
 #include <chrono>
 #include <limits>
-#include <x86intrin.h>
+#include "bbport_cpu.h" // bbport: x86-64 and arm64 (the native GPU process)
 
 #include "common/assert.h"
 #include "render/vk_breadcrumbs.h"
@@ -45,9 +45,14 @@ void Semaphore::Refresh() {
     }();
     // In time stamp counter ticks: a clock read through libc was ~1.6 % of the Deck's recording
     // thread (callers check the GPU's progress thousands of times a frame).
+#if defined(__aarch64__)
+    // bbport (the native GPU process): the virtual counter, not the game's TSC.
+    static const s64 poll_ticks = s64(BbCpu::TicksFromUs(u64(poll_ns) / 1000));
+#else
     static const s64 poll_ticks = s64(double(poll_ns) * double(runtime_tsc_frequency()) / 1e9);
+#endif
     if (poll_ticks > 0) {
-        const s64 now = s64(__rdtsc());
+        const s64 now = s64(BbCpu::Ticks());
         s64 last = last_read_tsc.load(std::memory_order_relaxed);
         if (now - last < poll_ticks ||
             !last_read_tsc.compare_exchange_strong(last, now, std::memory_order_relaxed)) {

@@ -35,10 +35,17 @@
 #include <pthread.h>
 #include <sys/mman.h>
 #include <sys/uio.h>
+#ifdef __APPLE__
+#include <sys/ucontext.h> // bbport: <ucontext.h> requires _XOPEN_SOURCE on macOS
+#else
 #include <ucontext.h>
+#endif
 #include <unistd.h>
 #include <utility>
 #include "games/bloodborne/hooks_internal.h"
+#include <mutex>
+#include "bbport_threads.h"
+#include "remote/bb_remote.h"
 
 namespace BbGuestHooks {
 namespace {
@@ -137,8 +144,17 @@ void WriteHotCode(u64 address, const u8* bytes, std::size_t size, bool data) {
 }
 
 void ApplyHotEffects(bool force, u64 fresh = 0) {
+    // bbport: the game's menu (submit thread), a new options object (game thread) and, with the
+    // native GPU process, the channel's reader may switch at once; WriteHotCode's protection
+    // changes must not interleave.
+    static std::mutex apply_mutex;
+    std::scoped_lock apply_lock{apply_mutex};
     auto& settings = BbSettings::Get();
-    BbSettings::SyncAntiAliasing(); // the game's AA and FXAA from anti_aliasing and the upscaler
+    // bbport (macOS native GPU process): there bb-gpu syncs them and sends the result
+    // (ApplyGameEffects).
+    if (!BbRemote::FrontActive()) {
+        BbSettings::SyncAntiAliasing(); // the game's AA and FXAA from anti_aliasing and the upscaler
+    }
     for (auto& code : hot_code) {
         if (!code.ready) {
             continue;
@@ -295,7 +311,7 @@ void InstallFxaaStub() {
 }
 
 void PS4_SYSV_ABI FxInitClear(void* context, void* state, void* texture, const float* color) {
-    if (gettid() == getpid() && texture && color &&
+    if (BbThreads::IsGuestMainThread() && texture && color &&
         runtime_memory_is_mapped(reinterpret_cast<u64>(texture) + 0x10, 11 * sizeof(u32))) {
         std::array<u32, 11> target;
         std::memcpy(target.data(), static_cast<const u8*>(texture) + 0x10, sizeof(target));
@@ -422,6 +438,25 @@ bool InstallFxInitClear() {
 }
 
 void ApplyGameEffects() {
+    // bbport (macOS native GPU process): the settings menu runs in bb-gpu, the game's code in the
+    // game process: the menu's effects go there when they change (MsgGameEffects), forced FXAA in
+    // bit 63.
+    if (BbRemote::BackActive()) {
+        static_assert(BbSettings::EffectCount <= 63);
+        BbSettings::SyncAntiAliasing();
+        auto& settings = BbSettings::Get();
+        u64 mask = settings.fxaa_forced.load(std::memory_order_relaxed) ? u64(1) << 63 : 0;
+        for (int e = 0; e < BbSettings::EffectCount; ++e) {
+            if (settings.effects[e].load(std::memory_order_relaxed)) {
+                mask |= u64(1) << e;
+            }
+        }
+        static std::atomic<u64> sent{~u64(0)};
+        if (sent.exchange(mask) != mask) {
+            BbRemote::Back::GameEffects(mask);
+        }
+        return;
+    }
     ApplyHotEffects(false);
 }
 

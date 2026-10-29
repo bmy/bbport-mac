@@ -35,7 +35,11 @@
 #include <pthread.h>
 #include <sys/mman.h>
 #include <sys/uio.h>
+#ifdef __APPLE__
+#include <sys/ucontext.h> // bbport: <ucontext.h> requires _XOPEN_SOURCE on macOS
+#else
 #include <ucontext.h>
+#endif
 #include <unistd.h>
 #include <utility>
 #include "games/bloodborne/hooks_internal.h"

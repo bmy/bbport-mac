@@ -41,19 +41,39 @@
 
 #include <mutex>
 #include <pthread.h>
-#include <x86intrin.h>
+#include "bbport_cpu.h" // bbport: not <x86intrin.h> (arm64: the native GPU process)
 #include <cstring>
 #include <dlfcn.h>
 #include <string>
 #include <fmt/format.h>
 #include <sys/mman.h>
+#ifdef __APPLE__
+#include <sys/ucontext.h> // bbport: <ucontext.h> requires _XOPEN_SOURCE on macOS
+#else
 #include <ucontext.h>
+#endif
 #include "common/signal_context.h"
 #include "core/signals.h"
 #include <vk_mem_alloc.h>
 #include "buffers/buffer_cache_internal.h"
 
 namespace VideoCore {
+
+namespace {
+/// bbport: BB_RESIDENCY_CHUNKS=0: each request gets device memory of its own at offset 0, as in
+/// 0.2, and no slot is reused (diagnostics: sparse binds into shared chunks on drivers that may
+/// mishandle them).
+bool ResidencyChunks() {
+    static const bool on = [] {
+        if (bb_env_off("BB_RESIDENCY_CHUNKS")) {
+            std::printf("Buffer cache: residency without 64 MiB chunks (BB_RESIDENCY_CHUNKS=0)\n");
+            return false;
+        }
+        return true;
+    }();
+    return on;
+}
+} // namespace
 
 void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_block,
                                  bool in_place) {
@@ -258,6 +278,14 @@ std::pair<vk::DeviceMemory, u64> BufferCache::AllocateResidency(u64 bytes) {
         BbStats::residency_alloc_bytes.fetch_add(size, std::memory_order_relaxed);
         return memory;
     };
+    if (!ResidencyChunks()) {
+        const auto memory = allocate(bytes);
+        ASSERT_MSG(memory, "Buffer cache: no device memory for {} bytes (BB_RESIDENCY_CHUNKS=0)",
+                   bytes);
+        residency_chunks[static_cast<VkDeviceMemory>(memory)] = {bytes, bytes, 0, 0};
+        NoteResidencyUnused();
+        return {memory, 0};
+    }
     if (residency_used + bytes > residency_size) {
         u64 size = std::max(bytes, ResidencyBlock);
         vk::DeviceMemory memory =
@@ -456,8 +484,10 @@ void BufferCache::NoteUse(VAddr address, u64 size) {
 void BufferCache::ReleaseResidencySlot(vk::DeviceMemory memory, u64 offset) {
     if (const auto it = residency_chunks.find(static_cast<VkDeviceMemory>(memory));
         it != residency_chunks.end()) {
-        it->second.free_offsets.push_back(offset);
-        ++free_slot_count;
+        if (ResidencyChunks()) {
+            it->second.free_offsets.push_back(offset);
+            ++free_slot_count;
+        }
         it->second.used -= block_size;
         if (it->second.used == 0) {
             it->second.empty_second = BbStats::coarse_second.load(std::memory_order_relaxed);

@@ -40,13 +40,17 @@
 
 #include <mutex>
 #include <pthread.h>
-#include <x86intrin.h>
+#include "bbport_cpu.h" // bbport: not <x86intrin.h> (arm64: the native GPU process)
 #include <cstring>
 #include <dlfcn.h>
 #include <string>
 #include <fmt/format.h>
 #include <sys/mman.h>
+#ifdef __APPLE__
+#include <sys/ucontext.h> // bbport: <ucontext.h> requires _XOPEN_SOURCE on macOS
+#else
 #include <ucontext.h>
+#endif
 #include "common/signal_context.h"
 #include "core/signals.h"
 #include <vk_mem_alloc.h>

@@ -7,7 +7,7 @@ at its start (`Environment:` in the log) and warns about `BB_*` names it does no
 `=1: ...` / `=0: ...` / `=N: ...` say what that value does; `set: ...` means any value
 turns it on (even `0`).
 
-## Settings (85)
+## Settings (87)
 
 What players and the launchers set. The menu, bbport.ini and the launcher write most of them; set one by hand to override them.
 
@@ -66,6 +66,7 @@ What players and the launchers set. The menu, bbport.ini and the launcher write 
 | `BB_MODS_ENABLED` | =0: no mods |
 | `BB_MOUSE_AUTO_ROTATE` | =1: the game's camera auto rotation also with the mouse |
 | `BB_MOUSE_DEADZONE` | =N (default 16 of 127): mouse look dead zone |
+| `BB_NATIVE_GPU` | =0 (macOS): the GPU work in the game process instead of the native GPU process bb-gpu (the default where bb-gpu is built); =1: bb-gpu or nothing |
 | `BB_NATIVE_MOUSE` | =0: mouse look through the right stick instead of the camera hook |
 | `BB_NET_BACKEND` | =thd: The Hunter's Dream online pool (the launcher's online pool) |
 | `BB_OBJECT_MOTION` | =0 / 1: motion vectors of moving objects (the menu's) |
@@ -88,6 +89,7 @@ What players and the launchers set. The menu, bbport.ini and the launcher write 
 | `BB_SHADNET_SERVER` | the shadNet server |
 | `BB_SHADNET_TOKEN` | the shadNet account token (the launcher's) |
 | `BB_SHADNET_WEBAPI` | the shadNet web API server |
+| `BB_SHOW_FPS` | =1 / 0: the FPS counter on / off (show_fps) |
 | `BB_SKIP_CPU_CHECK` | =1: skip the check of the CPU's bsr/bsf behaviour before the game starts |
 | `BB_SKIP_GAME_CHECK` | =1: start with game files that did not pass the check |
 | `BB_TEXTURE_QUALITY` | texture quality over bbport.ini's texture_quality |
@@ -99,7 +101,7 @@ What players and the launchers set. The menu, bbport.ini and the launcher write 
 | `BB_UPSCALE_PRESET` | the upscaler quality preset (the menu's) |
 | `BB_USER_NAME` | the PS4 user name (default Hunter) |
 
-## Tuning (230)
+## Tuning (237)
 
 Defaults to change on a machine where they misbehave, workarounds, and switches that turn a fix off for comparison.
 
@@ -166,10 +168,12 @@ Defaults to change on a machine where they misbehave, workarounds, and switches 
 | `BB_GC_LIVE_BUDGET` | =0: texture cache marks from the startup budget instead of the driver's current one |
 | `BB_GC_PRESSURE_IDLE_SECONDS` | =N (default 5): the same under memory pressure |
 | `BB_GC_SMALL_MARKS` | =P,C: pressure and critical marks in percent on small cards |
+| `BB_GEOMETRY_SHADERS` | =0: the geometry stage hidden and its draws skipped (macOS A/B: KosmicKrisp emulates it with compute passes that end the render pass) |
 | `BB_GPU_COMMAND_WRITES` | =0: GPU command writes not done in place |
 | `BB_GPU_DATA_CHECK` | =0: GPU-written data not checked before CPU reads (#122) |
 | `BB_GPU_LABELS` | =1 / 0: GPU-written labels on / off (default off on AMD GFX8) |
 | `BB_GPU_LABELS_PORTABLE` | =1: portable GPU label writes |
+| `BB_GPU_QOS` | =1 (macOS experiment): the threads every frame waits on run as user-interactive work (performance cores) |
 | `BB_GPU_SPIN_US` | =N: microseconds the GPU thread spins before sleeping (default 200 with 12+ threads) |
 | `BB_GPU_TIMESTAMPS` | =0: timestamps written by the CPU instead of the GPU |
 | `BB_GPU_WRITES_IN_PLACE` | =1: GPU-written buffers in place with write tracking, as before |
@@ -234,8 +238,12 @@ Defaults to change on a machine where they misbehave, workarounds, and switches 
 | `BB_LAYER_WRITE_TRAPS` | =0: no write traps on layer blocks |
 | `BB_LIGHT_GRID_HOOK` | =0: without the light grid hook |
 | `BB_LIGHT_GRID_OPT` | =1 / 0: light grid optimization on / off, over the setting (tests) |
+| `BB_LIST_RESTART` | =1 (macOS): primitive restart kept on list topologies on KosmicKrisp (off there by default: each such indexed draw cost an extra compute dispatch) |
 | `BB_LIVE_HYBRID` | =1: the startup resolution patch with live presets over it |
+| `BB_LOW_HEAP_TOP` | =0: the low heap at the bottom of the low region again, as before 0.3 (A/B) |
 | `BB_MEM_SEMAPHORE_ORDER` | =0: memory semaphores without ordering |
+| `BB_METALFX_EVENTS` | =2 (default) / 1 / 0 (macOS): MetalFX from a thread of its own / that and GPU-side waits on Vulkan / on the submission thread with CPU waits |
+| `BB_METALFX_SYNC` | =1 (macOS): MetalFX synchronous (the CPU waits for each frame) |
 | `BB_MIRROR_ALLOC_PERCENT` | =N (0 off): a mirror that would take device memory past N percent is refused |
 | `BB_MIRROR_COMPACT_AGE` | =N (default 30): mirrors younger than N seconds are left alone |
 | `BB_MIRROR_COMPACT_MB` | =N (default 64): mirror memory without valid blocks over this is given back |
@@ -247,6 +255,7 @@ Defaults to change on a machine where they misbehave, workarounds, and switches 
 | `BB_MIRROR_REPROMOTE_SECONDS` | =N (default 0): blocks sent back are not copied again that soon |
 | `BB_MIRROR_UNBOUND_SECONDS` | =N (0 never): blocks no binding named for N seconds leave VRAM |
 | `BB_MIRROR_VRAM_ONLY` | =1: mirrors in VRAM or not at all |
+| `BB_MOTION_LARGE` | =0: large skeletons left to camera motion vectors, as before |
 | `BB_MOTION_VERTICES_MI` | =N (1-8): object motion vertex buffer in Mi vertices |
 | `BB_NET_MODULE` | =path: the online module to load (default gpu/libbbnet20.so beside bb-probe) |
 | `BB_NP_COUNTRY` | =code: the online user's country (default us) |
@@ -336,7 +345,7 @@ Defaults to change on a machine where they misbehave, workarounds, and switches 
 | `BB_VULKANINFO` | path of vulkaninfo for the launcher |
 | `BB_WORK_RETIRED` | =0: the recording thread and fences do not wait for retired work |
 
-## Diagnostics (274)
+## Diagnostics (281)
 
 Logs, dumps, traces, probes and experiments, for finding bugs. Most cost frame time; none is meant for playing.
 
@@ -462,6 +471,7 @@ Logs, dumps, traces, probes and experiments, for finding bugs. Most cost frame t
 | `BB_IMAGE_CLEAR_LOG` | =1: why an image clear went to the real shader, once per reason |
 | `BB_IMAGE_COPY_LOG` | set: also why a large copy shader was not substituted |
 | `BB_IMAGE_SYNC_LOG` | set: images refreshed most per 5 s, with their flags |
+| `BB_IMAGE_TRACE` | =1: as BB_FILE_TRACE=1 (game file opens and reads, on the texture trace's clock) |
 | `BB_IMAGE_WATCH` | =address: what happens to the image at that address |
 | `BB_IME_TEXT` | =text: the on-screen keyboard answers with that text at once (tests) |
 | `BB_IMITATE_NVIDIA` | =1 (tests on AMD): the port treats this GPU as NVIDIA's |
@@ -485,6 +495,9 @@ Logs, dumps, traces, probes and experiments, for finding bugs. Most cost frame t
 | `BB_MENU_KEYS_FILE` | =file (scripted tests): menu key tokens read from it |
 | `BB_MENU_POINTER_FILE` | =file (tests): menu pointer moves and clicks read from it |
 | `BB_MENU_POINTER_LOG` | =1: the signals of the in-menu check, with every change |
+| `BB_METALFX_DEPTH_REVERSED` | =1 (macOS): MetalFX told the depth is reversed (A/B of the conventions) |
+| `BB_METALFX_INVERT_JITTER` | =1 (macOS): MetalFX gets the jitter with the other sign (A/B) |
+| `BB_METALFX_INVERT_MOTION` | =1 (macOS): MetalFX gets the motion vectors negated (A/B) |
 | `BB_META_FIXED_BASE` | set: shader prediction from metadata at a fixed program base |
 | `BB_META_NO_SYNTH` | set: shader prediction without synthesized inputs |
 | `BB_META_RECIPE_FETCH` | set: shader prediction without generated fetch shaders |
@@ -530,10 +543,12 @@ Logs, dumps, traces, probes and experiments, for finding bugs. Most cost frame t
 | `BB_READ_SAMPLE` | =spec: sampling of which guest memory the CPU reads |
 | `BB_RECORDER_TRACE` | =1: most frequent command buffer callers every 2000 calls |
 | `BB_REGS_CHECK` | set: registers compared with the defaults after a reset |
+| `BB_RESIDENCY_CHUNKS` | =0: VRAM copies of guest memory each in device memory of their own, without 64 MiB chunks or reused slots (sparse binds on drivers that may mishandle shared chunks) |
 | `BB_RESIDENCY_MIX` | =1 / 2: bindings per kind every 2 s |
 | `BB_RESIDENCY_REPORT` | =file: when it appears, blocks bound in place and why they have no VRAM copy |
 | `BB_RESIDENCY_VRAM_LIMIT_MB` | =N (tests): pretend VRAM ends at N MiB |
 | `BB_RES_STATS` | =1: where bound shaders read their resource descriptors from |
+| `BB_RETINA` | =0 (macOS): the window's drawable sized in points instead of pixels |
 | `BB_RE_ADVANCE` | =1: probe of Scaleform's MovieImpl::Advance |
 | `BB_RE_ANALOG` | =1: probe of the analog getter |
 | `BB_RE_CAMERA` | =1: camera probe |
@@ -583,6 +598,7 @@ Logs, dumps, traces, probes and experiments, for finding bugs. Most cost frame t
 | `BB_TIMELINE` | =file: a timeline of frames on their way to the GPU |
 | `BB_TIMELINE_START` | =seconds (default 30): BB_TIMELINE starts recording this late |
 | `BB_TLS_WATCH` | =offset: who writes that static TLS variable of the main thread |
+| `BB_TOGGLES` | =mask: experiment bits from the start, as BB_TOGGLE_FILE without a file (the launcher's) |
 | `BB_TOGGLE_FILE` | =file: experiment bits re-read every 250 ms |
 | `BB_TRACE_ADDR` | =addr:size: that range traced from the start (with BB_TRACE_SIZE) |
 | `BB_TRACE_CB` | =hash: how that shader's constant buffers were bound |
@@ -617,7 +633,7 @@ Logs, dumps, traces, probes and experiments, for finding bugs. Most cost frame t
 | `BB_WRITE_VERIFY` | =1: page protection to catch writes nothing announced |
 | `BB_ZERO_SCAN` | =seconds: that long after the first mapping, how much direct memory is zero |
 
-## Internal (30)
+## Internal (34)
 
 Passed between the launchers, run.py / run.sh and the game. Not meant to be set by hand.
 
@@ -627,10 +643,13 @@ Passed between the launchers, run.py / run.sh and the game. Not meant to be set 
 | `BB_BUNDLED_VK_LAYER_PATH` | the package's own Vulkan layers, found before the host's (set by the launcher) |
 | `BB_CLIENT_VERSION` | the online client's name for the server (bbport VERSION, set by run.py) |
 | `BB_DATA_DIR` | the port's data folder (set by run.py) |
+| `BB_DMEM_AUTO` | =1: set by tools/macos/run.sh when BB_DMEM_MB was not given: run.sh sizes direct memory again after an in-game restart |
 | `BB_FSR411_OUT` | where the launcher's FSR 4.1.1 build puts its assets |
 | `BB_FSR4CAP_CLEAN` | =1: the FSR 4.1.1 build removes its work folder afterwards (set by the launcher) |
 | `BB_FSR4CAP_TOOLS` | the FSR 4.1.1 build's tools folder (set by the launcher) |
 | `BB_FSR4CAP_WORK` | the FSR 4.1.1 build's work folder (set by the launcher) |
+| `BB_GPU_DEPS` | (macOS) the native GPU process's library folder (default deps-arm64 beside bb-probe's folder) |
+| `BB_GPU_PROCESS` | (macOS) the native GPU process to start (default gpu-arm64/bb-gpu in bb-probe's folder) |
 | `BB_GPU_USER_DIR` | the user folder as the GPU library and the online module see it (set by the runtime) |
 | `BB_IMAGE_SHAPES` | the package's image shapes list for spare images (set by run.py) |
 | `BB_INTERNAL_HEIGHT` | the game's internal screen height (default 1080; set by run.py) |
@@ -653,13 +672,19 @@ Passed between the launchers, run.py / run.sh and the game. Not meant to be set 
 | `BB_TIMEOUT` | =seconds: run.py stops the game after this long (tests) |
 | `BB_USER_DIR` | the user folder (saves, settings; set by run.py) |
 | `BB_VBLANK_HZ` | =N (default 60, 0: 480): the guest vblank rate (1000 for uncapped; set by run.py) |
+| `BB_VULKAN_LIBRARY` | the Vulkan loader by path (macOS: the app's own copy, as the default search tries leaf names only) |
 
-## Build (14)
+## Build (24)
 
 Read by the build and packaging scripts only.
 
 | Variable | What it does |
 |---|---|
+| `BB_APP` | macOS: where tools/macos/build_launcher.sh puts the app (default out/bbport.app) |
+| `BB_ARCH` | =x86_64 (default) / arm64: the architecture tools/macos/setup_deps.sh builds for (arm64: the native GPU process's libraries) |
+| `BB_CCACHE` | =0: the macOS build scripts without ccache |
+| `BB_DEPS` | macOS: the x86-64 dependency prefix (default deps-x86_64) |
+| `BB_DEPS_ARM64` | macOS: the arm64 dependency prefix the native GPU process builds with (default deps-arm64) |
 | `BB_FSR4CAP_CHECKED` | internal to tools/fsr4cap: the tools were checked |
 | `BB_FSR4CAP_FP8` | =1: also the FP8 FSR 4.1.1 variant through Proton's emulation; 0: never |
 | `BB_FSR4CAP_ON_HOST` | set: the FSR 4.1.1 capture runs without systemd-run |
@@ -671,6 +696,11 @@ Read by the build and packaging scripts only.
 | `BB_FSR4_TIERS` | FSR 4 v07 asset tiers to download (tools/fetch_fsr4_assets.sh) |
 | `BB_IN_NIX_SHELL` | internal to run.sh: already inside the nix shell |
 | `BB_LTO` | =1: link-time optimization (packaging) |
+| `BB_NET` | =OFF: no online module (shadNet) in the build (CMake option) |
 | `BB_PACKAGE_FSR411` | =1: the AppImage carries FSR 4.1.1 models (never in public packages) |
 | `BB_PGO` | =generate / use: profile-guided optimization (CMake option) |
 | `BB_PGO_DIR` | the PGO profile folder (CMake option) |
+| `BB_REBUILD` | =1: tools/macos/update.sh builds everything again |
+| `BB_RELEASE` | =version: tools/macos/build_launcher.sh makes a release app (no repository path, no game icon) |
+| `BB_SKIP_GPU` | set: tools/macos/build.sh builds the loader only (the GPU library already built) |
+| `BB_VERSION` | the version tools/macos/package.sh packages (unless given as its first argument) |

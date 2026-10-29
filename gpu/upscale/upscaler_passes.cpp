@@ -184,9 +184,9 @@ void TemporalUpscaler::RecordEasu(vk::CommandBuffer cmdbuf, vk::ImageView color,
     };
     cmdbuf.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &written});
 }
-void TemporalUpscaler::ExtraSharpen(vk::Image target, bool ldr, u32 w, u32 h) {
+void TemporalUpscaler::ExtraSharpen(vk::Image target, bool ldr, u32 w, u32 h, float applied) {
     const auto& settings = BbSettings::Get();
-    const float extra = std::clamp(settings.sharpness.load(), 0.0f, 2.0f) - 1.0f;
+    const float extra = std::clamp(settings.sharpness.load(), 0.0f, 2.0f) - applied;
     if (!settings.sharpen || extra <= 0.0f) {
         return;
     }

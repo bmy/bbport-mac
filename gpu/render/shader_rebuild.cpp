@@ -38,7 +38,11 @@
 #include <sys/wait.h>
 #include <csetjmp>
 #include <dlfcn.h>
+#ifdef __APPLE__
+#include <sys/ucontext.h> // bbport: <ucontext.h> requires _XOPEN_SOURCE on macOS
+#else
 #include <ucontext.h>
+#endif
 #include <csignal>
 #include <unistd.h>
 #endif
@@ -556,6 +560,19 @@ int RebuildCaches() {
             continue;
         }
         const fs::path dir = entry.path();
+#ifdef __APPLE__
+        // bbport (macOS): only this architecture's folders (BlobStore::Open: <serial> x86-64,
+        // <serial>-arm64 the native GPU process, which translates its own: SRT walkers as
+        // bytecode there, x86 code here).
+#if defined(__x86_64__)
+        constexpr bool arm64_build = false;
+#else
+        constexpr bool arm64_build = true;
+#endif
+        if (dir.filename().string().ends_with("-arm64") != arm64_build) {
+            continue;
+        }
+#endif
         auto header = ReadFile(dir / "profile.bin");
         if (header.size() != HeaderWords * 4 + sizeof(Shader::Profile)) {
             continue;

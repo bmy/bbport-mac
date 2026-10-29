@@ -70,9 +70,15 @@ bool CopySkipSameOn() {
 
 /// Stage B: copy_filter_room from its busy share, every ~0.3 s.
 void UpdateCopyFilterRoom(const DrawPipe& pipe) {
-    static u64 last_tsc = __rdtsc(), last_busy = 0;
-    const u64 tsc = __rdtsc();
-    if (tsc - last_tsc < 1'000'000'000ull) {
+    // bbport: BbCpu::Ticks, as busy_cycles (__rdtsc on x86-64; arm64: the native GPU process).
+#if defined(__aarch64__)
+    static const u64 interval = BbCpu::TicksFromUs(300'000);
+#else
+    constexpr u64 interval = 1'000'000'000ull;
+#endif
+    static u64 last_tsc = BbCpu::Ticks(), last_busy = 0;
+    const u64 tsc = BbCpu::Ticks();
+    if (tsc - last_tsc < interval) {
         return;
     }
     const u64 busy = pipe.busy_cycles.load(std::memory_order_relaxed);

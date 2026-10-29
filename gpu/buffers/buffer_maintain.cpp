@@ -41,13 +41,17 @@
 
 #include <mutex>
 #include <pthread.h>
-#include <x86intrin.h>
+#include "bbport_cpu.h" // bbport: not <x86intrin.h> (arm64: the native GPU process)
 #include <cstring>
 #include <dlfcn.h>
 #include <string>
 #include <fmt/format.h>
 #include <sys/mman.h>
+#ifdef __APPLE__
+#include <sys/ucontext.h> // bbport: <ucontext.h> requires _XOPEN_SOURCE on macOS
+#else
 #include <ucontext.h>
+#endif
 #include "common/signal_context.h"
 #include "core/signals.h"
 #include <vk_mem_alloc.h>
@@ -102,12 +106,17 @@ bool VramTrapHandler(void* context, void* fault_address) {
             return false;
         }
     }
-    const auto* g = static_cast<const ucontext_t*>(context)->uc_mcontext.gregs;
+    const auto* g = Common::Gregs(context);
     const u64 rip = u64(g[REG_RIP]);
     constexpr u64 Image = 0x800000000ull, ImageEnd = 0x810000000ull;
     u64 caller = 0;
+#if defined(__APPLE__) && !defined(__x86_64__)
+    // bbport (the native GPU process): the guest's stack isn't this one; no caller.
+    const u64* stack = nullptr;
+#else
     const auto* stack = reinterpret_cast<const u64*>(g[REG_RSP]);
-    for (u32 i = 0; i < 48; ++i) {
+#endif
+    for (u32 i = 0; stack && i < 48; ++i) {
         if (stack[i] >= Image && stack[i] < ImageEnd) {
             caller = stack[i] - Image;
             break;

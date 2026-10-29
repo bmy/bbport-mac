@@ -6,7 +6,7 @@
 // module on them) lose all access for 200 ms; the first access to each is counted as a read or a
 // write, with the code that made it (game offset or host). Each 10 s: the counts and top readers.
 #include "shim/bb_env.h"
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__APPLE__) // bbport (macOS): Linux's signal context
 
 #include <array>
 #include <atomic>
@@ -207,7 +207,7 @@ void Start() {
 
 #endif
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__APPLE__)
 extern "C" void bbgpu_read_sample_start() {
     BbReadSample::Start();
 }

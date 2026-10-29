@@ -7,7 +7,9 @@
 //   thread per process). A message is a header and up to MaxPayload bytes.
 // - A synchronous call is a ring message that names a reply slot; the reader runs the handler and
 //   writes the result into that slot. Calls stay in order with the asynchronous messages before
-//   them (a write fault after the mapping it touches).
+//   them on the same ring (a write fault after the mapping it touches). bbport: faults from threads
+//   that hold the runtime's lock go on a ring of their own (ControlBlock::locked) and may overtake
+//   the main ring's messages; their handlers see bb-gpu's tables as they are then.
 // - bbport: while it answers a call, the handler may ask the caller (Reply::Ask) through the same
 //   slot; the waiting caller runs its `serve` for it on its own thread and answers, and the
 //   handler goes on (bb-gpu's write faults: the faulting thread applies their protections).
@@ -373,6 +375,20 @@ public:
         position = std::min(position, c.head.load(std::memory_order_acquire));
         WaitUntil(c.space_word, c.space_sleepers,
                   [&] { return c.tail.load(std::memory_order_acquire) >= position; });
+    }
+
+    /// bbport: WaitHandled for at most `limit`: false if the reader was not there by then.
+    bool WaitHandledFor(std::uint64_t position, std::chrono::nanoseconds limit) {
+        RingControl& c = layout->control[In()];
+        position = std::min(position, c.head.load(std::memory_order_acquire));
+        const auto deadline = std::chrono::steady_clock::now() + limit;
+        while (c.tail.load(std::memory_order_acquire) < position) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                return false;
+            }
+            std::this_thread::yield();
+        }
+        return true;
     }
 
     /// Wakes this side's reader (after its stop condition became true).

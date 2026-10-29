@@ -908,7 +908,16 @@ void FreshThread() {
             [](const Message& message, auto&& reply) {
                 if (message.type == MsgFreshRange) {
                     const auto args = Payload<FreshArgs>(message);
-                    g.channel->WaitHandled(args.after);
+                    // At most 2 ms: the main reader can wait for GPU work, which could wait for
+                    // the hook's thread (a guest lock it holds). Then as without the wait.
+                    if (!g.channel->WaitHandledFor(args.after, std::chrono::milliseconds{2})) {
+                        static std::atomic<u64> late{0};
+                        const u64 n = late.fetch_add(1, std::memory_order_relaxed);
+                        if (n < 4 || (n & (n - 1)) == 0) {
+                            std::printf("GPU process: a fresh range went ahead of the main channel "
+                                        "after 2 ms (%llu times)\n", (unsigned long long)(n + 1));
+                        }
+                    }
                     GuestHookRange(MsgFreshRange, RangeArgs{args.address, args.size});
                 }
                 const ResultReply out{0, 0};
@@ -1390,7 +1399,7 @@ void MemoryReadBacking(uintptr_t address, void* data, u64 size) {
 /// whose write fault this thread is answering (fault_reply), else by the protection thread.
 void ForwardProtect(const ProtectArgs& args) {
     ResultReply result{};
-    if (fault_reply) {
+    if (fault_reply && fault_reply->CanAsk()) {
         fault_reply->Ask(MsgProtect, &args, sizeof(args), &result, sizeof(result));
         return;
     }

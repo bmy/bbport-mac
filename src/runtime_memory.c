@@ -148,6 +148,22 @@ static void write_unlock(void) {
         if (mirror_queued) { mirror_queued=0; flush_mirror(); }
     }
 }
+#ifdef __APPLE__
+/* bbport (macOS): a thread takes the read lock once, nested reads count only. Darwin's rwlock need
+ * not prefer readers (glibc's does): a nested rdlock behind a waiting writer would wait for itself
+ * (a fault inside the runtime, its protections applied by this thread). */
+static __thread unsigned read_held;
+static void read_lock(void) {
+    ++read_depth;
+    if (exclusive_depth || read_held) return;
+    read_held=1;
+    if (!pthread_rwlock_tryrdlock(&lock)) return;
+    const uint64_t t0=lock_threshold() ? lock_now_ns() : 0;
+    pthread_rwlock_rdlock(&lock);
+    if (t0) { const uint64_t w=lock_now_ns()-t0; if (w>=lock_threshold()) lock_report("read wait",w,__builtin_return_address(0),lock_writer); }
+}
+static void read_unlock(void) { if (!--read_depth && read_held) { read_held=0; pthread_rwlock_unlock(&lock); } }
+#else
 static void read_lock(void) {
     ++read_depth;
     if (exclusive_depth) return;
@@ -157,6 +173,7 @@ static void read_lock(void) {
     if (t0) { const uint64_t w=lock_now_ns()-t0; if (w>=lock_threshold()) lock_report("read wait",w,__builtin_return_address(0),lock_writer); }
 }
 static void read_unlock(void) { --read_depth; if (!exclusive_depth) pthread_rwlock_unlock(&lock); }
+#endif
 /* bbport (native GPU process): this thread holds the lock (it faulted inside the runtime). */
 int runtime_memory_lock_held(void) { return exclusive_depth || read_depth; }
 static Block blocks[LIMIT];

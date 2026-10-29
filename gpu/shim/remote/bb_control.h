@@ -6,6 +6,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 
 #include "remote/bb_channel.h"
@@ -74,6 +75,12 @@ struct ControlBlock {
     alignas(4096) SharedState state;
 };
 static_assert(sizeof(ControlBlock) <= ControlBytes);
+// bbport: one layout for x86-64 (the game process) and arm64 (bb-gpu): a change in either shows here.
+static_assert(sizeof(ChannelLayout) == 2630208);
+static_assert(offsetof(ControlBlock, protect) == sizeof(ChannelLayout) &&
+              offsetof(ControlBlock, fresh) == 2 * sizeof(ChannelLayout) &&
+              offsetof(ControlBlock, locked) == 3 * sizeof(ChannelLayout) &&
+              offsetof(ControlBlock, state) == (4 * sizeof(ChannelLayout) + 4095) / 4096 * 4096);
 static_assert(ControlBytes % 16384 == 0 && HostSpanBytes % 16384 == 0);
 
 } // namespace BbRemote

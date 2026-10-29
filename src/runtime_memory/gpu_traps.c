@@ -156,7 +156,7 @@ void runtime_memory_trap(uintptr_t address, uint64_t size, unsigned reason, int 
 void runtime_memory_trap_seq(uintptr_t address, uint64_t size, unsigned reason, int on, uint64_t seq, int lift) {
     if (!__atomic_load_n(&trap_seqs,__ATOMIC_ACQUIRE)) {
         void *bytes=mmap(NULL,(TRAP_LIMIT>>12)*sizeof(uint64_t),PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE,-1,0);
-        if (bytes==MAP_FAILED) { perror("bbport: write trap order table"); return; }
+        if (bytes==MAP_FAILED) { trap_change(address,size,reason,on && !lift,0,0); return; } /* unordered, as before */
         uint64_t *expected=NULL;
         if (!__atomic_compare_exchange_n(&trap_seqs,&expected,(uint64_t *)bytes,0,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE))
             munmap(bytes,(TRAP_LIMIT>>12)*sizeof(uint64_t));

@@ -372,19 +372,34 @@ public:
     uint32_t Used() const { return used; }
 
 private:
-    /// Last frame's entry for this frame's `occurrence` of `base` (an identity): by order, or
-    /// (nearest, the anchor known) the unclaimed one of that identity nearest the anchor, within
-    /// MaxStep. `candidate`: last frame had one to consider (none near enough: a jump).
+    /// Last frame's entry for this frame's `occurrence` of `base` (an identity): by order; or
+    /// (nearest) by order when that one is unclaimed and near, else the unclaimed one of that
+    /// identity nearest the anchor, within MaxStep. `candidate`: last frame had one to consider
+    /// (none near enough: a jump).
     template <class K, class V, class H>
     const V* Previous(const FlatMap<K, V, H>& before, const FlatMap<K, uint32_t, H>& counts,
                       FlatMap<K, uint32_t, H>& taken, K base, uint32_t occurrence,
                       const Anchor& anchor, bool& candidate) const {
-        if (!nearest || !anchor.valid) {
+        if (!nearest) {
             K key = base;
             key.occurrence = occurrence;
             const V* prev = before.find(key);
             candidate = prev != nullptr;
             return prev && prev->anchor.Near(anchor) ? prev : nullptr;
+        }
+        {   // the order match first, when unclaimed and near (ties, close objects: as upstream)
+            K key = base;
+            key.occurrence = occurrence;
+            const V* prev = taken.find(key) ? nullptr : before.find(key);
+            if (prev && prev->anchor.Near(anchor)) {
+                candidate = true;
+                taken[key] = 1;
+                return prev;
+            }
+            if (!anchor.valid) {
+                candidate = prev != nullptr;
+                return nullptr;
+            }
         }
         const uint32_t* count = counts.find(base);
         candidate = false;
@@ -409,7 +424,9 @@ private:
                 continue;
             }
             candidate = true;
-            const float distance = prev->anchor.Distance2(anchor);
+            // An unknown anchor only when nothing known is near.
+            const float distance = prev->anchor.valid ? prev->anchor.Distance2(anchor)
+                                                      : Anchor::MaxStep * Anchor::MaxStep;
             if (distance < best_distance || (!best && distance <= best_distance)) {
                 best = prev;
                 best_key = key;

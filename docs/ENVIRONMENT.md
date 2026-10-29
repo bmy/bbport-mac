@@ -101,7 +101,7 @@ What players and the launchers set. The menu, bbport.ini and the launcher write 
 | `BB_UPSCALE_PRESET` | the upscaler quality preset (the menu's) |
 | `BB_USER_NAME` | the PS4 user name (default Hunter) |
 
-## Tuning (238)
+## Tuning (239)
 
 Defaults to change on a machine where they misbehave, workarounds, and switches that turn a fix off for comparison.
 
@@ -256,6 +256,7 @@ Defaults to change on a machine where they misbehave, workarounds, and switches 
 | `BB_MIRROR_UNBOUND_SECONDS` | =N (0 never): blocks no binding named for N seconds leave VRAM |
 | `BB_MIRROR_VRAM_ONLY` | =1: mirrors in VRAM or not at all |
 | `BB_MOTION_LARGE` | =0: large skeletons left to camera motion vectors, as before |
+| `BB_MOTION_MATCH` | =order: repeated draws of one mesh find last frame's by draw order (the default off macOS), not by the nearest object |
 | `BB_MOTION_VERTICES_MI` | =N (1-8): object motion vertex buffer in Mi vertices |
 | `BB_NET_MODULE` | =path: the online module to load (default gpu/libbbnet20.so beside bb-probe) |
 | `BB_NP_COUNTRY` | =code: the online user's country (default us) |

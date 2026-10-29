@@ -246,6 +246,7 @@ BB_ENV(BB_MIRROR_REPROMOTE_SECONDS, TUNING, "=N (default 0): blocks sent back ar
 BB_ENV(BB_MIRROR_UNBOUND_SECONDS, TUNING, "=N (0 never): blocks no binding named for N seconds leave VRAM")
 BB_ENV(BB_MIRROR_VRAM_ONLY, TUNING, "=1: mirrors in VRAM or not at all")
 BB_ENV(BB_MOTION_LARGE, TUNING, "=0: large skeletons left to camera motion vectors, as before")
+BB_ENV(BB_MOTION_MATCH, TUNING, "=order: repeated draws of one mesh find last frame's by draw order (the default off macOS), not by the nearest object")
 BB_ENV(BB_MOTION_VERTICES_MI, TUNING, "=N (1-8): object motion vertex buffer in Mi vertices")
 BB_ENV(BB_NET_MODULE, TUNING, "=path: the online module to load (default gpu/libbbnet20.so beside bb-probe)")
 BB_ENV(BB_NP_COUNTRY, TUNING, "=code: the online user's country (default us)")

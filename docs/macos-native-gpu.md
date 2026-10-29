@@ -276,6 +276,31 @@ KosmicKrisp its own shader cache.
   belongs here, its window part in bb-gpu). With the native GPU process the keyboard and
   gamepad drive the game's menus.
 
+**bbport 0.7 (2026-10-29).** 0.7 has one memory model: the GPU uses the game's memory in place.
+How it crosses the split:
+
+- `BbGuestMemory::Install` runs in bb-gpu (the rasterizer is there). Its
+  `runtime_memory_set_guest_chunk_*` calls land in bb-gpu (`bb_gpu_main.cpp`), which tells the
+  game process (`MsgGuestMemory`) after `MsgInit`. The game process's runtime then gets a
+  chunk allocator that calls bb-gpu (`MsgChunkAlloc`, `MsgChunkFree` on `ControlBlock::protect`,
+  game process -> bb-gpu, served by a bb-gpu thread that never waits for the game process: the
+  runtime may hold its lock). bb-gpu's GPU imports its own view of the whole pool
+  (`runtime_memory_backing_pointer`) and answers `CHUNK_IMPORTED`, so the game's mappings stay
+  the pool's and the mirror stays right. Dma-buf chunks and private regions (memory one
+  process alone has) are refused at the start.
+- Lazy imports (`BB_GUEST_LAZY=1`): `runtime_memory_note_pinned` is a call to the game process
+  (`MsgNotePinned`), the pool descriptor bb-gpu's own.
+- Heaps growing on demand: the hooks and `runtime_memory_commit`/`_decommit` are the game
+  process's; a piece's new or returned chunk reaches bb-gpu's GPU as `MIRROR_REMAP` ->
+  `MsgGpuRemap` (unmap and map hooks over what is mapped). The guest hooks' fresh, dead and live
+  ranges go to bb-gpu's buffer cache (`MsgFreshRange`, `MsgDeadRange`, `MsgLiveRange`).
+- Write faults carry the game's trap reasons for the page; reasons bb-gpu holds none of (a trap
+  that crossed a remap) are lifted, and the fault runs through the same handlers as in one
+  process (`Core::Signals`: the layer's VRAM copy traps, then page tracking).
+- The pad recording clock (`bbgpu_world_*`) and the Steam pad flag are in `SharedState`; the
+  camera speeds and light grid setting go to the game process (`MsgGameSettings`), trophy
+  pop-ups to bb-gpu (`MsgShowTrophy`).
+
 **Phase 6, started (2026-10-08).**
 
 - ThreadSanitizer (GCC 13, Linux) on the channel, memory and table tests and on

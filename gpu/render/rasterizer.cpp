@@ -560,6 +560,18 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
         bool gated = !all_motion;
         u64 palette = 0, instance_data = 0;
         Motion::Anchor anchor{};
+#ifdef __APPLE__
+        // bbport (macOS): the anchor from the most skeleton-like buffer (a character palette over
+        // a large one over a small one), not the first: a 144-byte constant buffer of some
+        // character shaders (a small palette by size) reads 0 0 1 one frame and 0 0 0 the next,
+        // a jump every other frame and no history for those draws.
+        const auto anchor_rank = [](Motion::BufferRole role) {
+            return role == Motion::BufferRole::Skeleton        ? 3
+                   : role == Motion::BufferRole::LargeSkeleton ? 2
+                                                               : 1;
+        };
+        int anchor_from = 0;
+#endif
         {
         BB_SECTION(MotionHash);
         for (const auto& resource : vs.buffers) {
@@ -575,7 +587,12 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
                 continue;
             }
             const void* data = reinterpret_cast<const void*>(address);
+#ifdef __APPLE__
+            if (anchor_rank(role) > anchor_from) {
+                anchor_from = anchor_rank(role);
+#else
             if (!anchor.valid) {
+#endif
                 const float* bone = static_cast<const float*>(data);
                 anchor = {bone[3], bone[7], bone[11], true};
             }

@@ -91,7 +91,14 @@ struct SwVertexRuntimeInfo {
 struct MotionVectors {
     static constexpr u32 CurrentLocation = 30;  ///< varying: current clip position
     static constexpr u32 PreviousLocation = 31; ///< varying: previous clip position, z = valid
+#ifdef __APPLE__
+    /// bbport (macOS): the first slot after the G-buffer's five targets. At 7, after two unused
+    /// slots, KosmicKrisp's passes (Metal 4) never stored a pixel of it (an empty image in every
+    /// dump; our own Metal path, the same layout, did).
+    static constexpr u32 Output = 5;
+#else
     static constexpr u32 Output = 7;            ///< color attachment index
+#endif
     /// Per-draw parameters (u32x4: store base, load base, vertices per instance, flags) and
     /// the position array (vec4 per vertex; element 0 is scratch), fixed for the session.
     static inline u64 params_address = 0;

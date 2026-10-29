@@ -340,13 +340,36 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
             bc.color_dst_factor == Gcn::BlendControl::BlendFactor::DstColor;
     }
 
+#ifdef __APPLE__
+    // bbport (macOS): no target bound at or past the motion slot (none in a gap below it either:
+    // with five bound, they are 0-4).
+    const bool motion_slot_free = [&] {
+        for (u32 cb = Shader::MotionVectors::Output; cb < Gcn::NUM_COLOR_BUFFERS; ++cb) {
+            if (bound(cb)) {
+                return false;
+            }
+        }
+        return true;
+    }();
+    if (num_bound >= 5 && !motion_slot_free) {
+        if (static std::atomic_flag told; !told.test_and_set(std::memory_order_relaxed)) {
+            std::printf("Object motion: a pass with %u targets binds one at or past slot %u: no "
+                        "motion vectors for it\n", num_bound, Shader::MotionVectors::Output);
+        }
+    }
+#endif
     // Only potentially animated G-buffer draws may use the extra motion attachment. The
     // ordinary stage variant is needed first to inspect the vertex shader's resources.
     // Not for FSR 1 (spatial: no motion vectors).
     const bool motion_possible =
         Shader::MotionVectors::positions_address != 0 && num_bound >= 5 &&
         !BbSettings::IsSpatial(BbSettings::Get().upscaler.load(std::memory_order_relaxed)) &&
-        !regs.color_buffers[Shader::MotionVectors::Output] && db.DepthValid() &&
+#ifdef __APPLE__
+        motion_slot_free &&
+#else
+        !regs.color_buffers[Shader::MotionVectors::Output] &&
+#endif
+        db.DepthValid() &&
         db.NumSamples() == 1 && !regs.IsClipDisabled() &&
         regs.stage_enable.raw == Gcn::ShaderStageEnable::VgtStages::Vs;
     sel.motion = false;
@@ -438,7 +461,14 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
         color_buffer.data_format = Gcn::DataFormat::Format32_32;
         color_buffer.num_format = Gcn::NumberFormat::Uint;
         color_buffer.swizzle = Gcn::IdentityMapping;
+#ifdef __APPLE__
+        // bbport (macOS): all channels (a two-channel format): KosmicKrisp applies a partial mask
+        // in the shader through its framebuffer-fetch path, the one thing only this target had.
+        key.write_masks[mv] = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+                              vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
+#else
         key.write_masks[mv] = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG;
+#endif
         key.color_samples[mv] = 1;
     }
 

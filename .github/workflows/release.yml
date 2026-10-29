@@ -178,7 +178,9 @@ jobs:
           key: ccache-${{ runner.os }}-${{ runner.arch }}-${{ github.ref_name }}-${{ github.run_id }}
 
       - name: Package
-        run: bash tools/macos/package.sh "${{ steps.version.outputs.version }}"
+        run: |
+          set -o pipefail
+          bash tools/macos/package.sh "${{ steps.version.outputs.version }}" 2>&1 | tee out/package.log
 
       # The package report as annotations (readable through the checks API, unlike the logs).
       - name: Report
@@ -196,9 +198,10 @@ jobs:
           # Up to 8 annotations of 80 lines per log: the errors stay readable from the API
           # (check-run annotations) when the full log isn't.
           for log in out/gpu-errors.txt out/loader-build.log out/gpu-arm64-errors.txt \
-                     out/gpu-arm64-configure.log deps-arm64/setup.log; do
+                     out/gpu-arm64-configure.log deps-arm64/setup.log out/package.log; do
             [[ -f $log ]] || continue
-            { [[ $log == *errors.txt ]] && cat "$log" || grep -E 'error' "$log"; } | head -640 |
+            { [[ $log == *errors.txt ]] && cat "$log" ||
+              { [[ $log == */package.log ]] && tail -80 "$log" || grep -E 'error' "$log"; }; } | head -640 |
               split -l 80 - "/tmp/annotation-$(basename "$log")-"
             for part in /tmp/annotation-"$(basename "$log")"-*; do
               [[ -f $part ]] && echo "::error title=$log $(basename "$part")::$(python3 -c 'import sys; print(sys.stdin.read().replace("%","%25").replace("\r","%0D").replace("\n","%0A"), end="")' < "$part")"

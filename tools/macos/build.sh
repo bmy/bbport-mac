@@ -46,7 +46,10 @@ if [[ -z ${BB_SKIP_GPU:-} ]]; then
     # Our x86-64 prefix first; Homebrew only supplies header-only packages (Boost, magic_enum,
     # robin-map, VMA). LTO/PGO stay off until the port runs. BB_NET=OFF: no online module (0.51's
     # gpu/bbnet) on the Mac yet; the runtime plays offline without it.
+    # No OpenSSL (0.7's trophy names): the app bundles only libraries this build makes, and
+    # CMake would find Homebrew's arm64 libcrypto (trophy unlocks are then shown by number).
     cmake -S gpu -B out/gpu -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBB_NET=OFF \
+        -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON \
         -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_SYSTEM_NAME=Darwin -DCMAKE_SYSTEM_PROCESSOR=x86_64 \
         -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
         -DCMAKE_PREFIX_PATH="$DEPS;$BREW_PREFIX" -DBB_LTO=OFF -DBB_PGO=off "${LAUNCHER[@]}" \

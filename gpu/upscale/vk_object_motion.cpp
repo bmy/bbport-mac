@@ -336,8 +336,13 @@ u32 ObjectMotion::PrepareDraw(const DrawInfo& draw, Motion::Anchor anchor) {
     }
     const auto allocation = history.Prepare(draw, anchor);
     if (tracing) {
-        std::printf("Motion trace:   -> store %u load %u vertices %u+%u\n", allocation.store,
-                    allocation.load, allocation.first_vertex, allocation.vertices);
+        // bbport: the rest of the draw's identity too (what changed when a draw finds no history).
+        std::printf("Motion trace:   -> store %u load %u vertices %u+%u topology %llx instance %u+%u "
+                    "data %llx anchor %.2f %.2f %.2f%s\n",
+                    allocation.store, allocation.load, allocation.first_vertex, allocation.vertices,
+                    (unsigned long long)draw.topology, draw.first_instance, draw.instances,
+                    (unsigned long long)draw.instance_data, anchor.x, anchor.y, anchor.z,
+                    anchor.valid ? "" : " (none)");
     }
     u32 flags = (allocation.store ? Shader::MotionVectors::FlagStore : 0) |
                 (allocation.load ? Shader::MotionVectors::FlagLoad : 0);

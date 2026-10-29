@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstdlib>
+#include <cstring>
 
 #include <algorithm>
 #include <cmath>
@@ -240,26 +241,53 @@ struct Draw {
 };
 
 // Where a draw's object is (its first bone's translation, world space). Repeated draws of one
-// mesh are matched by their order; a match whose object jumped further than MaxStep since last
-// frame is another object (an earlier one was culled) and gets camera vectors instead.
+// mesh are matched by their order (bbport, macOS: by the nearest anchor, NearestMatching); a
+// match whose object jumped further than MaxStep since last frame is another object (an earlier
+// one was culled) and gets camera vectors instead.
 struct Anchor {
     float x{}, y{}, z{};
     bool valid{};
     static constexpr float MaxStep = 0.5f;
     bool Near(const Anchor& other) const {
+        return Distance2(other) <= MaxStep * MaxStep;
+    }
+    /// bbport: squared distance; 0 when either is unknown (as Near: no evidence of another object).
+    float Distance2(const Anchor& other) const {
         if (!valid || !other.valid) {
-            return true;
+            return 0.0f;
         }
         const float dx = x - other.x, dy = y - other.y, dz = z - other.z;
-        return dx * dx + dy * dy + dz * dz <= MaxStep * MaxStep;
+        return dx * dx + dy * dy + dz * dz;
     }
 };
+
+/// bbport: how repeated draws of one mesh (one identity, several objects: three enemies of a
+/// kind, the messengers) find last frame's: the nearest unclaimed anchor among last frame's
+/// draws of that identity (default on macOS), or their order (BB_MOTION_MATCH=order, upstream's
+/// way and the default elsewhere). The game sorts its draws; when two such objects swapped
+/// places in the list, both lost their history for that frame (a trail behind each).
+inline bool NearestMatching() {
+    static const bool nearest = [] {
+        if (const char* env = std::getenv("BB_MOTION_MATCH"); env && *env) {
+            return std::strcmp(env, "order") != 0;
+        }
+#ifdef __APPLE__
+        return true;
+#else
+        return false;
+#endif
+    }();
+    return nearest;
+}
 
 // CPU bookkeeping shared with the regression test. Draw identity includes topology and
 // offsets: a reused index buffer or another submesh must never read uninitialised history.
 class History {
 public:
     explicit History(uint32_t capacity) : capacity{capacity} {}
+
+    /// bbport: NearestMatching(); a member so the regression test can take either.
+    bool nearest = NearestMatching();
 
     struct Allocation {
         uint32_t store{}, load{}, vertices{}, instances{}, first_vertex{}, first_instance{};
@@ -279,9 +307,12 @@ public:
     };
     bool Moving(GateKey key, uint64_t palette, Anchor anchor = {}) {
         key.occurrence = 0;
-        key.occurrence = gate_occurrences[key]++;
-        const auto* prev = gate_previous.find(key);
-        const bool moving = prev && prev->palette != palette && prev->anchor.Near(anchor);
+        const GateKey base = key;
+        key.occurrence = gate_occurrences[base]++;
+        bool candidate = false;
+        const auto* prev = Previous(gate_previous, gate_previous_occurrences, gate_claimed, base,
+                                    key.occurrence, anchor, candidate);
+        const bool moving = prev && prev->palette != palette;
         gate_current.emplace(key, {palette, anchor});
         stats.still += moving ? 0 : 1;
         return moving;
@@ -290,30 +321,36 @@ public:
     void NextFrame() {
         previous.swap(current);
         current.clear();
+        previous_occurrences.swap(occurrences);
         occurrences.clear();
+        claimed.clear();
         gate_previous.swap(gate_current);
         gate_current.clear();
+        gate_previous_occurrences.swap(gate_occurrences);
         gate_occurrences.clear();
+        gate_claimed.clear();
         ++frame;
         used = 0;
     }
 
     Allocation Prepare(const Draw& draw, Anchor anchor = {}) {
         ++stats.draws;
-        Key key{draw, 0};
-        key.occurrence = occurrences[key]++;
+        const Key base{draw, 0};
+        Key key = base;
+        key.occurrence = occurrences[base]++;
         const uint64_t count = uint64_t(draw.vertices.count) * draw.instances;
         if (!count || uint64_t(draw.vertices.first) + draw.vertices.count - 1 > INT32_MAX ||
             uint64_t(draw.first_instance) + draw.instances > UINT32_MAX) {
             ++stats.invalid;
             return {};
         }
-        const auto* prev = previous.find(key);
+        bool candidate = false;
+        const auto* prev =
+            Previous(previous, previous_occurrences, claimed, base, key.occurrence, anchor, candidate);
         Allocation result{0, 0, draw.vertices.count, draw.instances,
                           draw.vertices.first, draw.first_instance};
-        if (prev && !prev->anchor.Near(anchor)) {
+        if (candidate && !prev) {
             ++stats.jumped;
-            prev = nullptr;
         }
         if (prev) {
             result.load = prev->store;
@@ -335,6 +372,56 @@ public:
     uint32_t Used() const { return used; }
 
 private:
+    /// Last frame's entry for this frame's `occurrence` of `base` (an identity): by order, or
+    /// (nearest, the anchor known) the unclaimed one of that identity nearest the anchor, within
+    /// MaxStep. `candidate`: last frame had one to consider (none near enough: a jump).
+    template <class K, class V, class H>
+    const V* Previous(const FlatMap<K, V, H>& before, const FlatMap<K, uint32_t, H>& counts,
+                      FlatMap<K, uint32_t, H>& taken, K base, uint32_t occurrence,
+                      const Anchor& anchor, bool& candidate) const {
+        if (!nearest || !anchor.valid) {
+            K key = base;
+            key.occurrence = occurrence;
+            const V* prev = before.find(key);
+            candidate = prev != nullptr;
+            return prev && prev->anchor.Near(anchor) ? prev : nullptr;
+        }
+        const uint32_t* count = counts.find(base);
+        candidate = false;
+        if (!count) {
+            return nullptr;
+        }
+        // Reorders are local (the game sorts by distance): the occurrences around this one.
+        constexpr uint32_t Window = 16;
+        const uint32_t first = occurrence > Window ? occurrence - Window : 0;
+        const uint32_t end = std::min(*count, occurrence + Window + 1);
+        const V* best = nullptr;
+        K best_key = base;
+        float best_distance = Anchor::MaxStep * Anchor::MaxStep;
+        for (uint32_t k = first; k < end; ++k) {
+            K key = base;
+            key.occurrence = k;
+            if (taken.find(key)) {
+                continue;
+            }
+            const V* prev = before.find(key);
+            if (!prev) {
+                continue;
+            }
+            candidate = true;
+            const float distance = prev->anchor.Distance2(anchor);
+            if (distance < best_distance || (!best && distance <= best_distance)) {
+                best = prev;
+                best_key = key;
+                best_distance = distance;
+            }
+        }
+        if (best) {
+            taken[best_key] = 1;
+        }
+        return best;
+    }
+
     struct Key {
         Draw draw;
         uint32_t occurrence;
@@ -358,7 +445,7 @@ private:
         Anchor anchor;
     };
     FlatMap<Key, Stored, Hash> previous, current;
-    FlatMap<Key, uint32_t, Hash> occurrences;
+    FlatMap<Key, uint32_t, Hash> occurrences, previous_occurrences, claimed;
     struct GateHash {
         size_t operator()(const GateKey& key) const {
             uint64_t h = 0;
@@ -373,7 +460,7 @@ private:
         Anchor anchor;
     };
     FlatMap<GateKey, Gate, GateHash> gate_previous, gate_current;
-    FlatMap<GateKey, uint32_t, GateHash> gate_occurrences;
+    FlatMap<GateKey, uint32_t, GateHash> gate_occurrences, gate_previous_occurrences, gate_claimed;
 };
 
 } // namespace Vulkan::Motion

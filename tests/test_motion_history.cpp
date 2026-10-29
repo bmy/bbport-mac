@@ -65,12 +65,29 @@ int main() {
     assert(!history.Prepare(changed).load);
     // Repeated draws matched by order: a jump means another object, a step the same one.
     History anchored(64);
+    anchored.nearest = false;
     anchored.NextFrame();
     anchored.Prepare(draw, {0, 0, 0, true});
     anchored.Prepare(draw, {5, 0, 0, true});
     anchored.NextFrame();
     assert(!anchored.Prepare(draw, {5, 0, 0, true}).load && anchored.stats.jumped == 1);
     assert(anchored.Prepare(draw, {5.1f, 0, 0, true}).load);
+    // bbport: matched by the nearest anchor: a swap in the draw list keeps both histories, a
+    // culled one leaves the rest theirs, and a new object far from all gets none.
+    History swap(64);
+    swap.nearest = true;
+    swap.NextFrame();
+    const auto a0 = swap.Prepare(draw, {0, 0, 0, true});
+    const auto b0 = swap.Prepare(draw, {5, 0, 0, true});
+    swap.NextFrame();
+    const auto b1 = swap.Prepare(draw, {5.1f, 0, 0, true});
+    const auto a1 = swap.Prepare(draw, {0.1f, 0, 0, true});
+    assert(b1.load == b0.store && a1.load == a0.store && swap.stats.jumped == 0);
+    swap.NextFrame();
+    assert(swap.Prepare(draw, {0.2f, 0, 0, true}).load == a1.store); // b culled: a keeps a's
+    assert(!swap.Prepare(draw, {20, 0, 0, true}).load && swap.stats.jumped == 1);
+    swap.NextFrame();
+    assert(swap.Prepare(draw).load); // no anchor: by order, as before
 
     History overflow(32);
     draw.vertices.first = 0;
@@ -88,6 +105,7 @@ int main() {
 
     // Small skeletons: history only while the bone palette changes (weapon spinning).
     History gated(1024);
+    gated.nearest = false;
     const History::GateKey weapon{.shader = 7, .index_count = 3, .instances = 1};
     const auto frame = [&](uint64_t palette) {
         gated.NextFrame();
@@ -101,14 +119,18 @@ int main() {
     gated.NextFrame();
     assert(!gated.Moving(weapon, 4));     // after a skipped frame: no comparison
     assert(!gated.Moving(weapon, 5));     // second occurrence of the same draw
-    History swapped(1024); // two weapons; the first is culled: the second takes its place
-    swapped.NextFrame();
-    swapped.Moving(weapon, 1, {0, 0, 0, true});
-    swapped.Moving(weapon, 2, {9, 0, 0, true});
-    swapped.NextFrame();
-    assert(!swapped.Moving(weapon, 3, {9, 0, 0, true})); // another weapon: camera motion
-    swapped.NextFrame();
-    assert(swapped.Moving(weapon, 4, {9.1f, 0, 0, true})); // the same one, moving
+    for (const bool nearest : {false, true}) {
+        History swapped(1024); // two weapons; the first is culled: the second takes its place
+        swapped.nearest = nearest;
+        swapped.NextFrame();
+        swapped.Moving(weapon, 1, {0, 0, 0, true});
+        swapped.Moving(weapon, 2, {9, 0, 0, true});
+        swapped.NextFrame();
+        // By order: compared with the other weapon (camera motion); nearest: with itself (moving).
+        assert(swapped.Moving(weapon, 3, {9, 0, 0, true}) == nearest);
+        swapped.NextFrame();
+        assert(swapped.Moving(weapon, 4, {9.1f, 0, 0, true})); // the same one, moving
+    }
     assert(ClassifyBuffer(864) == BufferRole::Other && ClassifyBuffer(416) == BufferRole::Other);
     assert(ClassifyBuffer(96) == BufferRole::SmallSkeleton &&
            ClassifyBuffer(384) == BufferRole::SmallSkeleton);

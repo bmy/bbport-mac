@@ -638,7 +638,7 @@ void TemporalUpscaler::Run() {
                        {{input_depth, w, h, 4, "depth", "f32", vk::ImageAspectFlagBits::eDepth}});
             if (const auto object = camera_motion.ObjectMotionImage(w, h); object) {
                 DumpImages(instance, scheduler, cmdbuf, dump,
-                           {{object, w, h, 16, "objects", "rgba32f"}});
+                           {{object, w, h, 8, "objects", "rg32ui"}});
             }
         }
         // The result replaces the scene color's RGB (its alpha carries data for the post).
@@ -1009,7 +1009,7 @@ void TemporalUpscaler::RunScaled() {
                 // inputs: only dump it when it matches, to avoid an out-of-bounds GPU copy.
                 if (const auto object = camera_motion.ObjectMotionImage(w, h); object) {
                     DumpImages(instance, scheduler, cmdbuf, dump,
-                               {{object, w, h, 16, "objects", "rgba32f"}});
+                               {{object, w, h, 8, "objects", "rg32ui"}});
                 }
             }
         }
@@ -1095,6 +1095,21 @@ void TemporalUpscaler::RunScaled() {
         reset = false;
         dispatched_last_frame = true;
         ExtraSharpen(vk::Image(ui_image), true, ow, oh);
+        // bbport: BB_DUMP_TRIGGER on FSR 3.1's scaled path too (only the other upscalers' had it).
+        if (const int dump = DumpFrame(); dump >= 0) {
+            auto cmdbuf = scheduler.CommandBuffer();
+            camera_motion.PrintState(dump);
+            DumpImages(instance, scheduler, cmdbuf, dump,
+                       {{color_image, source_width, source_height, 4, "input", "rgba"},
+                        {vk::Image(motion_image), w, h, 4, "motion", "rg16f"},
+                        {vk::Image(ui_image), ow, oh, 4, "output", "rgba"}});
+            DumpImages(instance, scheduler, cmdbuf, dump,
+                       {{depth_image, source_width, source_height, 4, "depth", "f32",
+                         vk::ImageAspectFlagBits::eDepth}});
+            if (const auto object = camera_motion.ObjectMotionImage(w, h); object) {
+                DumpImages(instance, scheduler, cmdbuf, dump, {{object, w, h, 8, "objects", "rg32ui"}});
+            }
+        }
     }
     barrier(vk::Image(ui_image), vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eGeneral, all,
             rw, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eColorAttachmentOutput,

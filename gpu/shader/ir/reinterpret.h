@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport shader translator IR: component swizzles, sRGB decoding and the number conversions of
 // buffer formats (applied when reading, inverted when writing).

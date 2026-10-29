@@ -9,16 +9,19 @@
 
 #include "imgui/bbsc_intro_layer.h"
 #include "imgui/bbsc_loading_layer.h"
+#include "imgui/shadnet_notifications_layer.h"
 
 namespace Core::Bbsc {
 
 void ShowLoadingScreen(LoadingScreenKind kind) {
     // The port's overlay line (BBSC draws its own loading screen in shadPS4's ImGui layer).
+    ImGui::ShadNetNotify::OverlayLineTaken();
     bbgpu_overlay_banner(kind == LoadingScreenKind::Summon ? "Joining the host's world..."
                                                            : "Following the host...");
 }
 
 void HideLoadingScreen() {
+    ImGui::ShadNetNotify::OverlayLineTaken();
     bbgpu_overlay_banner(nullptr);
 }
 

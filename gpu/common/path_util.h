@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: where the GPU library keeps its files: BB_GPU_USER_DIR (run.sh points it at the
 // port's user folder), else ./user. A folder is created the first time it is asked for.

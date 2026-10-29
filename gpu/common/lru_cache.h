@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: objects ordered by the tick they were last used at (oldest first), for the texture
 // cache's garbage collection. Items live in one array and link to each other by index; freed

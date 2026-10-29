@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport shader translator: what the translator learns about a program (Info): its resources,
 // the user data it reads, the inputs/outputs, the features it uses, and the flattened user data

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* Guest threads on host pthreads. Each guest thread owns a FreeBSD-style TCB
  * (variant II: static TLS below the TCB). The loader rewrites the eboot's
  * `mov rax, fs:[0]` into `mov rax, gs:[0]`, so GS base = guest TCB while glibc
@@ -5,6 +7,7 @@
 #define _GNU_SOURCE
 #include "runtime.h"
 #include "platform.h"
+#include "../gpu/shim/bb_env.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -186,7 +189,7 @@ void runtime_thread_attach_main(void) {
     snprintf(t->name,sizeof(t->name),"main");
     /* BB_TLS_WATCH=<offset from the thread pointer> (reverse engineering): who writes that static
      * TLS variable of the main thread (reported when the game faults). */
-    const char *watch=getenv("BB_TLS_WATCH");
+    const char *watch=bb_env("BB_TLS_WATCH");
     if (watch && *watch) runtime_re_watch_now((uint64_t)(uintptr_t)((unsigned char *)t->tcb+strtoll(watch,NULL,0)));
 }
 static GuestThread *find_thread(void *handle) {
@@ -298,14 +301,19 @@ static void set_host_name(const char *name) {
     char host[16]={0};
     memcpy(host,name,strnlen(name,sizeof(host)-1));
     bb_set_thread_name(host);
+#ifdef _WIN32
+    bb_win32_set_thread_name(host);
+#endif
 }
 static void run_guest(void *p) {
     GuestThread *t=p;
     if (!setjmp(t->exit_jump)) t->result=t->entry(t->argument);
 }
+void runtime_re_watch_thread(void);
 static void *host_start(void *p) {
     GuestThread *t=p;
     attach(t);
+    runtime_re_watch_thread();
     set_host_name(t->name);
 #ifdef _WIN32
     /* winpthreads ignores a given stack: the guest runs on its low one, fully committed (the

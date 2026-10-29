@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "gcn/isa.h"
 
@@ -30,46 +31,85 @@ struct Tables {
     std::array<InstFormat, OpcodeRange::VOP3P> vop3p{};
     std::array<std::string_view, OpcodeBase::End> names{};
 
-    template <typename Self>
-    constexpr auto Of(this Self& self, InstEncoding encoding) {
-        using Span = std::span<std::remove_reference_t<decltype(self.sop2[0])>>;
+    constexpr std::span<InstFormat> Of(InstEncoding encoding) noexcept {
         switch (encoding) {
         case InstEncoding::SOP2:
-            return Span{self.sop2};
+            return sop2;
         case InstEncoding::SOPK:
-            return Span{self.sopk};
+            return sopk;
         case InstEncoding::SOP1:
-            return Span{self.sop1};
+            return sop1;
         case InstEncoding::SOPC:
-            return Span{self.sopc};
+            return sopc;
         case InstEncoding::SOPP:
-            return Span{self.sopp};
+            return sopp;
         case InstEncoding::VOPC:
-            return Span{self.vopc};
+            return vopc;
         case InstEncoding::VOP2:
-            return Span{self.vop2};
+            return vop2;
         case InstEncoding::VOP1:
-            return Span{self.vop1};
+            return vop1;
         case InstEncoding::VOP3:
-            return Span{self.vop3};
+            return vop3;
         case InstEncoding::VINTRP:
-            return Span{self.vintrp};
+            return vintrp;
         case InstEncoding::SMRD:
-            return Span{self.smrd};
+            return smrd;
         case InstEncoding::DS:
-            return Span{self.ds};
+            return ds;
         case InstEncoding::MUBUF:
-            return Span{self.mubuf};
+            return mubuf;
         case InstEncoding::MTBUF:
-            return Span{self.mtbuf};
+            return mtbuf;
         case InstEncoding::MIMG:
-            return Span{self.mimg};
+            return mimg;
         case InstEncoding::EXP:
-            return Span{self.exp};
+            return exp;
         case InstEncoding::VOP3P:
-            return Span{self.vop3p};
+            return vop3p;
         default:
-            return Span{};
+            return {};
+        }
+    }
+
+    constexpr std::span<const InstFormat> Of(InstEncoding encoding) const noexcept {
+        switch (encoding) {
+        case InstEncoding::SOP2:
+            return sop2;
+        case InstEncoding::SOPK:
+            return sopk;
+        case InstEncoding::SOP1:
+            return sop1;
+        case InstEncoding::SOPC:
+            return sopc;
+        case InstEncoding::SOPP:
+            return sopp;
+        case InstEncoding::VOPC:
+            return vopc;
+        case InstEncoding::VOP2:
+            return vop2;
+        case InstEncoding::VOP1:
+            return vop1;
+        case InstEncoding::VOP3:
+            return vop3;
+        case InstEncoding::VINTRP:
+            return vintrp;
+        case InstEncoding::SMRD:
+            return smrd;
+        case InstEncoding::DS:
+            return ds;
+        case InstEncoding::MUBUF:
+            return mubuf;
+        case InstEncoding::MTBUF:
+            return mtbuf;
+        case InstEncoding::MIMG:
+            return mimg;
+        case InstEncoding::EXP:
+            return exp;
+        case InstEncoding::VOP3P:
+            return vop3p;
+        default:
+            return {};
         }
     }
 

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: a reader-writer lock that never makes a reader wait for a writer that is only waiting:
 // readers get in whenever no writer holds it. A thread that holds it shared may therefore take it

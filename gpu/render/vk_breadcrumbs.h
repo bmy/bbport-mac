@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: GPU breadcrumbs, to name the command a GPU hang (ring timeout, then device lost) is
 // stuck in. Each scheduler is a stream: its draws, dispatches and our own passes are numbered in

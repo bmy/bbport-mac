@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: shadPS4 registers HLE functions with LIB_FUNCTION(nid, library,
 // version, module, fn). Here the registrations fill a table that the C
 // loader queries by NID (see bbgpu.cpp: bbgpu_resolve).

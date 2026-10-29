@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport gcn: the resource descriptors shaders read from their user data (Sea Islands ISA,
 // chapter 8): buffers (V#, 128 bits), images (T#, 256 bits) and samplers (S#, 128 bits).

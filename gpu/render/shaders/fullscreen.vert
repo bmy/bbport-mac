@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: one triangle covering the viewport (vertices 0..2, no buffers), with texture
 // coordinates 0..1 over the visible part.

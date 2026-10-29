@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport textures: converts surfaces between the GPU's tiled layouts and linear ones on the GPU
 // (textures/shaders/detile.comp): detiling for uploads, tiling for write-backs. One compute
@@ -38,9 +39,11 @@ public:
                                             const Buffer* out_buffer, u64 out_offset,
                                             u64 vram_size = 0);
     /// The surface at `in_offset` of `in_buffer`, linear: a staging buffer with it, or the input
-    /// when it is not tiled.
+    /// when it is not tiled. From `first_level` on only (texture_quality's reduced images): the
+    /// staging buffer then starts at that level (its linear offset is info.mips_layout[first].offset),
+    /// and the GPU reads only those levels' bytes of the game's memory over the bus.
     std::pair<const Buffer*, u64> DetileImage(const Buffer* in_buffer, u64 in_offset,
-                                              const ImageInfo& info);
+                                              const ImageInfo& info, u32 first_level = 0);
 
 private:
     struct Key {
@@ -60,7 +63,7 @@ private:
 
     vk::Pipeline Pipeline(const ImageInfo& info, bool tiler);
     /// The level table of the shader, in the stream buffer.
-    vk::DescriptorBufferInfo LevelTable(const ImageInfo& info, u32 num_levels);
+    vk::DescriptorBufferInfo LevelTable(const ImageInfo& info, u32 num_levels, u32 first_level = 0);
     void Dispatch(vk::Pipeline pipeline, const vk::DescriptorBufferInfo& tiled,
                   const vk::DescriptorBufferInfo& linear, const vk::DescriptorBufferInfo& levels,
                   u32 texels);

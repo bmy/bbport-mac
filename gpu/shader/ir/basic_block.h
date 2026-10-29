@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport shader translator IR: a basic block: its instructions, its edges, and what the passes
 // keep per block (SSA values, dominators, post-order index).

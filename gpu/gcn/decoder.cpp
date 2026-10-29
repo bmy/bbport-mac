@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "gcn/decoder.h"
 
@@ -356,9 +357,16 @@ void DecodeEXP(GcnInst& inst, u64 word) {
     inst.control.exp = ControlOf<InstControlEXP>(word);
 }
 
+/// The instruction being decoded (decode_failure).
+thread_local const u32* decoding_at = nullptr;
+
 /// Counts, types and class from the instruction's format.
 void ApplyFormat(GcnInst& inst, InstEncoding encoding) {
     const auto& format = FormatOf(encoding, NumberIn(encoding, inst.opcode));
+    if ((format.src_type == ScalarType::Undefined || format.dst_type == ScalarType::Undefined) &&
+        decode_failure) {
+        decode_failure(decoding_at, "instruction not in the format table");
+    }
     ASSERT_MSG(format.src_type != ScalarType::Undefined &&
                    format.dst_type != ScalarType::Undefined,
                "instruction {} ({}) not in the format table, encoding {:#x}",
@@ -490,7 +498,11 @@ void FixOperandTypes(GcnInst& inst) {
 } // namespace
 
 GcnInst Decode(const u32*& code) {
+    decoding_at = code;
     const InstEncoding encoding = EncodingOf(code[0]);
+    if (encoding == InstEncoding::ILLEGAL && decode_failure) {
+        decode_failure(code, "illegal instruction");
+    }
     ASSERT_MSG(encoding != InstEncoding::ILLEGAL, "illegal instruction {:#x}", code[0]);
     GcnInst inst{};
     if (EncodingLength(encoding) == 4) {

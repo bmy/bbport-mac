@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport BB_HEAP_SITES=1: live allocations of the game's heap per call site (diagnostics).
 #pragma once

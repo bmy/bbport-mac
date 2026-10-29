@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 #include "runtime.h"
 #include <assert.h>
 #include <stdint.h>
@@ -9,6 +11,7 @@
 /* The user folder add-ons are listed from (runtime_file.c in the game): a temporary one here. */
 static char user_dir[64]="/tmp/bbport-content-test-XXXXXX";
 const char *runtime_file_user_dir(void) { return user_dir; }
+int runtime_file_mount(const char *guest, const char *host) { (void)guest; (void)host; return 0; }
 typedef int32_t (ABI *Module)(uint16_t);
 typedef int32_t (ABI *Init)(const void *,void *);
 typedef int32_t (ABI *Param)(uint32_t,int32_t *);

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport buffers: shaders that reach memory through device addresses mark the pages the buffer
 // cache does not hold in a bit buffer; once per submission the bits are collected on the GPU

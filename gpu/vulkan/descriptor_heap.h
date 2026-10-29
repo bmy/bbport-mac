@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport vulkan: descriptor sets for pipelines without push descriptors, allocated in batches
 // per set layout from pools; a full pool is reset for reuse once the GPU is done with it.

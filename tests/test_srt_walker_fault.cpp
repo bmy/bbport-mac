@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Real walker faults must be local to an invocation, including concurrent SIGSEGVs.
 #include <array>

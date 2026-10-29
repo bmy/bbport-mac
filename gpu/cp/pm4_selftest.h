@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport BB_PM4_SELFTEST=1: tests of the command processor packets Bloodborne never sends
 // (occlusion queries, COPY_DATA, COND_EXEC, SET_PREDICATION, MEM_SEMAPHORE, GPU clock timestamps,

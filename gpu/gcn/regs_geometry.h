@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport gcn: the vertex grouper's registers (VGT_*): primitives and indices, the shader stages
 // in use, geometry shaders, tessellation and stream-out.

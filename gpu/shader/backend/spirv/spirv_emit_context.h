@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport shader backend: the SPIR-V module being built for one shader (a Sirit module) with the
 // ids the emitters use: types, constants, interface variables, resources and helper functions.
@@ -8,6 +9,7 @@
 #include <unordered_map>
 
 #include <boost/container/small_vector.hpp>
+#include <boost/container/static_vector.hpp>
 #include <sirit/sirit.h>
 
 #include "shader/backend/bindings.h"
@@ -360,6 +362,18 @@ public:
         /// BB_LAYER_MEMORY: reached through the page table (IsPagedBuffer); the descriptor
         /// holds {guest address lo, hi, size, write-through, trash address lo, hi} (PagedPointer).
         bool paged = false;
+        /// The record's fields, read once in the prologue (DefinePagedRecords): every access
+        /// read all of them again, and after a store the driver may not reuse earlier loads (the
+        /// game's copy shader read 6 record words per dword it copied, three times: load, store,
+        /// guest store; 25 us a dispatch on an RTX 5060 against 7 on an RX 7800 XT).
+        struct PagedRecord {
+            Id base;        ///< U64 guest address
+            Id size;        ///< U32
+            Id write;       ///< U32 write-through (stores reach the guest's bytes too)
+            Id trash;       ///< U64
+            Id table_start; ///< U32 guest page-table start (entries)
+        } record{};
+
 
         template <class Self>
         auto& Alias(this Self& self, PointerType alias) {
@@ -381,6 +395,13 @@ public:
     };
     PagedAccess PagedPointer(const BufferDefinition& buffer, Id byte_offset, u32 access_bytes,
                              Id pointee, bool guest_write = false);
+    /// `count` consecutive dwords from `byte_offset` (4-aligned): two page table lookups (the
+    /// first and the last dword's page; 16 bytes never span more) instead of one per dword.
+    boost::container::static_vector<PagedAccess, 4> PagedDwords(const BufferDefinition& buffer,
+                                                               Id byte_offset, u32 count,
+                                                               Id pointee, bool guest_write = false);
+    /// The paged buffers' records loaded in the entry block (EmitPrologue).
+    void DefinePagedRecords();
     /// A PhysicalStorageBuffer pointer to `pointee` (cached per type).
     Id PhysicalPointer(Id pointee);
 

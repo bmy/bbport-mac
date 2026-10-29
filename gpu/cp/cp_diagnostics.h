@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport cp: diagnostics of the command stream. BB_DCB_STATS=1: the structure of the graphics
 // command buffers every 5 s (input for decoding them on several threads); bad packets reported
@@ -43,6 +44,9 @@ enum class LabelStep : u8 {
 void NoteLabel(LabelStep step, u64 address, u64 value, u32 bytes);
 /// The last `count` labels (oldest first), each with its age and what its memory holds now.
 std::string RecentLabels(size_t count);
+/// Labels among the last `count` whose memory holds another value than their newest write, not
+/// zero (the guest's own reset): the emulator's recorded writes into each (BB_POOL_WATCH).
+void DumpRolledBackLabels(size_t count);
 /// Guest memory read through the backing view (no fault, any protection); false when unmapped.
 bool ReadGuest(const void* address, void* out, u32 bytes);
 
@@ -55,9 +59,13 @@ struct SubmittedCopy {
     std::size_t ccb_dwords{};
     std::chrono::steady_clock::time_point submitted;
     std::size_t bad_dcb_at_submit = ~std::size_t(0);
+    /// RepairSubmittedCopy changed it: its waits give up after BB_REPAIRED_WAIT_MS (500).
+    bool repaired = false;
 };
 /// Record whether the submitted snapshot already contains a malformed top-level packet.
 void InspectSubmittedCopy(SubmittedCopy& copy);
+/// A copy malformed at submit with one packet short of its values: that packet made a NOP (true).
+bool RepairSubmittedCopy(SubmittedCopy& copy, u64 number);
 /// After it was decoded: whether the guest changed its command buffers since.
 void CheckSubmittedCopy(const SubmittedCopy& copy, u64 seq);
 

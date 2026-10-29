@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Exercises the production target/resolve path on Vulkan (Lavapipe works, no game/window).
 #include <cassert>

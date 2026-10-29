@@ -1,26 +1,19 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "memory/page_watch.h"
+#include "shim/bb_env.h"
 
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
-#include <stdexcept>
-#include <thread>
-#include <unordered_set>
 
-#if !defined(_WIN32) && !defined(__APPLE__) // bbport: userfaultfd is Linux's
-#include <fcntl.h>
-#include <linux/userfaultfd.h>
-#include <poll.h>
-#include <sys/ioctl.h>
-#include <sys/syscall.h>
-#endif
 #include <sys/mman.h>
 #include <unistd.h>
 
 #include "bblayer_write_traps.h"
 #include "bbport_toggles.h"
+#include "games/game_profile.h"
 #include "common/assert.h"
 #include "common/error.h"
 #include "common/logging/log.h"
@@ -68,16 +61,14 @@ constexpr MemoryPermission Perms(u8 watchers) {
     return perms;
 }
 
-/// With the game's memory in place (no write tracking), the pages under images are trapped for
+/// The pages under images are trapped for
 /// writes (WriteTraps::Image): a write nobody announced (the game's own copy loops, its heap over
 /// an old texture) still reaches the texture cache, on any game and GPU, without hooks in the
 /// game's code; the hooks and the libc wrappers only make it sooner. BB_IMAGE_TRAPS=0: announced
 /// writes only. Latched at the first use: the counts must match their traps for the whole run.
 bool ImageTraps() {
     static const bool on = [] {
-        const char* env = std::getenv("BB_IMAGE_TRAPS");
-        const bool enabled = !(env && env[0] == '0') && VideoCore::GuestInPlace() &&
-                             !VideoCore::WriteTracking() && !VideoCore::WriteVerify();
+        const bool enabled = !bb_env_off("BB_IMAGE_TRAPS") && !VideoCore::WriteVerify();
         if (enabled) {
             std::printf("Guest memory: writes under images are trapped (BB_IMAGE_TRAPS=0: "
                         "announced writes only)\n");
@@ -129,8 +120,6 @@ struct PageWatch::Impl {
         }
     }
 
-    virtual void OnMap(VAddr, u64) {}
-    virtual void OnUnmap(VAddr, u64) {}
     virtual void Protect(VAddr address, u64 size, MemoryPermission perms) = 0;
 
     static bool OnFault(void* context, void* fault_address);
@@ -268,8 +257,8 @@ void Runs::Flush() {
     }
 }
 
-/// The game's memory in place: the runtime's write watch (BB_WRITE_VERIFY=1: protected too, to
-/// see writes nothing announced); page protection with BB_WRITE_TRACKING=1.
+/// The runtime's write watch (BB_WRITE_VERIFY=1: page protection too, to see writes nothing
+/// announced).
 struct SignalWatch final : PageWatch::Impl {
     explicit SignalWatch(Vulkan::Rasterizer* rasterizer_) : Impl{rasterizer_} {
         // After BB_VRAM_ACCESS_TRAP (priority 0, diagnostics).
@@ -277,143 +266,14 @@ struct SignalWatch final : PageWatch::Impl {
     }
 
     void Protect(VAddr address, u64 size, MemoryPermission perms) override {
-        if (!VideoCore::WriteTracking()) {
-            runtime_memory_set_write_watch(address, size, !True(perms & MemoryPermission::Write));
-            if (!VideoCore::WriteVerify()) {
-                return;
-            }
+        runtime_memory_set_write_watch(address, size, !True(perms & MemoryPermission::Write));
+        if (!VideoCore::WriteVerify()) {
+            return;
         }
         ASSERT_MSG(perms != MemoryPermission::Write, "write-only pages");
         Core::Memory::Instance()->GetAddressSpace().Protect(address, size, perms);
     }
 };
-
-#if !defined(_WIN32) && !defined(__APPLE__) // userfaultfd: Linux only
-/// BB_UFFD=1: write-protection with userfaultfd instead of mprotect. mprotect takes the address
-/// space lock for writing and splits mappings; while guest threads fault on per-frame buffers and
-/// the GPU thread re-protects uploaded pages, every page fault in the process waits for it.
-/// UFFDIO_WRITEPROTECT changes page table bits under the lock for reading. Read protection
-/// (readbacks) still uses mprotect: userfaultfd write-protection cannot deny reads.
-struct UffdWatch final : PageWatch::Impl {
-    explicit UffdWatch(Vulkan::Rasterizer* rasterizer_) : Impl{rasterizer_} {
-        uffd = int(syscall(SYS_userfaultfd, O_CLOEXEC | O_NONBLOCK | UFFD_USER_MODE_ONLY));
-        if (uffd == -1) {
-            LOG_ERROR(Common_Memory, "userfaultfd failed: {}, page protection instead",
-                      Common::GetLastErrorMsg());
-            throw std::runtime_error("userfaultfd");
-        }
-        // Guest memory is a shared memfd mapping: write-protection there needs the shmem
-        // feature, and unpopulated pages must be protectable too.
-        uffdio_api api{};
-        api.api = UFFD_API;
-        api.features =
-            UFFD_FEATURE_THREAD_ID | UFFD_FEATURE_WP_HUGETLBFS_SHMEM | UFFD_FEATURE_WP_UNPOPULATED;
-        if (ioctl(uffd, UFFDIO_API, &api) != 0) {
-            LOG_ERROR(Common_Memory, "UFFDIO_API failed: {}, page protection instead",
-                      Common::GetLastErrorMsg());
-            close(uffd);
-            throw std::runtime_error("uffdio_api");
-        }
-        // Read faults (readbacks) still arrive as signals.
-        Core::Signals::Instance()->RegisterAccessViolationHandler(OnFault, 1);
-        thread = std::jthread([this](std::stop_token stop) { Handler(stop); });
-        std::printf("GPU: memory tracking with userfaultfd write-protection\n");
-    }
-    ~UffdWatch() override {
-        thread = {};
-        close(uffd);
-    }
-
-    void OnMap(VAddr address, u64 size) override {
-        uffdio_register reg{};
-        reg.range.start = address;
-        reg.range.len = size;
-        reg.mode = UFFDIO_REGISTER_MODE_WP;
-        if (ioctl(uffd, UFFDIO_REGISTER, &reg) == -1) {
-            LOG_ERROR(Common_Memory, "UFFDIO_REGISTER {:#x}+{:#x} failed: {}", address, size,
-                      Common::GetLastErrorMsg());
-        }
-    }
-    void OnUnmap(VAddr address, u64 size) override {
-        uffdio_range range{};
-        range.start = address;
-        range.len = size;
-        ioctl(uffd, UFFDIO_UNREGISTER, &range);
-    }
-
-    void Protect(VAddr address, u64 size, MemoryPermission perms) override {
-        auto& address_space = Core::Memory::Instance()->GetAddressSpace();
-        const u64 first = address >> PageShift, last = (address + size + PageSize - 1) >> PageShift;
-        if (!True(perms & MemoryPermission::Read)) {
-            address_space.Protect(address, size, MemoryPermission::None);
-            std::scoped_lock lk{revoked_mutex};
-            for (u64 page = first; page < last; ++page) {
-                read_revoked.insert(page);
-            }
-            num_read_revoked.store(read_revoked.size(), std::memory_order_release);
-            return;
-        }
-        if (num_read_revoked.load(std::memory_order_acquire) != 0) {
-            std::scoped_lock lk{revoked_mutex};
-            bool restore = false;
-            for (u64 page = first; page < last; ++page) {
-                restore |= read_revoked.erase(page) != 0;
-            }
-            num_read_revoked.store(read_revoked.size(), std::memory_order_release);
-            if (restore) {
-                address_space.Protect(address, size, MemoryPermission::ReadWrite);
-            }
-        }
-        const bool writable = True(perms & MemoryPermission::Write);
-        // Counted like AddressSpace::Protect (BB_FRAME_LOG protect_ms).
-        BbStats::Timer timer{BbStats::t_protect};
-        BbStats::protect_calls.fetch_add(1, std::memory_order_relaxed);
-        BbStats::protect_pages.fetch_add(last - first, std::memory_order_relaxed);
-        if (!writable) {
-            BbStats::protect_revoke_calls.fetch_add(1, std::memory_order_relaxed);
-            BbStats::protect_revoke_pages.fetch_add(last - first, std::memory_order_relaxed);
-        }
-        uffdio_writeprotect wp{};
-        wp.range.start = address;
-        wp.range.len = size;
-        wp.mode = writable ? UFFDIO_WRITEPROTECT_MODE_DONTWAKE : UFFDIO_WRITEPROTECT_MODE_WP;
-        if (ioctl(uffd, UFFDIO_WRITEPROTECT, &wp) == -1) {
-            LOG_ERROR(Common_Memory, "UFFDIO_WRITEPROTECT {:#x}+{:#x} failed: {}", address, size,
-                      Common::GetLastErrorMsg());
-        }
-    }
-
-    void Handler(std::stop_token stop) {
-        Common::SetCurrentThreadName("bb:Uffd");
-        while (!stop.stop_requested()) {
-            pollfd fd{uffd, POLLIN, 0};
-            // A short timeout, so the stop request is seen.
-            if (poll(&fd, 1, 100) <= 0 || !(fd.revents & POLLIN)) {
-                continue;
-            }
-            uffd_msg msg;
-            if (read(uffd, &msg, sizeof(msg)) != sizeof(msg) || msg.event != UFFD_EVENT_PAGEFAULT) {
-                continue;
-            }
-            const VAddr address = msg.arg.pagefault.address;
-            {
-                BbStats::Timer timer{BbStats::t_write_faults};
-                rasterizer->OnWriteFault(address,
-                                         rasterizer->IsGpuSideThreadId(msg.arg.pagefault.feat.ptid));
-            }
-            // Protect() lifts protection with DONTWAKE (it may run for pages nobody waits on).
-            uffdio_range wake{PageStart(address), PageSize};
-            ioctl(uffd, UFFDIO_WAKE, &wake);
-        }
-    }
-
-    int uffd = -1;
-    std::jthread thread;
-    std::mutex revoked_mutex;
-    std::unordered_set<u64> read_revoked; ///< pages denied reads with mprotect
-    std::atomic<size_t> num_read_revoked{0};
-};
-#endif
 
 } // namespace
 
@@ -450,47 +310,35 @@ bool PageWatch::Impl::OnFault(void* context, void* fault_address) {
         uintptr_t end = 0;
         return runtime_memory_vma_info(address, &prot, &type, &end) && (prot & 0x2);
     }
+    // The game's own bookkeeping (Profile::dynamic_writers: its heap's headers among GPU data) as
+    // an announced write: the traps of the whole 64 KiB lifted at once and the GPU side told, without
+    // waiting for the draw pipeline, as for libc copies. Streaming made thousands of these a
+    // second, each held up the game's thread until the draws queued were recorded (hitches of
+    // 60-900 ms on a 4-thread laptop). A second fault at the same address takes the full path.
+    static const bool fast_writers = [] {
+        // Off by default: a device loss on the GTX 1050 laptop came 6 minutes after it went in,
+        // and it took only ~10 of the thousands of faults a second there (most are image traps).
+        return bb_env_on("BB_FAST_WRITER_FAULTS");
+    }();
+    thread_local VAddr last_fast = 0;
+    if (fast_writers && !gpu_thread && last_fast != address && Game::IsDynamicWriter(rip)) {
+        last_fast = address;
+        BbStats::fast_writer_faults.fetch_add(1, std::memory_order_relaxed);
+        rasterizer->OnCpuWrite(address & ~VAddr{0xffff}, 0x10000);
+        FaultSites::Done();
+        return true;
+    }
+    last_fast = 0;
     BbStats::Timer timer{BbStats::t_write_faults};
     const bool handled = rasterizer->OnWriteFault(address, gpu_thread, rip);
     FaultSites::Done();
     return handled;
 }
 
-PageWatch::PageWatch(Vulkan::Rasterizer* rasterizer) {
-    // dma-buf guest memory (BB_GUEST_GPU_MEMORY=1) cannot be write-protected by userfaultfd
-    // (anonymous and shmem only): its registration would fail and writes go unseen.
-    const char* uffd = std::getenv("BB_UFFD");
-    const char* gpu_memory = std::getenv("BB_GUEST_GPU_MEMORY");
-#if defined(_WIN32) || defined(__APPLE__)
-    (void)gpu_memory;
-    if (uffd && uffd[0] == '1') {
-        std::printf("GPU: no userfaultfd on this system (BB_UFFD ignored)\n");
-    }
-#else
-    if (uffd && uffd[0] == '1') {
-        if (gpu_memory && gpu_memory[0] == '1') {
-            std::printf("GPU: userfaultfd off with BB_GUEST_GPU_MEMORY=1 (dma-buf memory)\n");
-        } else {
-            try {
-                impl = std::make_unique<UffdWatch>(rasterizer);
-                return;
-            } catch (const std::runtime_error&) {
-            }
-        }
-    }
-#endif
-    impl = std::make_unique<SignalWatch>(rasterizer);
-}
+PageWatch::PageWatch(Vulkan::Rasterizer* rasterizer)
+    : impl{std::make_unique<SignalWatch>(rasterizer)} {}
 
 PageWatch::~PageWatch() = default;
-
-void PageWatch::OnGpuMap(VAddr address, u64 size) {
-    impl->OnMap(address, size);
-}
-
-void PageWatch::OnGpuUnmap(VAddr address, u64 size) {
-    impl->OnUnmap(address, size);
-}
 
 template <bool watch>
 void PageWatch::WatchImage(VAddr address, u64 size) {

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: checks that stop the port (exit code 23) with a message in the GPU log.
 #pragma once
@@ -6,6 +7,9 @@
 
 /// Stops the port; noreturn in practice (assert.cpp).
 void assert_fail_impl();
+/// Set in the shader recipe import process on Windows (no fork there): a failed check throws
+/// std::runtime_error instead, and the translation it was in is given up alone.
+extern bool g_bb_assert_throws;
 [[noreturn]] void unreachable_impl();
 
 #define ASSERT(cond)                                                                               \

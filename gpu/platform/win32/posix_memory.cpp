@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport Windows: mmap, munmap, mprotect and fallocate (sys/mman.h, bbport_posix_c.h) with the
 // Linux semantics the runtime's guest memory relies on (src/runtime_memory.c).
@@ -13,6 +14,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
@@ -61,8 +63,10 @@ struct Piece {
     bool view;
     int fd;          ///< the view's section
     uint64_t offset; ///< the view's offset in it
+    bool owned = false; ///< private memory of its own (bb_private_at): no view, no section
 };
 std::map<uintptr_t, Piece> pieces; ///< by start
+std::atomic<unsigned long long> bb_win32_virtual_protects{0};
 uintptr_t arena_begin = 0, arena_end = 0;
 std::recursive_mutex memory_mutex;
 
@@ -120,6 +124,10 @@ std::map<uintptr_t, Piece>::iterator Carve(uintptr_t a, uintptr_t b) {
     const uintptr_t hi = std::prev(last)->second.end;
     const Piece left = first->second, right = std::prev(last)->second;
     const uintptr_t right_start = std::prev(last)->first;
+    // Private memory (bb_private_at) goes whole: the GPU imported it, part of it cannot stay.
+    if ((left.owned && lo < a) || (right.owned && b < hi)) {
+        Fail("cutting private guest memory", a, b - a);
+    }
     const bool keep_left = left.view && lo < a;
     const bool keep_right = right.view && b < hi;
     std::vector<ProtectionRun> runs;
@@ -127,6 +135,10 @@ std::map<uintptr_t, Piece>::iterator Carve(uintptr_t a, uintptr_t b) {
     if (keep_right) SaveProtections(b, hi, runs);
     size_t count = 0;
     for (auto it = first; it != last; ++it, ++count) {
+        if (it->second.owned &&
+            !VirtualFree(reinterpret_cast<void*>(it->first), 0, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER)) {
+            Fail("releasing private guest memory", it->first, it->second.end - it->first);
+        }
         if (it->second.view &&
             !UnmapViewOfFile2(GetCurrentProcess(), reinterpret_cast<void*>(it->first),
                               MEM_PRESERVE_PLACEHOLDER)) {
@@ -215,6 +227,45 @@ int bb_reserve_arena(unsigned long long begin, unsigned long long end) {
     return 0;
 }
 
+void* bb_private_at(void* address, size_t size) {
+    // Committed private memory exactly at [address, address + size) of the arena, replacing what
+    // was there: the one view of a direct allocation whose memory the GPU imports (drivers import
+    // VirtualAlloc'd memory, not views of sections; BbGuestMemory's private mode).
+    std::scoped_lock lock{memory_mutex};
+    const auto start = reinterpret_cast<uintptr_t>(address);
+    if (!InArena(start, start + size)) {
+        errno = EINVAL;
+        return MAP_FAILED;
+    }
+    auto piece = Carve(start, start + size);
+    if (!VirtualAlloc2(GetCurrentProcess(), address, size, MEM_RESERVE | MEM_COMMIT | MEM_REPLACE_PLACEHOLDER,
+                       PAGE_READWRITE, nullptr, 0)) {
+        std::fprintf(stderr, "Memory: private memory at %#llx (+%#llx) failed: Windows error %lu\n",
+                     (unsigned long long)start, (unsigned long long)size, GetLastError());
+        errno = ENOMEM;
+        return MAP_FAILED;
+    }
+    piece->second = Piece{start + size, false, -1, 0, true};
+    return address;
+}
+
+void bb_discard(void* address, size_t size) {
+    if (!size) return;
+    VirtualAlloc(address, size, MEM_RESET, PAGE_READWRITE);
+    VirtualUnlock(address, size); // not locked: this only trims the pages from the working set
+}
+
+int bb_section_discard(int fd, unsigned long long offset, unsigned long long length) {
+    std::scoped_lock lock{memory_mutex};
+    const auto it = sections.find(fd);
+    if (it == sections.end() || offset + length > it->second.size) {
+        errno = EINVAL;
+        return -1;
+    }
+    bb_discard(it->second.whole + offset, size_t(length));
+    return 0;
+}
+
 int fallocate(int fd, int mode, off_t offset, off_t length) {
     (void)mode; // FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE: the range reads as zero again
     std::scoped_lock lock{memory_mutex};
@@ -296,20 +347,64 @@ int munmap(void* address, size_t size) {
     return VirtualFree(address, 0, MEM_RELEASE) ? 0 : -1;
 }
 
+/// VirtualProtect calls made by mprotect (the frame statistics' stall lines).
+unsigned long long bb_win32_protect_calls(void) {
+    return bb_win32_virtual_protects.load(std::memory_order_relaxed);
+}
+
 int mprotect(void* address, size_t size, int prot) {
-    // VirtualProtect cannot span allocations (views): one call per region; unmapped parts skipped.
+    // VirtualProtect cannot span allocations (views) nor uncommitted pages. In the arena the
+    // pieces say where they are: a view or private memory is committed whole, a placeholder has
+    // nothing. VirtualQuery is not asked there: its RegionSize is the run of pages with the same
+    // attributes from the address on, which the kernel finds by walking them, 5-16 ms in a GiB
+    // of touched memory and 50 ms in 3 GiB (vq_bench) — the game's heap is one view of 2.3 GiB,
+    // and every write trap paid that (stalls of 50-850 ms while areas streamed in, RX 7800 XT and
+    // RTX 5060 alike, 2026-10-27).
     const DWORD protect = PageProtection(prot);
     const auto end = reinterpret_cast<uintptr_t>(address) + size;
+    {
+        std::scoped_lock lock{memory_mutex};
+        const auto start = reinterpret_cast<uintptr_t>(address);
+        if (InArena(start, end)) {
+            auto it = pieces.upper_bound(start);
+            --it; // the piece holding start
+            for (; it != pieces.end() && it->first < end; ++it) {
+                if (!it->second.view && !it->second.owned) {
+                    continue; // a placeholder: nothing mapped
+                }
+                const uintptr_t a = std::max(it->first, start), b = std::min(it->second.end, end);
+                DWORD old = 0;
+                bb_win32_virtual_protects.fetch_add(1, std::memory_order_relaxed);
+                if (!VirtualProtect(reinterpret_cast<void*>(a), b - a, protect, &old)) {
+                    errno = EACCES;
+                    return -1;
+                }
+            }
+            return 0;
+        }
+    }
+    // Outside the arena (the runtime's own mappings): regions of one allocation in one call.
+    const auto query = [](uintptr_t at, MEMORY_BASIC_INFORMATION& info) {
+        return VirtualQuery(reinterpret_cast<void*>(at), &info, sizeof(info)) != 0;
+    };
+    const auto region_end = [end](const MEMORY_BASIC_INFORMATION& info) {
+        return std::min<uintptr_t>(reinterpret_cast<uintptr_t>(info.BaseAddress) + info.RegionSize, end);
+    };
     for (auto at = reinterpret_cast<uintptr_t>(address); at < end;) {
         MEMORY_BASIC_INFORMATION info{};
-        if (!VirtualQuery(reinterpret_cast<void*>(at), &info, sizeof(info))) {
+        if (!query(at, info)) {
             errno = ENOMEM;
             return -1;
         }
-        const uintptr_t next =
-            std::min<uintptr_t>(reinterpret_cast<uintptr_t>(info.BaseAddress) + info.RegionSize, end);
+        uintptr_t next = region_end(info);
         if (info.State == MEM_COMMIT) {
+            const void* allocation = info.AllocationBase;
+            for (MEMORY_BASIC_INFORMATION more{};
+                 next < end && query(next, more) && more.State == MEM_COMMIT && more.AllocationBase == allocation;) {
+                next = region_end(more);
+            }
             DWORD old = 0;
+            bb_win32_virtual_protects.fetch_add(1, std::memory_order_relaxed);
             if (!VirtualProtect(reinterpret_cast<void*>(at), next - at, protect, &old)) {
                 errno = EACCES;
                 return -1;

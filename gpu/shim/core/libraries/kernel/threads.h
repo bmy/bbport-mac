@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: host threads that may call guest code (AvPlayer allocator callbacks).
 // Each thread gets a guest TCB (GS base, TLS) from the C runtime before running.
 #pragma once

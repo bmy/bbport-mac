@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: D3D12 call recorder for fsr4cap.exe. Patches the vtables of the device, command list
 // and resource classes (vkd3d-proton shares one vtable per class across interface versions) and

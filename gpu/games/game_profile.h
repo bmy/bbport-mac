@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Game profiles: what the translator knows about one game, kept out of its core. The core (the
 // command processor, the caches, the shader recompiler) runs any game on its generic paths and
@@ -20,6 +21,10 @@ struct CodeRange {
 struct CoreServices {
     /// The game handed out GPU memory [address, address + size): what the GPU had there is dead.
     void (*fresh_range)(std::uint64_t address, std::uint64_t size) = nullptr;
+    /// The game freed GPU memory [address, address + size) (a heap block): its VRAM copies go.
+    void (*dead_range)(std::uint64_t address, std::uint64_t size) = nullptr;
+    /// The game allocated [address, address + size) (a heap block): VRAM copies stay within it.
+    void (*live_range)(std::uint64_t address, std::uint64_t size) = nullptr;
 };
 
 struct Profile {
@@ -40,6 +45,10 @@ struct Profile {
     /// more to the sides). Without them an output of another shape keeps the game's 16:9 picture
     /// in its middle: drawn wider, the game's own shading (data packed per pixel column) breaks.
     bool camera_aspect = false;
+    /// The game's direct memory allocations (bit i: its i-th, in order) the GPU never uses: they
+    /// get no GPU memory and stay in the runtime's memfd (RAM only as the game touches them).
+    /// Should the GPU bind them after all, the arena serves it (copies). BB_HOST_ONLY_DEFAULT=0: none.
+    std::uint64_t host_only_allocations = 0;
 };
 
 /// Chooses the profile for the game by its TITLE_ID (bbgpu_init). BB_GAME_PROFILE=none runs the

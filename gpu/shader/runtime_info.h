@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport shader translator: the stages, and the state from the GPU registers a shader is
 // compiled for (RuntimeInfo: per hardware and software stage). Two draws with the same program

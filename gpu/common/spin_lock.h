@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: a lock that spins instead of sleeping, for a few instructions' worth of work. Waiters
 // only read the word until it looks free, so they do not bounce its cache line.

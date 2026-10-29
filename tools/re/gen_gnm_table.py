@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Generates gpu/shim/bbport_gnm_table.inc: the eboot's libGnm functions the engine calls, with a
 relocatable prologue (whole instructions >= 5 bytes, no RIP-relative operands or branches) for the
 call census hooks (BB_GNM_CENSUS) and, later, their replacements.

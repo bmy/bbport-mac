@@ -1,11 +1,14 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "bbport_settings.h"
+#include "shim/bb_env.h"
 #include <cmath>
 
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -14,9 +17,14 @@
 namespace BbSettings {
 
 namespace {
+/// anti_aliasing was in bbport.ini (Load).
+bool anti_aliasing_seen = false;
+}
+
+namespace {
 
 const char* Path() {
-    const char* env = std::getenv("BB_CONFIG");
+    const char* env = bb_env("BB_CONFIG");
     return env && env[0] ? env : "bbport.ini";
 }
 
@@ -60,6 +68,12 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.debug_view = std::clamp(i, 0, DebugViewCount - 1);
     } else if (key == "show_fps") {
         v.show_fps = i != 0;
+    } else if (key == "vbao") {
+        v.vbao = i != 0;
+    } else if (key == "camera_speed_x") {
+        v.camera_speed[1] = Clamp(f, 0.25f, 2.0f);
+    } else if (key == "camera_speed_y") {
+        v.camera_speed[0] = Clamp(f, 0.25f, 2.0f);
     } else if (key == "menu_pos") {
         float x = -1.0f, y = -1.0f;
         if (std::sscanf(value.c_str(), "%f,%f", &x, &y) == 2 && x >= 0.0f && x <= 1.0f && y >= 0.0f &&
@@ -73,15 +87,42 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.fsr4_invert_jitter = i != 0;
     } else if (key == "model_lod") {
         v.model_lod = std::clamp(i, -2, 2);
+    } else if (key == "light_grid_opt") {
+        v.light_grid_opt = i != 0;
     } else if (key == "frame_generation") {
-        v.frame_generation = i != 0;
+        // "1" and "0" from earlier versions and scripts: FSR 3.1 and off.
+        v.frame_generation = i != 0 ? FrameGenFsr3 : FrameGenOff;
+        for (int g = 0; g < FrameGenCount; ++g) {
+            if (value == FrameGenName(g)) v.frame_generation = g;
+        }
+    } else if (key == "frame_generation_multiplier") {
+        v.frame_generation_multiplier = std::clamp(i, 2, 4);
+    } else if (key == "low_latency") {
+        v.low_latency = std::clamp(i, 0, LowLatencyCount - 1);
+        for (int m = 0; m < LowLatencyCount; ++m) {
+            if (value == LowLatencyName(m)) v.low_latency = m;
+        }
     } else if (key == "live_resolution") {
         v.live_resolution = value == "auto" ? -1 : std::clamp(i, 0, 1);
     } else if (key == "output_res") {
         int w = 0, h = 0;
+        v.output_auto = value == "auto";
         if (std::sscanf(value.c_str(), "%dx%d", &w, &h) == 2 && w >= 320 && h >= 200 && w <= 16384 &&
             h <= 16384) {
             v.output_res = PackSize({w, h});
+        }
+    } else if (key == "fsr4_model") {
+        for (int m = 0; m < Fsr4ModelCount; ++m) {
+            if (value == Fsr4ModelName(m)) v.fsr4_model = m;
+        }
+    } else if (key == "texture_quality") {
+        for (int q = 0; q < TqCount; ++q) {
+            if (value == TextureQualityName(q)) v.texture_quality = q;
+        }
+    } else if (key == "anti_aliasing") {
+        anti_aliasing_seen = true;
+        for (int m = 0; m < AaCount; ++m) {
+            if (value == AntiAliasingName(m)) v.anti_aliasing = m;
         }
     } else if (key == "aspect_ratio") {
         v.aspect = AspectAuto;
@@ -186,6 +227,21 @@ OutputSize NearestOutput(int aspect, OutputSize size) {
 
 OutputSize CurrentOutput() {
     const auto& v = Get();
+    if (v.output_auto.load(std::memory_order_relaxed)) {
+        // Auto: the monitor's resolution; before the window knows it, what run.sh found
+        // (BB_MONITOR_SIZE: its startup patch was made for that size).
+        OutputSize m = Monitor();
+        static const OutputSize startup = [] {
+            OutputSize s{};
+            if (const char* env = bb_env("BB_MONITOR_SIZE")) {
+                std::sscanf(env, "%dx%d", &s.width, &s.height);
+            }
+            return s;
+        }();
+        if (startup.width >= 640 && startup.height >= 360) m = startup;
+        else if (!(m.width >= 640 && m.height >= 360)) m = OutputDefault;
+        return {std::min(m.width, 7680), std::min(m.height, 4320)};
+    }
     return NearestOutput(v.aspect.load(std::memory_order_relaxed),
                          UnpackSize(v.output_res.load(std::memory_order_relaxed)));
 }
@@ -207,7 +263,7 @@ void SetMonitor(int width, int height) {
     auto& v = Get();
     // Auto follows the monitor: its output is kept (and saved: run.sh's startup patch reads it).
     const OutputSize fitted = CurrentOutput();
-    if (v.aspect == AspectAuto && PackSize(fitted) != v.output_res.load()) {
+    if (v.aspect == AspectAuto && !v.output_auto && PackSize(fitted) != v.output_res.load()) {
         std::printf("Output: %s for the monitor (%dx%d, aspect ratio auto)\n", SizeText(fitted).c_str(),
                     width, height);
         v.output_res = PackSize(fitted);
@@ -240,10 +296,10 @@ void Load() {
     // bbport: the menu's language until one is chosen in it (menu_language in bbport.ini): the
     // launcher's (BB_MENU_LANGUAGE), else the system's, as the launcher picks its own.
     {
-        const char* lang = std::getenv("BB_MENU_LANGUAGE");
+        const char* lang = bb_env("BB_MENU_LANGUAGE");
         if (!lang || !*lang) {
             for (const char* key : {"LC_ALL", "LC_MESSAGES", "LANG", "LANGUAGE"}) {
-                if (const char* value = std::getenv(key); value && *value) {
+                if (const char* value = bb_env(key); value && *value) {
                     lang = value;
                     break;
                 }
@@ -269,7 +325,7 @@ void Load() {
     }
     file_upscaler = v.upscaler.load();
     // Environment overrides (scripts, A/B tests).
-    if (const char* env = std::getenv("BB_UPSCALER")) {
+    if (const char* env = bb_env("BB_UPSCALER")) {
         v.upscaler = UpscalerOff;
         for (int u = 0; u < UpscalerCount; ++u) {
             if (std::strcmp(env, UpscalerName(u)) == 0) v.upscaler = u;
@@ -281,17 +337,20 @@ void Load() {
         {"BB_REACTIVE_THRESHOLD", "reactive_threshold"}, {"BB_REACTIVE_MAX", "reactive_max"},
         {"BB_UPSCALE_PRESET", "preset"},            {"BB_OBJECT_MOTION", "object_motion"},
         {"BB_SHOW_FPS", "show_fps"},
-        {"BB_FRAME_GEN", "frame_generation"},
+        {"BB_FRAME_GEN", "frame_generation"},       {"BB_FRAME_GEN_MULTIPLIER", "frame_generation_multiplier"},
+        {"BB_LOW_LATENCY", "low_latency"},
     };
-    // Frame generation is hidden in the menu until its artifacts are fixed: only BB_FRAME_GEN turns
-    // it on, a saved setting does not.
-    v.frame_generation = false;
     for (const auto& [env, key] : env_keys) {
         if (const char* value = std::getenv(env)) {
             Set(v, key, value);
         }
     }
     v.startup_preset = v.preset;
+    // Settings from before anti_aliasing: the game's AA switched off stays off.
+    if (!anti_aliasing_seen && !v.effects[GameAaEffect]) {
+        v.anti_aliasing = AaOff;
+    }
+    SyncAntiAliasing();
     v.startup_upscaler = v.upscaler;
     v.startup_object_motion = v.object_motion;
     for (int e = 0; e < EffectCount; ++e) {
@@ -300,7 +359,7 @@ void Load() {
     v.startup_model_lod = v.model_lod;
     if (FixedRenderSession()) {
         int w = 0, h = 0;
-        const char* output = std::getenv("BB_OUTPUT_RES");
+        const char* output = bb_env("BB_OUTPUT_RES");
         if (output && std::sscanf(output, "%dx%d", &w, &h) == 2) v.startup_output = {w, h};
     }
     v.startup_live_resolution = v.live_resolution;
@@ -327,6 +386,16 @@ void ConfigureUpscalerSupport(bool fsr4, bool fsr411, bool metalfx) {
     }
 }
 
+void ConfigureFsrAmdSupport(bool available) {
+    auto& v = Get();
+    v.fsr_amd_supported = available;
+    if (v.upscaler == UpscalerFsrAmd && !available) {
+        std::printf("Upscaler: AMD's FSR DLLs not found (amd_fidelityfx_loader_vk.dll); "
+                    "falling back to FSR 3.1\n");
+        v.upscaler = UpscalerFsr3;
+    }
+}
+
 void ConfigureDlssSupport(bool available, const char* problem) {
     auto& v = Get();
     v.dlss_supported = available;
@@ -341,21 +410,60 @@ void ConfigureDlssSupport(bool available, const char* problem) {
 }
 
 bool FixedRenderSession() {
-    const char* size = std::getenv("BB_RENDER_RES");
+    const char* size = bb_env("BB_RENDER_RES");
     return size && size[0];
+}
+
+const char* Fsr4ModelName(int model) {
+    static constexpr const char* names[Fsr4ModelCount] = {"auto", "fp8", "int8", "int8_rdna2", "int8_lite"};
+    return names[std::clamp(model, 0, Fsr4ModelCount - 1)];
+}
+
+const char* TextureQualityName(int quality) {
+    static constexpr const char* names[TqCount] = {"auto", "full", "half", "quarter"};
+    return names[std::clamp(quality, 0, TqCount - 1)];
+}
+
+const char* AntiAliasingName(int mode) {
+    static constexpr const char* names[AaCount] = {"auto", "game", "fxaa", "off", "smaa"};
+    return names[std::clamp(mode, 0, AaCount - 1)];
+}
+
+void SyncAntiAliasing() {
+    auto& v = Get();
+    const int mode = v.anti_aliasing.load(std::memory_order_relaxed);
+    const bool upscaling = v.upscaler.load(std::memory_order_relaxed) != UpscalerOff;
+    // FXAA2_GS runs in the game's AA step: the step stays on.
+    v.effects[GameAaEffect] = mode == AaGame || mode == AaFxaa || (mode == AaAuto && !upscaling);
+    v.fxaa_forced = mode == AaFxaa;
+}
+
+bool HybridSession() {
+    return FixedRenderSession() && bb_env_on("BB_LIVE_HYBRID");
 }
 
 int RenderPreset() {
     const auto& v = Get();
-    return FixedRenderSession() ? v.startup_preset :
+    return FixedRenderSession() && !HybridSession() ? v.startup_preset :
         v.upscaler == UpscalerTaa ? NativeAA : v.preset.load();
 }
 
 bool ResolutionNeedsRestart() {
     const auto& v = Get();
+    // A GPU that cannot reduce the scene live (scene_proxies): presets and the output at the next
+    // start, where run.sh patches the game's targets for them.
+    if (!v.scene_proxies.load(std::memory_order_relaxed) &&
+        (v.preset != v.startup_preset ||
+         (v.startup_output.width != 0 && PackSize(CurrentOutput()) != PackSize(v.startup_output)))) {
+        return true;
+    }
     // TAA needs the live path (native guest targets): run.sh selects it on restart.
+    // Over the startup patch (HybridSession) presets and the output apply at once (proxies,
+    // larger than the game's targets too); the upscaler's kind needs the next start.
+    const bool preset_restart = !HybridSession() && v.preset != v.startup_preset;
+    // Hybrid: another output applies at once too (the scene within the game's targets).
     return FixedRenderSession() &&
-        (v.preset != v.startup_preset || CurrentOutput() != v.startup_output ||
+        (preset_restart || (!HybridSession() && CurrentOutput() != v.startup_output) ||
          (v.upscaler == UpscalerOff) != (v.startup_upscaler == UpscalerOff) ||
          (v.upscaler == UpscalerTaa) != (v.startup_upscaler == UpscalerTaa));
 }
@@ -382,6 +490,7 @@ void ReloadLive() {
     std::fclose(file);
     auto& v = Get();
     v.output_res = fresh.output_res.load();
+    v.output_auto = fresh.output_auto.load();
     if (fresh.upscaler != file_upscaler.exchange(fresh.upscaler)) {
         v.upscaler = fresh.upscaler.load();
     }
@@ -391,6 +500,8 @@ void ReloadLive() {
     v.show_fps = fresh.show_fps.load();
     v.model_lod = fresh.model_lod.load();
     v.aspect = fresh.aspect.load();
+    v.anti_aliasing = fresh.anti_aliasing.load();
+    v.texture_quality = fresh.texture_quality.load();
     for (int e = 0; e < EffectCount; ++e) {
         v.effects[e] = fresh.effects[e].load();
     }
@@ -426,6 +537,9 @@ void Save() {
         put("reactive_max", fixed(v.reactive_max, 2));
         put("debug_view", std::to_string(v.debug_view.load()));
         put("show_fps", flag(v.show_fps)); // the overlay's (the game's menu has no row for it)
+        put("vbao", flag(v.vbao));
+        put("camera_speed_x", fixed(v.camera_speed[1], 2));
+        put("camera_speed_y", fixed(v.camera_speed[0], 2));
         put("fsr4_auto_exposure", flag(v.fsr4_auto_exposure));
         put("fsr4_invert_jitter", flag(v.fsr4_invert_jitter));
     }
@@ -434,12 +548,21 @@ void Save() {
         put(Effects[e].key, flag(v.effects[e]));
     }
     put("model_lod", std::to_string(v.model_lod.load()));
+    if (all) {
+        put("light_grid_opt", flag(v.light_grid_opt));
+    }
+    put("anti_aliasing", AntiAliasingName(v.anti_aliasing));
+    put("texture_quality", TextureQualityName(v.texture_quality));
+    if (all) {
+        put("fsr4_model", Fsr4ModelName(v.fsr4_model));
+    }
     put("aspect_ratio", AspectKey(v.aspect));
-    put("output_res", SizeText(CurrentOutput()));
+    put("output_res", v.output_auto ? std::string{"auto"} : SizeText(CurrentOutput()));
     // Read by run.sh at start.
     if (all) {
-        put("live_resolution", v.live_resolution < 0 ? "auto" : flag(v.live_resolution != 0));
-        put("frame_generation", flag(v.frame_generation));
+        put("frame_generation", FrameGenName(v.frame_generation));
+        put("frame_generation_multiplier", std::to_string(v.frame_generation_multiplier.load()));
+        put("low_latency", LowLatencyName(v.low_latency));
     }
     if (all && v.menu_x >= 0.0f && v.menu_y >= 0.0f) {
         put("menu_pos", fixed(v.menu_x, 4) + "," + fixed(v.menu_y, 4));
@@ -479,12 +602,17 @@ void Save() {
             out += keys[k].first + "=" + keys[k].second + "\n";
         }
     }
-    // Replaced whole: a crash while writing leaves the old file.
+    // Replaced whole: a crash while writing leaves the old file. filesystem::rename replaces an
+    // existing file on Windows too (std::rename does not there: the menu's changes were lost).
     const std::string temporary = std::string(Path()) + ".tmp";
     FILE* file = std::fopen(temporary.c_str(), "w");
     bool ok = file && std::fwrite(out.data(), 1, out.size(), file) == out.size();
     ok = file && std::fclose(file) == 0 && ok;
-    if (!ok || std::rename(temporary.c_str(), Path()) != 0) {
+    std::error_code error;
+    if (ok) {
+        std::filesystem::rename(temporary, Path(), error);
+    }
+    if (!ok || error) {
         std::printf("Settings: cannot write %s\n", Path());
     }
 }
@@ -502,9 +630,27 @@ const char* PresetName(int preset) {
 }
 
 const char* UpscalerName(int upscaler) {
-    static constexpr const char* names[UpscalerCount] = {"off", "fsr3", "fsr4",   "fsr411",
-                                                         "taa", "dlss", "metalfx"};
+    static constexpr const char* names[UpscalerCount] = {"off", "fsr3", "fsr4", "fsr411", "taa", "dlss", "fsr1",
+                                                                "fsr_amd", "metalfx"};
     return names[std::clamp(upscaler, 0, UpscalerCount - 1)];
+}
+
+const char* LowLatencyName(int mode) {
+    static constexpr const char* names[LowLatencyCount] = {"off", "on", "boost"};
+    return names[std::clamp(mode, 0, LowLatencyCount - 1)];
+}
+
+int EffectiveLowLatency() {
+    const auto& v = Get();
+    const int mode = std::clamp(v.low_latency.load(std::memory_order_relaxed), 0, LowLatencyCount - 1);
+    const bool dlss_frame_gen = v.frame_generation.load(std::memory_order_relaxed) == FrameGenDlss &&
+                                v.dlssg_max_multiplier.load(std::memory_order_relaxed) > 1;
+    return dlss_frame_gen && mode == LowLatencyOff ? int(LowLatencyOn) : mode;
+}
+
+const char* FrameGenName(int frame_gen) {
+    static constexpr const char* names[FrameGenCount] = {"off", "fsr3", "dlss", "fsr_amd"};
+    return names[std::clamp(frame_gen, 0, FrameGenCount - 1)];
 }
 
 } // namespace BbSettings

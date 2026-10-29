@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 # tools/visual.sh NAME [ENV=VALUE...]: enters the level (tools/restart.sh), then captures the game
 # window standing still, after turning the camera and after a few steps forward
 # (out/visual_NAME_{1,2,3}.png; VISUAL_WALK=0: no steps), then closes the game. The log is

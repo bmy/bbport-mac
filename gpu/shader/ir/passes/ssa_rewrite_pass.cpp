@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Register reads and writes (GCN registers, goto variables, virtual registers) become SSA
 // values, by the on-the-fly construction of Braun et al., "Simple and Efficient Construction of

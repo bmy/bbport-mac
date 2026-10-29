@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 # tools/soak.sh <secs>: enters the level, rotates the camera now and then, reports survival.
 cd -- "$(dirname -- "$0")/.."
 unset BB_GPU_PROFILE BB_PRESET_FILE BB_SCENE_DEBUG

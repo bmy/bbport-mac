@@ -1,5 +1,12 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include <cmath>
+#include "shim/bb_env.h"
 #include "upscale/vk_scene_resolution.h"
+
+#include <filesystem>
+#include <vk_mem_alloc.h>
+#include <string>
 #include "vulkan/instance.h"
 #include "render/runtime.h"
 #include "render/scheduler.h"
@@ -22,12 +29,16 @@ SceneTargets::SceneTargets(const Instance& i, Scheduler& s, Runtime& r,
 SceneTargets::SceneTargets(const Instance& i, Scheduler& s, Runtime& r, Lookup get)
     : instance{i}, scheduler{s}, runtime{r}, lookup{std::move(get)} {
     runtime.scene_targets = this;
-    const char* force = std::getenv("BB_SCENE_STENCIL_BITS");
-    force_stencil_bits = force && force[0] == '1';
+    force_stencil_bits = bb_env_on("BB_SCENE_STENCIL_BITS");
+    stencil_zero = !force_stencil_bits && !instance.IsShaderStencilExportSupported() &&
+                   !bb_env_off("BB_SCENE_STENCIL_ZERO");
     CreateResampleResources();
 }
 SceneTargets::~SceneTargets() {
     scheduler.Finish();
+    if (depth_copy_buffer) {
+        vmaDestroyBuffer(instance.GetAllocator(), depth_copy_buffer, depth_copy_allocation);
+    }
     runtime.scene_targets = nullptr;
 }
 vk::FormatFeatureFlags SceneTargets::Features(vk::Format format) const {
@@ -61,18 +72,28 @@ bool SceneTargets::ShaderResampled(const VideoCore::Image& image) const {
     const auto features = Features(format);
     const auto required = vk::FormatFeatureFlagBits::eSampledImage |
                           vk::FormatFeatureFlagBits::eDepthStencilAttachment;
-    // Without shader stencil export (e.g. Pascal) depth/stencil stays native: the eight-draw
-    // stencil resampler costs too much on such GPUs. BB_SCENE_STENCIL_BITS=1 forces it (tests).
+    // Without shader stencil export (e.g. Pascal): the depth alone, the stencil cleared
+    // (stencil_zero); BB_SCENE_STENCIL_BITS=1: the eight-draw stencil reconstruction (tests).
     return (features & required) == required &&
            (!(image.aspect_mask & vk::ImageAspectFlagBits::eStencil) ||
-            instance.IsShaderStencilExportSupported() || force_stencil_bits);
+            instance.IsShaderStencilExportSupported() || force_stencil_bits || stencil_zero);
 }
 // 1 for the scene size, 2 for half resolution (the game's post-processing chain), else 0.
 // Half resolution needs a scene size that halves exactly: the proxy keeps the scene's factor,
-// so the shaders' FragCoord conversion (1920 / scene width) stays correct for it.
-static u32 SizeDivisor(const VideoCore::ImageInfo& i, SceneResolution::Size scene) {
-    if (i.size.width == 1920 && i.size.height == 1080) return 1;
-    if (i.size.width == 960 && i.size.height == 540 && scene.width % 2 == 0 &&
+// so the shaders' FragCoord conversion (1920 / scene width) stays correct for it. A patched
+// native size (live presets over the startup patch) comes in targets aligned up by a few pixels.
+static bool NativeSized(u32 w, u32 h, SceneResolution::Size native) {
+    if (native == SceneResolution::Size{}) {
+        return w == native.width && h == native.height;
+    }
+    return w >= native.width && h >= native.height && w < native.width + 8 &&
+           h < native.height + 8;
+}
+static u32 SizeDivisor(const VideoCore::ImageInfo& i, SceneResolution::Size scene,
+                       SceneResolution::Size native) {
+    if (NativeSized(i.size.width, i.size.height, native)) return 1;
+    if (NativeSized(i.size.width, i.size.height, {native.width / 2, native.height / 2}) &&
+        native.width % 2 == 0 && native.height % 2 == 0 && scene.width % 2 == 0 &&
         scene.height % 2 == 0 && !BbToggle::Disabled(BbToggle::SceneHalfRes)) {
         return 2;
     }
@@ -80,7 +101,7 @@ static u32 SizeDivisor(const VideoCore::ImageInfo& i, SceneResolution::Size scen
 }
 bool SceneTargets::Eligible(const VideoCore::Image& image) const {
     const auto& i = image.info;
-    const u32 div = SizeDivisor(i, size);
+    const u32 div = SizeDivisor(i, size, native);
     if (!div || i.size.depth != 1 || i.resources.layers != 1 || i.num_samples != 1 ||
         i.props.is_block || !image.backing || image.backing->num_samples != 1) {
         return false;
@@ -92,12 +113,34 @@ bool SceneTargets::Eligible(const VideoCore::Image& image) const {
     }
     return Blittable(image.backing->image.image_ci.format) || ShaderResampled(image);
 }
+bool SceneTargets::DepthProxies() const {
+    constexpr vk::Format format = vk::Format::eD32SfloatS8Uint;
+    if (Blittable(format) && !force_stencil_bits) {
+        return true;
+    }
+    const auto required = vk::FormatFeatureFlagBits::eSampledImage |
+                          vk::FormatFeatureFlagBits::eDepthStencilAttachment;
+    return (Features(format) & required) == required &&
+           (instance.IsShaderStencilExportSupported() || force_stencil_bits || stencil_zero);
+}
 bool SceneTargets::EligibleScene(const VideoCore::Image& image) const {
-    return image.info.size.width == 1920 && image.info.size.height == 1080 && Eligible(image);
+    return NativeSized(image.info.size.width, image.info.size.height, native) && Eligible(image);
 }
 SceneResolution::Size SceneTargets::ProxySize(const VideoCore::Image& image, u32 level) const {
-    const u32 div = std::max(1u, SizeDivisor(image.info, size));
+    const u32 div = std::max(1u, SizeDivisor(image.info, size, native));
     return {std::max(1u, size.width / div >> level), std::max(1u, size.height / div >> level)};
+}
+void SceneTargets::SetNative(SceneResolution::Size scene_native) {
+    native = scene_native;
+    size = scene_native;
+}
+SceneResolution::Size SceneTargets::ShaderSceneSize() const {
+    if (native == SceneResolution::Size{}) {
+        return size;
+    }
+    const SceneResolution::Size base{};
+    return {u32(std::lround(double(size.width) * base.width / native.width)),
+            u32(std::lround(double(size.height) * base.height / native.height))};
 }
 bool SceneTargets::SetSize(SceneResolution::Size next) {
     if (next == size) return false;
@@ -108,8 +151,9 @@ bool SceneTargets::SetSize(SceneResolution::Size next) {
     ++generation;
     recent = {};
     size = next;
-    std::printf("Scene resolution: raster %ux%u, half-resolution targets %ux%u, UI 1920x1080 "
-                "(live)\n", size.width, size.height, size.width / 2, size.height / 2);
+    std::printf("Scene resolution: raster %ux%u, half-resolution targets %ux%u, the game's own "
+                "%ux%u, UI 1920x1080 (live)\n", size.width, size.height, size.width / 2,
+                size.height / 2, native.width, native.height);
     return true;
 }
 void SceneTargets::ResolveAll() {
@@ -157,7 +201,26 @@ void SceneTargets::NativeAccess(VideoCore::Image& image, vk::AccessFlags2 access
                 std::printf("Scene native access: %s:%u (%s)\n", caller.file_name(),
                             caller.line(), vk::to_string(access).c_str());
             }
-            Copy(entry, image, true);
+            // BB_SCENE_NO_RESOLVE=file:line,... (diagnostics): those accesses read the native
+            // image as it is (stale), to see whether their resolve matters at all.
+            static const std::string no_resolve = [] {
+                const char* env = bb_env("BB_SCENE_NO_RESOLVE");
+                return env ? "," + std::string{env} + "," : std::string{};
+            }();
+            const std::string site = std::string{std::filesystem::path{caller.file_name()}.filename().string()} +
+                                     ":" + std::to_string(caller.line());
+            // BB_SCENE_SAMPLED_RESOLVE=0 (diagnostics): shader reads take the native image as it
+            // is. Stale or never written after a live preset change: the game's glows and the lamp
+            // travel fade read its depth by texel loads and drew black quads (2026-10-20).
+            static const bool sampled_resolve = [] {
+                const char* env = bb_env("BB_SCENE_SAMPLED_RESOLVE");
+                return !env || env[0] != '0';
+            }();
+            const bool skip = (sampled_access && !sampled_resolve) ||
+                              (!no_resolve.empty() && no_resolve.find("," + site + ",") != std::string::npos);
+            if (!skip) {
+                Copy(entry, image, true);
+            }
         }
         if (access & writes) entry.state.NativeWrite();
     }
@@ -307,7 +370,7 @@ void SceneTargets::Resample(vk::Image src, vk::Image dst, const VideoCore::Image
     });
     const auto pipeline = ResamplePipeline(format, stencil);
     const auto layout = *resample_layout;
-    scheduler.RecordCrumb({.name = "scene resample"}, [=](vk::CommandBuffer cmd) {
+    scheduler.RecordCrumb({.name = "scene resample"}, [=, stencil_zero = stencil_zero](vk::CommandBuffer cmd) {
         const vk::RenderingAttachmentInfo attachment{
             .imageView = target_view,
             .imageLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
@@ -350,7 +413,10 @@ void SceneTargets::Resample(vk::Image src, vk::Image dst, const VideoCore::Image
         if (stencil_bits) {
             // Copy depth first, then reconstruct all eight stencil bits without needing
             // VK_EXT_shader_stencil_export (e.g. Pascal). Discard keeps unset bits clear.
+            // stencil_zero: the first draw (depth) only, over the cleared stencil.
+            const u32 draws = stencil_zero ? 1u : 9u;
             for (u32 bit : {0u, 1u, 2u, 4u, 8u, 16u, 32u, 64u, 128u}) {
+                if (bit != 0u && draws == 1u) break;
                 cmd.pushConstants(layout, vk::ShaderStageFlagBits::eFragment, 0, sizeof(bit), &bit);
                 cmd.setStencilWriteMask(vk::StencilFaceFlagBits::eFrontAndBack, bit);
                 cmd.setStencilReference(vk::StencilFaceFlagBits::eFrontAndBack, bit);
@@ -449,6 +515,161 @@ vk::Pipeline SceneTargets::ResamplePipeline(vk::Format format, bool stencil) {
     resample_pipelines.emplace_back(key, std::move(pipeline));
     return result;
 }
+bool SceneTargets::CopyProxy(VideoCore::ImageId src_id, VideoCore::ImageId dst_id) {
+    if (!Reduced() || BbToggle::Disabled(BbToggle::SceneProxyCopies)) {
+        return false;
+    }
+    auto& src = *lookup(src_id, 0);
+    auto& dst = *lookup(dst_id, 0);
+    // A depth image into a colour image of its 32-bit depth (R32F: the game's copy of its depth
+    // buffer for the next frame) goes through a buffer.
+    const bool depth_to_color = src.info.props.is_depth && !dst.info.props.is_depth &&
+                                dst.info.pixel_format == vk::Format::eR32Sfloat &&
+                                (src.info.pixel_format == vk::Format::eD32Sfloat ||
+                                 src.info.pixel_format == vk::Format::eD32SfloatS8Uint);
+    const bool depth_to_depth = src.info.props.is_depth && dst.info.props.is_depth &&
+                                src.info.pixel_format == dst.info.pixel_format;
+    if (!src.scene_proxy || &src == &dst ||
+        (!depth_to_color && !depth_to_depth && src.info.props.is_depth) ||
+        (dst.info.props.is_depth && !depth_to_depth) ||
+        (!depth_to_color && src.info.pixel_format != dst.info.pixel_format) ||
+        src.info.size != dst.info.size ||
+        src.info.resources.levels != 1 || dst.info.resources.levels != 1 ||
+        src.info.resources.layers != 1 || dst.info.resources.layers != 1 || !Eligible(dst) ||
+        (!depth_to_color && !depth_to_depth && ShaderResampled(src))) {
+        if (debug) {
+            std::printf("Scene proxy copy refused: %s %ux%u L%u -> %s %ux%u L%u, proxy %d eligible %d\n",
+                        vk::to_string(src.info.pixel_format).c_str(), src.info.size.width,
+                        src.info.size.height, src.info.resources.levels,
+                        vk::to_string(dst.info.pixel_format).c_str(), dst.info.size.width,
+                        dst.info.size.height, dst.info.resources.levels, int(src.scene_proxy),
+                        int(Eligible(dst)));
+        }
+        return false;
+    }
+    const auto found = entries.find(Key(src.image_uid, 0));
+    if (found == entries.end() || !found->second->state.dirty) {
+        if (debug) {
+            std::printf("Scene proxy copy: %s native current\n", vk::to_string(src.info.pixel_format).c_str());
+        }
+        return false; // the native image is current: copied as it is
+    }
+    Entry& from = *found->second;
+    const Runtime::TransferMark mark{runtime, "scene proxy copy", dst};
+    auto& slot = entries[Key(dst.image_uid, 0)];
+    if (!slot) {
+        slot = std::make_unique<Entry>();
+        slot->source = dst_id;
+        slot->uid = dst.image_uid;
+        slot->level = 0;
+        slot->image = VideoCore::HostImage(instance.GetDevice(), instance.GetAllocator());
+        auto ci = dst.backing->image.image_ci;
+        ci.pNext = nullptr;
+        const auto proxy = ProxySize(dst, 0);
+        ci.extent = vk::Extent3D{proxy.width, proxy.height, 1};
+        ci.mipLevels = 1;
+        slot->image.Create(ci);
+        tracked.insert(dst.image_uid);
+    }
+    dst.scene_proxy = true;
+    Entry& to = *slot;
+    if (from.image.image_ci.extent != to.image.image_ci.extent) {
+        return false;
+    }
+    if (depth_to_color) {
+        const auto extent = to.image.image_ci.extent;
+        const vk::DeviceSize bytes = vk::DeviceSize(extent.width) * extent.height * 4;
+        if (bytes > depth_copy_size) {
+            if (depth_copy_buffer) {
+                scheduler.Finish();
+                vmaDestroyBuffer(instance.GetAllocator(), depth_copy_buffer, depth_copy_allocation);
+                depth_copy_buffer = VK_NULL_HANDLE;
+            }
+            const VkBufferCreateInfo buffer_ci{
+                .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                .size = bytes,
+                .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            };
+            const VmaAllocationCreateInfo alloc_ci{.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+            if (vmaCreateBuffer(instance.GetAllocator(), &buffer_ci, &alloc_ci, &depth_copy_buffer,
+                                &depth_copy_allocation, nullptr) != VK_SUCCESS) {
+                depth_copy_buffer = VK_NULL_HANDLE;
+                depth_copy_size = 0;
+                return false;
+            }
+            depth_copy_size = bytes;
+        }
+        Transition(from, vk::ImageAspectFlagBits::eDepth, vk::ImageLayout::eTransferSrcOptimal,
+                   vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferRead);
+        Transition(to, vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eTransferDstOptimal,
+                   vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite);
+        scheduler.Record([src_image = vk::Image(from.image), dst_image = vk::Image(to.image),
+                          buffer = vk::Buffer(depth_copy_buffer), extent](vk::CommandBuffer cmd) {
+            const vk::BufferImageCopy from_depth{
+                .imageSubresource = {vk::ImageAspectFlagBits::eDepth, 0, 0, 1},
+                .imageExtent = extent,
+            };
+            cmd.copyImageToBuffer(src_image, vk::ImageLayout::eTransferSrcOptimal, buffer, from_depth);
+            const vk::BufferMemoryBarrier2 written{
+                .srcStageMask = vk::PipelineStageFlagBits2::eCopy,
+                .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+                .dstStageMask = vk::PipelineStageFlagBits2::eCopy,
+                .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
+                .buffer = buffer,
+                .size = VK_WHOLE_SIZE,
+            };
+            cmd.pipelineBarrier2({.bufferMemoryBarrierCount = 1, .pBufferMemoryBarriers = &written});
+            const vk::BufferImageCopy to_color{
+                .imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+                .imageExtent = extent,
+            };
+            cmd.copyBufferToImage(buffer, dst_image, vk::ImageLayout::eTransferDstOptimal, to_color);
+            // The next copy reuses the buffer: its reads of this one are done first.
+            const vk::BufferMemoryBarrier2 read{
+                .srcStageMask = vk::PipelineStageFlagBits2::eCopy,
+                .srcAccessMask = vk::AccessFlagBits2::eTransferRead,
+                .dstStageMask = vk::PipelineStageFlagBits2::eCopy,
+                .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+                .buffer = buffer,
+                .size = VK_WHOLE_SIZE,
+            };
+            cmd.pipelineBarrier2({.bufferMemoryBarrierCount = 1, .pBufferMemoryBarriers = &read});
+        });
+        to.state.ProxyWrite();
+        dst.flags |= VideoCore::ImageFlagBits::GpuModified;
+        dst.flags &= ~VideoCore::ImageFlagBits::Dirty;
+        if (debug) {
+            std::printf("Scene proxy copy: depth %ux%u into R32F\n", src.info.size.width,
+                        src.info.size.height);
+        }
+        return true;
+    }
+    const vk::ImageAspectFlags aspect = depth_to_depth ? dst.aspect_mask
+                                                       : vk::ImageAspectFlags(vk::ImageAspectFlagBits::eColor);
+    Transition(from, aspect, vk::ImageLayout::eTransferSrcOptimal,
+               vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferRead);
+    Transition(to, aspect, vk::ImageLayout::eTransferDstOptimal,
+               vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite);
+    scheduler.Record([src_image = vk::Image(from.image), dst_image = vk::Image(to.image),
+                      extent = to.image.image_ci.extent, aspect](vk::CommandBuffer cmd) {
+        const vk::ImageCopy region{
+            .srcSubresource = {aspect, 0, 0, 1},
+            .dstSubresource = {aspect, 0, 0, 1},
+            .extent = extent,
+        };
+        cmd.copyImage(src_image, vk::ImageLayout::eTransferSrcOptimal, dst_image,
+                      vk::ImageLayout::eTransferDstOptimal, region);
+    });
+    to.state.ProxyWrite(); // the native destination resolves on its first native access
+    dst.flags |= VideoCore::ImageFlagBits::GpuModified;
+    dst.flags &= ~VideoCore::ImageFlagBits::Dirty;
+    if (debug) {
+        std::printf("Scene proxy copy: %s %ux%u\n", vk::to_string(src.info.pixel_format).c_str(),
+                    src.info.size.width, src.info.size.height);
+    }
+    return true;
+}
+
 SceneTargets::Entry& SceneTargets::Get(VideoCore::ImageId id, u32 level) {
     auto& original = *lookup(id, 0);
     const u64 key = Key(original.image_uid, level);
@@ -515,7 +736,12 @@ SceneTargets::Target SceneTargets::Attachment(VideoCore::ImageId id,
     return {e.image, View(e, original, attachment_info), e.layout, e.image.image_ci.usage};
 }
 bool SceneTargets::ProxyCurrent(const VideoCore::Image& image, u32 level, u32 levels) const {
-    if (copying || !image.scene_proxy || image.info.props.is_depth || levels != 1) {
+    // Depth proxies are sampled too (the game's depth downsample and the effects reading its
+    // depth): else each read resolved the reduced depth to the native size first.
+    // BB_SCENE_DEPTH_PROXIES=0: depth images are read at the native size.
+    static const bool depth_proxies = !bb_env_off("BB_SCENE_DEPTH_PROXIES");
+    if (copying || !image.scene_proxy || (image.info.props.is_depth && !depth_proxies) ||
+        levels != 1) {
         return false;
     }
     const auto it = entries.find(Key(image.image_uid, level));

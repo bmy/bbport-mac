@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // EXP: render target exports (unpacked from 16-bit pairs when compressed, masked by the export
 // format, swizzled to the color buffer's component order and converted), depth/stencil/sample

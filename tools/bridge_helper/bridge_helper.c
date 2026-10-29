@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* bbport: Wine side of the memory bridge test (tools/bridge_helper). Built with MinGW, run under
  * Proton's Wine. Imports a Vulkan buffer the native process exported as an opaque fd (inherited
  * fd number on the command line) through VK_KHR_external_memory_win32, checks the native

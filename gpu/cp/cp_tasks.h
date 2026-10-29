@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport cp: packet work run in stream order with the draws (Rasterizer::RunInOrder). Each takes
 // a copy of its packet (or a small task record) as bytes.

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: FSR 4.1.1 (AMD's 4.1.1 upscaler DLL) on Vulkan, replaying what the DLL does on D3D12
 // (docs/upscaler.md; tools/fsr4cap records it, tools/fsr4cap/extract.py builds the asset sets:
@@ -36,7 +37,16 @@ struct Features {
     /// The same with FP16 instead of FP8 matrices: the FP8 variant emulated (fp8emu, testing only:
     /// BB_FSR411_VARIANT=fp8emu).
     bool fp16_matrices = false;
+    /// An integrated GPU (the Steam Deck): the Lite model by default, as AMD's driver picks it.
+    bool integrated = false;
+    /// The model wanted: "auto", "fp8", "int8", "int8_rdna2" or "int8_lite" (bbport.ini fsr4_model;
+    /// BB_FSR411_VARIANT=int8, fp8, fp8emu, navi2 or lite overrides it).
+    std::string model = "auto";
 };
+
+/// The models (bits 1 fp8, 2 int8, 3 int8_rdna2, 4 int8_lite, as Features::model's order after
+/// "auto") whose asset sets are in `dir` and which the device runs.
+unsigned AvailableModels(const std::string& dir, const Features& features);
 
 struct Frame {
     VkCommandBuffer cmdbuf = VK_NULL_HANDLE;
@@ -54,17 +64,25 @@ struct Frame {
 
 class Upscaler {
 public:
-    /// `dir`: the asset sets (t1080_m0 ... t2160_m1, fp8/..., fp8emu/...). The FP8 variant when
-    /// the device has FP8 matrices and its sets are there, else INT8; BB_FSR411_VARIANT=int8,
-    /// fp8 or fp8emu picks one (when the device can run it).
+    /// `dir`: the asset sets (t1080_m0 ... t2160_m1, fp8/..., fp8emu/..., navi2/..., lite/...).
+    /// The model is Features::model where its sets are there and the device runs it, else by the
+    /// GPU as for "auto" (FP8 with FP8 matrices, Lite on an integrated GPU without matrix cores,
+    /// INT8 RDNA2 on others without them, INT8).
     Upscaler(VkPhysicalDevice physical, VkDevice device, std::string dir, Features features = {});
     ~Upscaler();
 
     /// Records one upscale; false with Error() set when it cannot (assets, device, sizes).
     bool Record(const Frame& frame);
     [[nodiscard]] const std::string& Error() const noexcept;
+    /// Creates the asset set, pipelines and buffers for this output ahead of Record() (which
+    /// would do it on its first frame); safe on another thread while nothing records with it.
+    bool Build(bool ultra_performance, uint32_t output_width, uint32_t output_height);
+    /// Whether Build() (or a Record()) made the set for this output.
+    [[nodiscard]] bool Matches(bool ultra_performance, uint32_t output_width, uint32_t output_height) const;
     /// The variant, asset set and sizes in use, for logs ("FP8 t2160_m0 output 3840x2160").
     [[nodiscard]] std::string Describe() const;
+    /// The model's name ("INT8 (RDNA2)"), static.
+    [[nodiscard]] const char* ModelName() const;
 
 private:
     struct Impl;

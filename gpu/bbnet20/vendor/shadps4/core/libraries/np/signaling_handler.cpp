@@ -22,6 +22,9 @@
 #include "core/libraries/np/np_matching2/np_matching2_internal.h"
 #include "core/libraries/np/np_matching2/np_matching2_signaling.h"
 #include "core/libraries/np/np_signaling/np_signaling_state.h"
+#include <fmt/format.h>
+
+#include "core/bbsc_relay_client.h"
 #include "core/bloodborne_re.h"
 #include "core/net/p2p_relay.h"
 #include "core/libraries/np/np_signaling/np_signaling_transport.h"
@@ -155,6 +158,7 @@ void ProcessSignalingPacket(const void* data, u32 len, u32 from_addr, u16 from_p
         type == static_cast<u8>(NpSignaling::SignalingPacketType::BbscFollow)) {
         NpSignaling::SignalingBbscFollow follow{}; // lamp_point stays -1 for an older build's packet
         std::memcpy(&follow, buf, nbytes);
+        Core::Bbsc::NoteSignalingBbscPacket();
         Core::Bloodborne::OnBbscHostFollowPacket(follow.packed_map, follow.x, follow.y, follow.z,
                                                  follow.heading, follow.sequence,
                                                  follow.lamp_point);
@@ -163,7 +167,37 @@ void ProcessSignalingPacket(const void* data, u32 len, u32 from_addr, u16 from_p
 
     if (nbytes == sizeof(NpSignaling::SignalingBbscWorldFlags) &&
         type == static_cast<u8>(NpSignaling::SignalingPacketType::BbscWorldFlags)) {
+        Core::Bbsc::NoteSignalingBbscPacket();
         Core::Bloodborne::OnBbscWorldFlagsPacket(buf, static_cast<u32>(nbytes));
+        return;
+    }
+
+    if (nbytes == sizeof(NpSignaling::SignalingBbscPvp) &&
+        type == static_cast<u8>(NpSignaling::SignalingPacketType::BbscPvp)) {
+        NpSignaling::SignalingBbscPvp pvp{};
+        std::memcpy(&pvp, buf, sizeof(pvp));
+        if (pvp.kind == 0) {
+            Core::Bbsc::NoteSignalingBbscPacket(); // kind 0 = the host's state
+        }
+        Core::Bloodborne::OnBbscPvpPacket(pvp.kind, pvp.on);
+        return;
+    }
+
+    // BBSC (2026-10-19): the host's progress ("SHAD" 0x26 + u8 count + count x u32 flags it has
+    // on) and the boss on its boss bar ("SHAD" 0x27 + s32). The mod's relay took them all along;
+    // this receive dropped them as unexpected, so a guest on the emulator build never got the
+    // host's boss flags for shared progress, nor (now) its time of night. Only a host sends them.
+    if (type == 0x26 && nbytes >= 6 && nbytes == 6 + 4 * static_cast<size_t>(buf[5])) {
+        std::vector<u32> flags(buf[5]);
+        std::memcpy(flags.data(), buf + 6, flags.size() * 4);
+        Core::Bloodborne::OnBbscProgressPacket(flags.data(), flags.size());
+        return;
+    }
+
+    if (type == 0x27 && nbytes == 9) {
+        s32 boss = -1;
+        std::memcpy(&boss, buf + 5, 4);
+        Core::Bloodborne::OnBbscHostBossPacket(boss);
         return;
     }
 
@@ -697,6 +731,12 @@ void CloseConnectionAndDispatchDead(s32 conn_id, s32 sig_error_code, s32 matchin
         QueueMatching2DeadForTransport(transport_id, matching2_error_code);
     }
     if (fire_sig1) {
+        Core::Bloodborne::BbscTimelineEvent(
+            "NET", fmt::format("connection {} lost ({:#x}{})", conn_id, static_cast<u32>(sig_error_code),
+                               static_cast<u32>(sig_error_code) ==
+                                       static_cast<u32>(::ORBIS_NP_SIGNALING_ERROR_TIMEOUT)
+                                   ? ": no answer"
+                                   : ""));
         NpSignaling::DispatchConnectionEvent(conn_id, NpSignaling::ORBIS_NP_SIGNALING_EVENT_DEAD,
                                              sig_error_code);
     }
@@ -729,6 +769,12 @@ void CloseTransportAndDispatchDead(s32 transport_id, s32 sig_error_code, s32 mat
 
     QueueMatching2DeadForTransport(transport_id, matching2_error_code);
     for (const s32 conn_id : sig1_conns) {
+        Core::Bloodborne::BbscTimelineEvent(
+            "NET", fmt::format("connection {} lost ({:#x}{})", conn_id, static_cast<u32>(sig_error_code),
+                               static_cast<u32>(sig_error_code) ==
+                                       static_cast<u32>(::ORBIS_NP_SIGNALING_ERROR_TIMEOUT)
+                                   ? ": no answer"
+                                   : ""));
         NpSignaling::DispatchConnectionEvent(conn_id, NpSignaling::ORBIS_NP_SIGNALING_EVENT_DEAD,
                                              sig_error_code);
     }
@@ -808,6 +854,8 @@ void EstablishConnection(s32 transport_id, bool peer_activated_hint) {
         NpSignaling::DispatchPeerActivatedEvent(conn_id);
     }
     for (const s32 conn_id : sig1_established) {
+        Core::Bloodborne::BbscTimelineEvent(
+            "NET", fmt::format("connection {} to another player established", conn_id));
         NpSignaling::DispatchConnectionEvent(conn_id,
                                              NpSignaling::ORBIS_NP_SIGNALING_EVENT_ESTABLISHED, 0);
     }

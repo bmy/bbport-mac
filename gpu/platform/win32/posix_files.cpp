@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport Windows: the file calls of bbport_posix_c.h (the runtime's) with Linux semantics.
 #include <windows.h>

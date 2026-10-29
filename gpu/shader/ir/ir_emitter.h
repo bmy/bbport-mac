@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport shader translator IR: building instructions. An emitter appends to a block (or inserts
 // before a point in it); each method emits the operation for its operand types.

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Simplifies networks of phis, taken as strongly connected components (Tarjan):
 //  - an SCC whose outside operands all come from the same one-operand instruction (a conversion,

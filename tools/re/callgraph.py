@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Direct call graph (E8/E9 rel32 to function starts from .eh_frame_hdr) for a target address range.
 
 Usage: callgraph.py out/eboot.elf LO HI [out.txt]

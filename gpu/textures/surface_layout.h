@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport textures: how a surface level lies in memory: its padded pitch and height and its size,
 // linear (aligned), micro tiled (8x8 texel tiles) or macro tiled (tiles spread over the GPU's

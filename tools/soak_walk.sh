@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 # tools/soak_walk.sh SECS [ENV=VALUE...]: enters the level, then walks and turns in a loop (area
 # streaming), reports survival; the log ends up in out/soak_walk_<time>.log.
 cd -- "$(dirname -- "$0")/.."

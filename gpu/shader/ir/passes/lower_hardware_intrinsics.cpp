@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Lowers operations that mirror GCN hardware: float class tests, the fields of the packed
 // ancillary VGPR (sample index, render target index), and masked bit counts (MBCNT).

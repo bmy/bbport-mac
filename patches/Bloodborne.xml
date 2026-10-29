@@ -273,6 +273,17 @@
             <Line Type="bytes" Address="0x026C254A" Value="00"/>
         </PatchList>
     </Metadata>
+    <Metadata Title="Bloodborne" Name="Force FXAA2" Note="Forces the game's FXAA2 (stacks with FXAA2_GS)." Author="Kyo" PatchVer="1.0" AppVer="01.09" AppElf="eboot.bin" isEnabled="false">
+        <PatchList>
+            <Line Type="bytes" Address="0x026A019F" Value="C7832002000001000000"/>
+        </PatchList>
+    </Metadata>
+    <Metadata Title="Bloodborne" Name="FXAA2_GS" Note="The AA step runs FXAA2_GS (Kyo's FXAA2_GS + DLAA_GS without the DLAA_GS pass). Needs the AA on." Author="Kyo, bbport" PatchVer="1.0" AppVer="01.09" AppElf="eboot.bin" isEnabled="false">
+        <PatchList>
+            <Line Type="bytes" Address="0x026A07A6" Value="498D9C24C81B00004889DF488DB520F5FFFFE8338FBBFEC643090183630C004889DFBA34000000EB05"/>
+            <Line Type="bytes" Address="0x026A07D4" Value="488DB560F7FFFFB9090000004C8B8578F1FFFFE86484BBFE41B701EB29"/>
+        </PatchList>
+    </Metadata>
     <Metadata Title="Bloodborne" Name="Disable DoF" Note="Disables Depth of Field" Author="Kyo" PatchVer="1.0" AppVer="01.09" AppElf="eboot.bin" isEnabled="true">
         <PatchList>
             <Line Type="bytes" Address="0x025D7BBC" Value="E9DF00000090"/>

@@ -1,5 +1,7 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "bbport_button_prompts.h"
+#include "shim/bb_env.h"
 
 #include <algorithm>
 #include <atomic>
@@ -188,7 +190,7 @@ void LoadTable() {
                 icon_hashes[k] = XXH3_64bits(tpf.data() + offset, size);
                 std::memcpy(icon_bytes[k].data(), tpf.data() + offset, GameIconBytes);
                 ++found;
-                if (const char* trace = std::getenv("BB_PROMPT_TRACE"); trace && trace[0] == '1') {
+                if (const char* trace = bb_env("BB_PROMPT_TRACE"); trace && trace[0] == '1') {
                     std::printf("Prompt trace: %s at %#x in the TPF, format %#x %ux%u, hash %016llx\n",
                                 Icons[k].name, offset, e[8], u32(e[12]) | u32(e[13]) << 8,
                                 u32(e[14]) | u32(e[15]) << 8, (unsigned long long)icon_hashes[k]);
@@ -217,10 +219,7 @@ void LoadTable() {
 }
 
 bool Switch() {
-    static const bool on = [] {
-        const char* env = std::getenv("BB_BUTTON_PROMPTS");
-        return !(env && env[0] == '0');
-    }();
+    static const bool on = !bb_env_off("BB_BUTTON_PROMPTS");
     return on;
 }
 

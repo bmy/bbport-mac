@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: camera motion vectors from depth and the current/previous camera (Bloodborne's scene
 // constants, see docs/upscaler.md). DEBUG_OVERLAY blends them as colors into the frame.
@@ -14,7 +15,9 @@ layout(binding = 3, std430) writeonly buffer NextFrame { uint next_frame[]; };
 #else
 layout(binding = 1, rg16f) uniform writeonly image2D motion_img; // pixels, previous - current
 // Object motion from the G-buffer: rg pixels, b = valid, a = written depth.
-layout(binding = 2) uniform texture2D object_tex;
+// Object motion (vk_object_motion.cpp, R32G32_UINT): x = the vector as two halves, y = the depth
+// with the sign bit set where a vector was written. Read only in mode 1.
+layout(binding = 2) uniform utexture2D object_tex;
 #endif
 
 layout(push_constant) uniform Constants {
@@ -89,7 +92,10 @@ void main() {
 #else
     vec2 result = motion;
     if (mode == 1) {
-        const vec4 object_motion = texelFetch(object_tex, pixel, 0);
+        const uvec2 packed = texelFetch(object_tex, pixel, 0).xy;
+        const vec4 object_motion = vec4(unpackHalf2x16(packed.x),
+                                        (packed.y & 0x80000000u) != 0u ? 1.0 : 0.0,
+                                        uintBitsToFloat(packed.y & 0x7fffffffu));
         // A later ordinary draw may have covered this pixel without touching the motion
         // target. Its final depth then differs from the depth stored with the vector.
         // Both depths are full precision. Do not accept an old foreground vector merely

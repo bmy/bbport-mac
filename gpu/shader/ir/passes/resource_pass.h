@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport shader translator: what the resource passes share: the sharp references found for each
 // resource user, and the classes of instructions that take a buffer or image.

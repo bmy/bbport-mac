@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Constant folding and local algebraic simplification: operations on immediates are evaluated,
 // commutative operations get their immediate on the right (and chains of them combined), and

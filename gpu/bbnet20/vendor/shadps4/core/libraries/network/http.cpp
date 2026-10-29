@@ -25,6 +25,7 @@
 #include "common/logging/log.h"
 #include "common/path_util.h"
 #include "core/bbsc_persistence.h"
+#include "core/bbsc_relay_client.h"
 #include "core/bloodborne_re.h"
 #include "core/emulator_settings.h"
 #include "core/libraries/error_codes.h"
@@ -367,7 +368,7 @@ static const HostOverrideState& GetHostOverrideState() {
     return s;
 }
 
-// bbport: The Hunter's Dream backend (gpu/bbnet/thd).
+// bbport: The Hunter's Dream backend (gpu/bbnet20/thd).
 extern "C" bool bbthd_enabled();
 extern "C" void bbthd_add_game_headers(std::vector<std::pair<std::string, std::string>>* headers);
 
@@ -1107,8 +1108,23 @@ static bool HeaderNameMatches(std::string_view a, std::string_view b) {
 }
 
 static bool IsCredentialHeader(std::string_view name) {
-    return HeaderNameMatches(name, "Authorization") ||
-           HeaderNameMatches(name, "Proxy-Authorization") || HeaderNameMatches(name, "Cookie");
+    if (HeaderNameMatches(name, "Authorization") ||
+        HeaderNameMatches(name, "Proxy-Authorization") || HeaderNameMatches(name, "Cookie")) {
+        return true;
+    }
+    // bbport: any other header that can carry an account's secret (tokens, session ids, keys)
+    // never reaches a log either.
+    std::string lower(name);
+    for (char& c : lower) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    for (const std::string_view secret :
+         {"cookie", "token", "password", "secret", "session", "ticket", "key"}) {
+        if (lower.find(secret) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static std::string GetLibhttpSystemVersionString() {
@@ -1700,21 +1716,23 @@ bool EnvFlagEnabled(const char* name) {
 }
 
 bool IsBloodborneSummonPath(std::string_view path) {
-    return path.find("/summon_messenger/") != std::string_view::npos;
+    return path.find("/summon_messenger/") != std::string_view::npos ||
+           path.starts_with("/summon_messenger") ||
+           path == "/create" || path == "/get" || path == "/request" || path == "/delete"; // [extra: Teefpyre]
 }
 
 constexpr std::string_view BloodborneHostPlacementHeader = "X-ShadPS4-Bloodborne-Host-Placement";
 
 bool IsBloodborneSummonRequestPath(std::string_view path) {
-    return path.find("/summon_messenger/request") != std::string_view::npos;
+    return path.find("/summon_messenger/request") != std::string_view::npos || path == "/request"; // [extra: Teefpyre]
 }
 
 bool IsBloodborneSummonSearchPath(std::string_view path) {
-    return path.find("/summon_messenger/get") != std::string_view::npos;
+    return path.find("/summon_messenger/get") != std::string_view::npos || path == "/get"; // [extra: Teefpyre]
 }
 
 bool IsBloodborneSummonCreatePath(std::string_view path) {
-    return path.find("/summon_messenger/create") != std::string_view::npos;
+    return path.find("/summon_messenger/create") != std::string_view::npos || path == "/create"; // [extra: Teefpyre]
 }
 
 std::optional<std::string_view> FindResponseHeader(std::string_view headers,
@@ -1793,6 +1811,23 @@ static void RewriteConnectFirstAreaId(SendRequestPlan& plan) {
     LOG_INFO(Lib_Http, "BBSC connect-first: advertisement AreaId {} -> {}", original, replacement);
 }
 
+// "...\"Key\":1234..." in a summon request body -> 1234 (0 when missing).
+std::int64_t JsonBodyNumber(const std::vector<u8>& body, std::string_view key) {
+    const std::string_view text{reinterpret_cast<const char*>(body.data()), body.size()};
+    const std::string needle = "\"" + std::string(key) + "\":";
+    const size_t at = text.find(needle);
+    if (at == std::string_view::npos) {
+        return 0;
+    }
+    size_t end = at + needle.size();
+    while (end < text.size() && (std::isdigit(static_cast<unsigned char>(text[end])) != 0 ||
+                                 text[end] == '-')) {
+        ++end;
+    }
+    const std::string number(text.substr(at + needle.size(), end - at - needle.size()));
+    return number.empty() ? 0 : std::atoll(number.c_str());
+}
+
 bool ApplyBloodborneSeamlessRoute(SendRequestPlan& plan) {
     if (!EnvFlagEnabled("SHADPS4_BLOODBORNE_SEAMLESS_COOP") ||
         !EmulatorSettings.IsShadNetEnabled() || !IsBloodborneSummonPath(plan.path)) {
@@ -1824,11 +1859,23 @@ bool ApplyBloodborneSeamlessRoute(SendRequestPlan& plan) {
     plan.headers.emplace_back("X-ShadPS4-Bloodborne-Seamless", "1");
     // BBSC: SHADPS4_BBSC_NO_PLACEMENT_HEADER=1 disables the host-placement transport in both
     // directions (isolation test for the seamless join stall; cross-map preparation needs it).
+    // 0.0.2 (2026-10-13): only on the claim (/request), not on the search (/get) - a search with a
+    // placement locked every cross-map sign into "Preparing" for that one host, so on a public
+    // server with many hosts nobody's Kin Bell sign could be rung by anyone else.
     if (!EnvFlagEnabled("SHADPS4_BBSC_NO_PLACEMENT_HEADER") &&
-        (IsBloodborneSummonRequestPath(plan.path) || IsBloodborneSummonSearchPath(plan.path))) {
+        IsBloodborneSummonRequestPath(plan.path)) {
         if (const auto placement = Core::Bloodborne::GetSeamlessHostPlacementHeader()) {
             plan.headers.emplace_back(BloodborneHostPlacementHeader, *placement);
+            // BBSC (2026-10-19): the rung sign's player also hears it over the relay, as the
+            // mod's hosts do - a mod guest takes its host's packets from that sender
+            // (bbsc_relay_client.cpp).
+            if (const std::int64_t target = JsonBodyNumber(plan.body, "TargetUserId"); target > 0) {
+                Core::Bbsc::RelaySendAimedPlacement(target, *placement);
+            }
         }
+    }
+    if (IsBloodborneSummonCreatePath(plan.path)) {
+        Core::Bbsc::NoteOwnSignUserId(JsonBodyNumber(plan.body, "UserId"));
     }
 
     // BBSC connect-first cross-map summon: advertise the sign in the host's map so the broker
@@ -1878,8 +1925,12 @@ void ClearStaleSeamlessSummonRecord(const SendRequestPlan& plan) {
 
     SendRequestPlan removal = plan;
     const auto create_pos = removal.path.find("/summon_messenger/create");
-    removal.path.replace(create_pos, std::string_view{"/summon_messenger/create"}.size(),
-                         "/summon_messenger/delete");
+    if (create_pos != std::string::npos) { // [extra: Teefpyre]
+        removal.path.replace(create_pos, std::string_view{"/summon_messenger/create"}.size(),
+                             "/summon_messenger/delete");
+    } else if (removal.path == "/create") { // [extra: Teefpyre]
+        removal.path = "/delete"; // [extra: Teefpyre]
+    } // [extra: Teefpyre]
     const std::string body = nlohmann::json{{"MessageId", "SummonDataRemoveRequest"},
                                             {"SessionId", session_id},
                                             {"UserId", user_id},
@@ -1988,6 +2039,18 @@ int PS4_SYSV_ABI sceHttpSendRequest(int reqId, const void* postData, u64 size) {
     }
 
     ApplyBloodborneSeamlessRoute(plan);
+    // BBSC: fewer messages / bloodstains per message_area request (Panic 265, see bloodborne_re.cpp).
+    if (!plan.body.empty() && plan.path.find("/message_area") != std::string::npos) {
+        std::string body(plan.body.begin(), plan.body.end());
+        if (const std::string changed = Core::Bloodborne::CapBbscAreaListRequest(plan.path, body);
+            !changed.empty()) {
+            plan.body.assign(body.begin(), body.end());
+            std::erase_if(plan.headers, [](const auto& header) {
+                return HeaderNameMatches(header.first, "Content-Length");
+            });
+            LOG_INFO(Lib_Http, "{} (reqId={})", changed, reqId);
+        }
+    }
 
     const bool online = EmulatorSettings.IsConnectedToNetwork();
     LOG_INFO(Lib_Http, "reqId={} dispatched to async worker [{} {} {}://{}:{}{}]", reqId,

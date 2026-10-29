@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: libSceAvPlayer, the system's video player: games give it an MP4 (H.264 or HEVC video,
 // AAC audio), it demuxes and decodes on its own threads (FFmpeg here) into buffers the game

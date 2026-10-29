@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Without aliased shared memory (VK_KHR_workgroup_memory_explicit_layout) shared memory has one
 // element type: 16- and 64-bit loads and stores of compute shaders become 32-bit ones, unless

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Reads and writes of the shader's interface: user data (push constants), the flattened user
 // data, constant buffers, input/output attributes and builtins, tessellation attributes and
@@ -423,17 +424,20 @@ static Id PagedLoad(EmitContext& ctx, const EmitContext::BufferDefinition& buffe
     return ctx.OpSelect(type, access.guard, value, zero);
 }
 
+/// The game's buffer copy shader: its destinations include data the CPU reads, so the guest
+/// bytes are written as well as the VRAM view (other shaders keep the mirror bookkeeping).
+static bool IsBufferCopyShader(const EmitContext& ctx) {
+    return ctx.profile.buffer_copy_shader_hash != 0 &&
+           ctx.info.pgm_hash == ctx.profile.buffer_copy_shader_hash;
+}
+
 static void PagedStore(EmitContext& ctx, const EmitContext::BufferDefinition& buffer, Id index,
                        u32 bytes, Id type, Id value) {
     const Id byte_offset =
         ctx.OpShiftLeftLogical(ctx.U32[1], index, ctx.ConstU32(u32(std::countr_zero(bytes))));
     const auto access = ctx.PagedPointer(buffer, byte_offset, bytes, type);
     ctx.OpStore(access.pointer, value, spv::MemoryAccessMask::Aligned, bytes);
-    if (ctx.profile.buffer_copy_shader_hash != 0 &&
-        ctx.info.pgm_hash == ctx.profile.buffer_copy_shader_hash) {
-        // The game's buffer copy shader: its destinations include data the CPU reads, so the
-        // guest bytes are written as well as the VRAM view (other shaders keep the mirror
-        // bookkeeping).
+    if (IsBufferCopyShader(ctx)) {
         const auto guest = ctx.PagedPointer(buffer, byte_offset, bytes, type, true);
         ctx.OpStore(guest.pointer, value, spv::MemoryAccessMask::Aligned, bytes);
     }
@@ -448,13 +452,19 @@ static Id EmitLoadBufferB32xN(EmitContext& ctx, IR::Inst* inst, u32 handle, Id a
     const auto [id, pointer_type] = spv_buffer.Alias(alias);
 
     boost::container::static_vector<Id, N> ids;
+    if (spv_buffer.paged) {
+        // One page table lookup for the dwords of a page (PagedDwords).
+        const Id zero = alias == PointerType::U32 ? ctx.u32_zero_value : ctx.f32_zero_value;
+        const Id byte_offset = ctx.OpShiftLeftLogical(ctx.U32[1], address, ctx.ConstU32(2U));
+        for (const auto& access : ctx.PagedDwords(spv_buffer, byte_offset, N, data_types[1])) {
+            const Id value =
+                ctx.OpLoad(data_types[1], access.pointer, spv::MemoryAccessMask::Aligned, 4U);
+            ids.push_back(ctx.OpSelect(data_types[1], access.guard, value, zero));
+        }
+        return N == 1 ? ids[0] : ctx.OpCompositeConstruct(data_types[N], ids);
+    }
     for (u32 i = 0; i < N; i++) {
         const Id index_i = i == 0 ? address : ctx.OpIAdd(ctx.U32[1], address, ctx.ConstU32(i));
-        if (spv_buffer.paged) {
-            const Id zero = alias == PointerType::U32 ? ctx.u32_zero_value : ctx.f32_zero_value;
-            ids.push_back(PagedLoad(ctx, spv_buffer, index_i, 4, data_types[1], zero));
-            continue;
-        }
         const Id ptr_i = ctx.OpAccessChain(pointer_type, id, ctx.u32_zero_value, index_i);
         const Id result_i = ctx.OpLoad(data_types[1], ptr_i);
         ids.push_back(result_i);
@@ -551,13 +561,29 @@ static void EmitStoreBufferB32xN(EmitContext& ctx, IR::Inst* inst, u32 handle, I
     const auto& data_types = alias == PointerType::U32 ? ctx.U32 : ctx.F32;
     const auto [id, pointer_type] = spv_buffer.Alias(alias);
 
+    if (spv_buffer.paged) {
+        // One page table lookup for the dwords of a page (PagedDwords), the VRAM view's and
+        // (the game's buffer copy shader) the guest bytes'.
+        const Id byte_offset = ctx.OpShiftLeftLogical(ctx.U32[1], address, ctx.ConstU32(2U));
+        const auto value_at = [&](u32 i) {
+            return N == 1 ? value : ctx.OpCompositeExtract(data_types[1], value, i);
+        };
+        const auto store_all = [&](bool guest_write) {
+            const auto accesses =
+                ctx.PagedDwords(spv_buffer, byte_offset, N, data_types[1], guest_write);
+            for (u32 i = 0; i < N; i++) {
+                ctx.OpStore(accesses[i].pointer, value_at(i), spv::MemoryAccessMask::Aligned, 4U);
+            }
+        };
+        store_all(false);
+        if (IsBufferCopyShader(ctx)) {
+            store_all(true);
+        }
+        return;
+    }
     for (u32 i = 0; i < N; i++) {
         const Id index_i = i == 0 ? address : ctx.OpIAdd(ctx.U32[1], address, ctx.ConstU32(i));
         const Id value_i = N == 1 ? value : ctx.OpCompositeExtract(data_types[1], value, i);
-        if (spv_buffer.paged) {
-            PagedStore(ctx, spv_buffer, index_i, 4, data_types[1], value_i);
-            continue;
-        }
         const Id ptr_i = ctx.OpAccessChain(pointer_type, id, ctx.u32_zero_value, index_i);
         ctx.OpStore(ptr_i, value_i);
     }

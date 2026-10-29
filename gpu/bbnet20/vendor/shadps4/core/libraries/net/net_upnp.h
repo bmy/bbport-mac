@@ -42,6 +42,7 @@ public:
 
     // Forwards `port` once discovery has finished (waiting up to 10 s for it), on a background
     // thread so the caller never waits for the router. Replaces an earlier request's mapping.
+    // bbport: the mapping has a lease, which that thread renews while it is this port's.
     void MapPortAsync(u16 port);
     // Removes what MapPortAsync forwarded, if it is `port`.
     void UnmapPort(u16 port);
@@ -53,6 +54,7 @@ private:
     UPnPClient& operator=(const UPnPClient&) = delete;
 
     void DiscoverThread();
+    void RemoveStaleMappings(u16 port);
 
     std::atomic<bool> m_started{false};
     std::atomic<bool> m_p2p_features_enabled{true};
@@ -72,6 +74,7 @@ private:
     std::thread m_thread;
     std::mutex m_map_mutex; // serializes MapPortAsync / UnmapPort
     std::thread m_map_thread;
+    std::atomic<bool> m_map_cancel{false}; // bbport: ends m_map_thread's lease renewals
 };
 
 } // namespace Libraries::Net

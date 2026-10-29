@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* System services for an offline, single-user console:
  *   - one local user (id 1) who is logged in but not signed in to PSN;
  *   - network cable unplugged: NetCtl disconnected, sockets unavailable;
@@ -6,6 +8,8 @@
  * Every entry here is an explicit contract; unknown functions still stop. */
 #define _GNU_SOURCE
 #include "runtime.h"
+#include "../gpu/shim/bb_env.h"
+#include "runtime_trophy.h"
 #include "gpu/bbgpu.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -51,7 +55,7 @@ static ABI int32_t user_list(int32_t *ids) {
 }
 static ABI int32_t user_name(int32_t id,char *name,uint64_t size) {
     if (id!=USER_ID || !name) return USER_INVALID_ARGUMENT;
-    const char *value=getenv("BB_USER_NAME") ? getenv("BB_USER_NAME") : "Hunter";
+    const char *value=bb_env("BB_USER_NAME") ? bb_env("BB_USER_NAME") : "Hunter";
     if (strlen(value)+1>size) return (int32_t)0x8096000a; /* BUFFER_TOO_SHORT */
     strcpy(name,value); return 0;
 }
@@ -66,11 +70,33 @@ static ABI int32_t user_event(int32_t *event) {
 }
 
 /* ---- SystemService ---- */
-static int language(void) { const char *v=getenv("BB_LANGUAGE"); return v ? atoi(v) : 1; }
+static int language(void) { const char *v=bb_env("BB_LANGUAGE"); return v ? atoi(v) : 1; }
 static ABI int32_t system_param(int32_t id,int32_t *value) {
     if (!value) return SYSTEM_PARAMETER;
     switch (id) {
-    case 1: *value=language(); break;           /* language (1 = English US, 8 = Russian) */
+    case 1: *value=language();                  /* language (1 = English US, 8 = Russian) */
+        { static int told; if (told++ < 4) printf("Runtime: SystemService: language %d asked from +0x%llx\n",*value,
+              (unsigned long long)((uintptr_t)__builtin_return_address(0)-0x800000000ull)); }
+        if (bb_env("BB_LANG_TABLES")) { /* diagnostics (#269): the sell regions' language tables */
+            const uintptr_t base=0x800000000ull;
+            for (int r=0;r<6;++r) {
+                const uint64_t *t=(const uint64_t *)(base+0x55994e0+r*32);
+                const uint64_t *v=(const uint64_t *)(base+0x55995e0+r*40);
+                printf("Lang tables: region %d text %llx %llx %llx %llx voice %llx %llx %llx %llx %llx\n",r,
+                       (unsigned long long)t[0],(unsigned long long)t[1],(unsigned long long)t[2],(unsigned long long)t[3],
+                       (unsigned long long)v[0],(unsigned long long)v[1],(unsigned long long)v[2],(unsigned long long)v[3],(unsigned long long)v[4]);
+                for (int k=2;k<=3;++k) {
+                    const int32_t *a=(const int32_t *)(uintptr_t)(k==2 ? t[2] : 0);
+                    if (a) { printf("  text map +%llx:",(unsigned long long)((uintptr_t)a-base)); for (int i=0;i<21;++i) printf(" %d",a[i]); printf("\n"); }
+                }
+                for (int k=2;k<=3;++k) {
+                    const int32_t *a=(const int32_t *)(uintptr_t)v[k];
+                    if (v[k]>base && v[k]<base+0x10000000ull) { printf("  voice map%d +%llx:",k,(unsigned long long)((uintptr_t)a-base)); for (int i=0;i<21;++i) printf(" %d",a[i]); printf("\n"); }
+                }
+            }
+            printf("Lang tables: sell region %d\n",*(const int32_t *)(base+0x5128948));
+        }
+        break;
     case 2: *value=1; break;                    /* date format DD/MM/YYYY */
     case 3: *value=1; break;                    /* 24-hour clock */
     case 4: { time_t now=time(NULL); struct tm t; localtime_r(&now,&t); *value=(int32_t)(RUNTIME_TM_GMTOFF(t)/60); break; }
@@ -243,10 +269,10 @@ static ABI int32_t ime_init(const ImeParam *param, const void *extended) {
     char initial[512], prompt[256];
     utf16_to_utf8(param->buffer,param->max_length,initial,sizeof(initial));
     utf16_to_utf8(param->title,128,prompt,sizeof(prompt));
-    const char *preset=getenv("BB_IME_TEXT");
+    const char *preset=bb_env("BB_IME_TEXT");
     if (preset) { ime_complete(0,preset); return 0; }
     if (!bbgpu_text_input_begin(initial,prompt[0] ? prompt : "Text")) {
-        const char *name=getenv("BB_USER_NAME");
+        const char *name=bb_env("BB_USER_NAME");
         ime_complete(0,name ? name : initial[0] ? initial : "Hunter");
     } else printf("Runtime: ImeDialog opened: type in the game window, Enter to confirm, Esc to cancel\n");
     return 0;
@@ -266,18 +292,29 @@ static ABI int32_t ime_result(uint32_t *result) {
 }
 static ABI int32_t ime_term(void) { memset(&ime,0,sizeof(ime)); return 0; }
 
-/* ---- Trophies: accepted locally, recorded in the log ---- */
+/* ---- Trophies: kept in the user folder and announced over the frame (bbgpu_trophy_*), every
+ * unlock also appended to user/trophies.jsonl ---- */
 static ABI int32_t trophy_context(int32_t *ctx,int32_t user,uint32_t label,uint64_t options) {
     (void)user; (void)label; (void)options;
     if (!ctx) return TROPHY_INVALID;
     *ctx=new_id(); return 0;
 }
 static ABI int32_t trophy_handle(int32_t *handle) { if (!handle) return TROPHY_INVALID; *handle=new_id(); return 0; }
-static ABI int32_t trophy_register(int32_t ctx,int32_t handle,uint64_t options) { (void)ctx; (void)handle; (void)options; return 0; }
+static ABI int32_t trophy_register(int32_t ctx,int32_t handle,uint64_t options) {
+    (void)ctx; (void)handle; (void)options;
+    char sce_sys[1024];
+    if (runtime_file_host_path("/app0/sce_sys",sce_sys,sizeof(sce_sys))) sce_sys[0]=0;
+    bbgpu_trophy_setup(sce_sys[0] ? sce_sys : NULL,runtime_file_user_dir());
+    return 0;
+}
 static ABI int32_t trophy_unlock(int32_t ctx,int32_t handle,int32_t id,int32_t *platinum) {
     (void)ctx; (void)handle;
     printf("Runtime: trophy %d unlocked\n",id);
-    if (platinum) *platinum=-1;
+    /* Local record only (user/trophies.jsonl); a failed write never affects the game. */
+    if (trophy_store_append(runtime_file_user_dir(),trophy_store_title_id(),id))
+        fprintf(stderr,"Runtime: trophy %d not recorded in " TROPHY_STORE_FILE "\n",id);
+    const int32_t plat=bbgpu_trophy_unlock(id);
+    if (platinum) *platinum=plat;
     return 0;
 }
 static ABI int32_t trophy_game_info(int32_t ctx,int32_t handle,void *details,void *data) {

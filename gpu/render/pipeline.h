@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport render: Vulkan pipelines for translated shaders. A pipeline holds its stages' Info
 // (resources in binding order), a descriptor set layout (push descriptors when they fit) and a

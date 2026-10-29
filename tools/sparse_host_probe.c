@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* Probe for the PC memory model: guest memory the GPU uses in place, through the sparse arena.
  *
  * Guest direct memory is allocated as host-visible Vulkan memory, exported as a dma-buf and

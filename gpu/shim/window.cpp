@@ -1,5 +1,8 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: SDL3 window for the Vulkan swapchain (X11, Wayland, or Metal on macOS).
 #include <array>
+#include "shim/bb_env.h"
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -21,6 +24,27 @@
 
 namespace {
 std::array<std::atomic<BbGpuEventFilter>, 4> event_filters{};
+
+/// runtime_pad.c: a Steam Deck's or Steam Controller's own controls are the gamepad, which Steam's
+/// desktop layout also sends as keys and the mouse. Weak: tools linking the GPU library alone.
+extern "C" int runtime_pad_steam_only(void) __attribute__((weak));
+
+/// A keyboard or mouse event the game must not take (runtime_pad_steam_only): the gamepad's own
+/// presses again. The port's menu (the overlay) keeps them, the trackpad as its pointer.
+bool SteamPadEcho(const SDL_Event& event) {
+    switch (event.type) {
+    case SDL_EVENT_KEY_DOWN:
+    case SDL_EVENT_KEY_UP:
+    case SDL_EVENT_TEXT_INPUT:
+    case SDL_EVENT_MOUSE_MOTION:
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+    case SDL_EVENT_MOUSE_WHEEL:
+        return runtime_pad_steam_only && runtime_pad_steam_only() && !BbOverlay::MenuOpen();
+    default:
+        return false;
+    }
+}
 
 bool FilteredByModule(const SDL_Event* event, SDL_Window* window) {
     for (const auto& slot : event_filters) {
@@ -92,7 +116,7 @@ namespace {
 // SDL's primary display. The monitors are logged so a report says which one was taken.
 SDL_DisplayID ChooseDisplay() {
     const SDL_DisplayID primary = SDL_GetPrimaryDisplay();
-    const char* wanted = std::getenv("BB_DISPLAY");
+    const char* wanted = bb_env("BB_DISPLAY");
     int count = 0;
     SDL_DisplayID* ids = SDL_GetDisplays(&count);
     SDL_DisplayID chosen = 0;
@@ -142,7 +166,16 @@ void TellMonitor(SDL_Window* window) {
 } // namespace
 
 WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}, height{height_} {
+    // Wayland with display scaling (KDE at 200%, #328/#234): the window in the monitor's pixels,
+    // as SDL_VIDEO_WAYLAND_SCALE_TO_DISPLAY=1 does; text was soft, drawn at the logical size and
+    // scaled up by the compositor. The variable, when set, wins.
+    SDL_SetHintWithPriority(SDL_HINT_VIDEO_WAYLAND_SCALE_TO_DISPLAY, "1", SDL_HINT_DEFAULT);
     // Gamepads are sampled by runtime_pad.c; their events are pumped here with the window's.
+    // DualShock 4 / DualSense in their full reports (over Bluetooth the touchpad comes only so),
+    // and the gamepad kept while another window has the focus (a second monitor, an overlay).
+    // From the SrShadowy fork; the variables, when set, win.
+    SDL_SetHintWithPriority(SDL_HINT_JOYSTICK_ENHANCED_REPORTS, "1", SDL_HINT_DEFAULT);
+    SDL_SetHintWithPriority(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1", SDL_HINT_DEFAULT);
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         UNREACHABLE_MSG("Failed to initialize SDL video: {}", SDL_GetError());
     }
@@ -155,16 +188,27 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, height_);
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_RESIZABLE_BOOLEAN, true);
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_VULKAN_BOOLEAN, true);
+    const char* fullscreen = bb_env("BB_FULLSCREEN");
+    // Issue #291: under gamescope (the Steam Deck's Game Mode) a window is shown letterboxed on
+    // all four sides; there it is always fullscreen.
+    const char* desktop = std::getenv("XDG_CURRENT_DESKTOP");
+    const bool gamescope = std::getenv("GAMESCOPE_WAYLAND_DISPLAY") != nullptr ||
+                           (desktop && std::strcmp(desktop, "gamescope") == 0);
+    if (gamescope && !(fullscreen && fullscreen[0] == '1')) {
+        std::printf("Display: gamescope: fullscreen\n");
+    }
+    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN,
+                           gamescope || (fullscreen && fullscreen[0] == '1'));
+    // Issue #234: the swapchain at the display's pixels on a scaled desktop (Wayland 200%), not at
+    // the logical size stretched by the compositor. Sizes below are read in pixels already.
 #ifdef __APPLE__
-    // bbport (macOS): a Retina-resolution drawable. Without it the CAMetalLayer is sized in
-    // points (half the panel's pixels), so the frame was drawn at e.g. 1512x850 and macOS
-    // stretched it 2x. BB_RETINA=0 restores that (diagnostics).
-    const char* retina = std::getenv("BB_RETINA");
+    // bbport (macOS): Retina too (a CAMetalLayer sized in points drew at half the panel's pixels,
+    // stretched 2x). BB_RETINA=0 sizes it in points (diagnostics).
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_HIGH_PIXEL_DENSITY_BOOLEAN,
-                           !retina || retina[0] != '0');
+                           !bb_env_off("BB_RETINA"));
+#else
+    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_HIGH_PIXEL_DENSITY_BOOLEAN, true);
 #endif
-    const char* fullscreen = std::getenv("BB_FULLSCREEN");
-    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN, fullscreen && fullscreen[0] == '1');
     base_title = title;
     window = SDL_CreateWindowWithProperties(props);
     SDL_DestroyProperties(props);
@@ -324,7 +368,7 @@ bool WindowSDL::PollEvents() {
     const bool pointer = bbgpu_pointer_wanted() != 0;
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
-        if (FilteredByModule(&event, window)) {
+        if (SteamPadEcho(event) || FilteredByModule(&event, window)) {
             continue;
         }
         if (event.type == SDL_EVENT_MOUSE_MOTION) {

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport gcn: the rasterizer's registers (PA_*): clipping, culling and polygon modes, viewports
 // and scissors, multisampling.

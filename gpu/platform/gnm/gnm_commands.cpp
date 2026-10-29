@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: the Gnm driver's command writers. The game reserves exactly the space the console
 // driver uses for each call and checks the result, so sizes, argument checks and padding are the

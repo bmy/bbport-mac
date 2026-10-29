@@ -1,9 +1,12 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: BB_CE_STATS=1 — what the constant engine's dumps feed (GPU command thread only):
 // how many DumpConstRam a second, how many bytes and pages, and how often the translator then
 // reads memory a dump wrote in the last 100 ms, by kind. Measures what a translation of the
 // constant engine has to keep visible to the translator (docs/EMULATION_REMOVAL_PLAN.ru.md).
 #pragma once
 #include <array>
+#include "shim/bb_env.h"
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -23,10 +26,7 @@ enum Kind : unsigned {
 };
 
 inline bool Enabled() {
-    static const bool enabled = [] {
-        const char* env = std::getenv("BB_CE_STATS");
-        return env && env[0] == '1';
-    }();
+    static const bool enabled = bb_env_on("BB_CE_STATS");
     return enabled;
 }
 

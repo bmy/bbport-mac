@@ -12,6 +12,7 @@
 #include "common/alignment.h"
 #include "common/logging/log.h"
 #include "common/singleton.h"
+#include "core/bbsc_relay_client.h"
 #include "core/libraries/error_codes.h"
 #include "core/libraries/kernel/kernel.h"
 #include "core/libraries/kernel/memory.h"
@@ -313,15 +314,14 @@ u32 SendBbscWorldFlagsToPeers(const void* packet, u32 size) {
             ++sent;
         }
     }
+    // BBSC (2026-10-19): and to the game server's relay, where mod players (BBport...) listen.
+    Core::Bbsc::RelaySendPacket(packet, size);
     return sent;
 }
 
 u32 SendBbscFollowToPeers(u32 packed_map, float x, float y, float z, float heading, u32 sequence,
                           s32 lamp_point) {
     const std::vector<BbscPeer> peers = EstablishedBbscPeers();
-    if (peers.empty()) {
-        return 0;
-    }
     SignalingBbscFollow packet{};
     packet.packed_map = packed_map;
     packet.x = x;
@@ -336,6 +336,8 @@ u32 SendBbscFollowToPeers(u32 packed_map, float x, float y, float z, float headi
             ++sent;
         }
     }
+    // BBSC (2026-10-19): the relay too - a mod guest finds its host there by this position.
+    Core::Bbsc::RelaySendPacket(&packet, sizeof(packet));
     return sent;
 }
 

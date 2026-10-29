@@ -1,7 +1,9 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // The texture cache: the registry of images by page, the guest pages each image watches, and
 // what guest and GPU writes to them do.
 #include "textures/texture_cache.h"
+#include "shim/bb_env.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -220,7 +222,7 @@ void TextureCache::InvalidateMemory(VAddr addr, size_t size) {
 
 void TextureCache::WatchImage(const Image& image, const char* what) {
     static const u64 watched = [] {
-        const char* env = std::getenv("BB_IMAGE_WATCH");
+        const char* env = bb_env("BB_IMAGE_WATCH");
         return env ? std::strtoull(env, nullptr, 0) : 0ull;
     }();
     if (!watched || image.info.guest_address != watched) {
@@ -241,7 +243,7 @@ void TextureCache::InvalidateMemoryFromGPU(VAddr address, size_t max_size) {
     // Only fully overwritten images starting at `address` can be refreshed wholesale.
     // A partial overwrite must preserve the image's other GPU-only texels.
     ForEachImageInRegion(address, 1, [&](ImageId, Image& image) {
-        static const bool log = std::getenv("BB_IMAGE_SYNC_LOG") != nullptr;
+        static const bool log = bb_env("BB_IMAGE_SYNC_LOG") != nullptr;
         if (log) {
             static std::atomic<u32> printed{0};
             if (printed.fetch_add(1) < 200) {
@@ -268,6 +270,26 @@ void TextureCache::UnmapMemory(VAddr cpu_addr, size_t size) {
     for (const ImageId id : gone) {
         FreeImage(id);
     }
+}
+
+u64 TextureCache::FreeDeadImages(VAddr addr, size_t size, u64* gpu_made_bytes) {
+    std::scoped_lock lock{mutex};
+    ImageIds gone;
+    u64 bytes = 0;
+    ForEachImageInRegion(addr, size, [&](ImageId id, Image& image) {
+        if (image.info.guest_address >= addr &&
+            image.info.guest_address + image.info.guest_size <= addr + size) {
+            gone.push_back(id);
+            bytes += image.info.guest_size;
+            if (gpu_made_bytes && True(image.flags & ImageFlagBits::GpuModified)) {
+                *gpu_made_bytes += image.info.guest_size;
+            }
+        }
+    });
+    for (const ImageId id : gone) {
+        FreeImage(id); // the memory is the game's no more: nothing to write back
+    }
+    return bytes;
 }
 
 } // namespace VideoCore

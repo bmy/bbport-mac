@@ -1,13 +1,18 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "upscale/vk_fsr4.h"
+#include "shim/bb_env.h"
 #include "bbport_toggles.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -15,6 +20,7 @@
 #include "ffx_vk_fsr4_v07_assets.h"
 #include "bbport_settings.h"
 #include "upscale/fsr411/fsr411.h"
+#include "upscale/vk_fsr_amd.h"
 #include "vulkan/instance.h"
 #include "render/scheduler.h"
 
@@ -23,7 +29,7 @@ namespace Vulkan {
 namespace {
 
 std::string AssetDir() {
-    const char* dir = std::getenv("BB_FSR4_DIR");
+    const char* dir = bb_env("BB_FSR4_DIR");
     return dir && dir[0] ? dir : "fsr4_shaders";
 }
 
@@ -72,13 +78,39 @@ struct Fsr4Upscaler::Impl {
     std::deque<std::pair<u64, u64>> in_flight; ///< provider frame id, scheduler tick
     // bbport: FSR 4.1.1 (upscaler=fsr411): the replay of AMD's 4.1.1 DLL (fsr411/).
     std::unique_ptr<Fsr411::Upscaler> fsr411;
+    int fsr411_model = -1; ///< the fsr4_model it was made for
     std::deque<u64> fsr411_ticks; ///< scheduler ticks of its recent frames (constant ring)
     std::string fsr411_described;
+    // bbport #213: a model's pipelines take seconds to compile (20 s on the Steam Deck, the game
+    // frozen meanwhile). Prepare() builds the next one in another Impl on a thread; the caller
+    // keeps FSR 3.1 until it is ready.
+    std::unique_ptr<Impl> staging;
+    std::thread staging_thread;
+    std::atomic<bool> staging_done{false};
+    int staging_preset = -1;
+    u32 staging_width = 0, staging_height = 0;
+    std::unique_ptr<Fsr411::Upscaler> staging411;
+    std::thread staging411_thread;
+    std::atomic<bool> staging411_done{false};
+    bool staging411_ultra = false;
+    u32 staging411_width = 0, staging411_height = 0;
+    int staging411_model = -1;
+    /// bbport: upscaler fsr_amd, AMD's own DLLs (vk_fsr_amd); only in the Impl the upscaler owns.
+    std::unique_ptr<FsrAmd> amd;
 
     Impl(const Instance& instance_, Scheduler& scheduler_)
         : instance{instance_}, scheduler{scheduler_} {}
 
     ~Impl() {
+        if (staging_thread.joinable()) {
+            staging_thread.join();
+        }
+        if (staging411_thread.joinable()) {
+            staging411_thread.join();
+        }
+        if (staging) {
+            staging->DestroyObjects();
+        }
         Destroy();
     }
 
@@ -94,6 +126,11 @@ struct Fsr4Upscaler::Impl {
         } else {
             scheduler.Finish();
         }
+        DestroyObjects();
+    }
+
+    /// The model's objects, with no wait: none of them is in use by the GPU.
+    void DestroyObjects() {
         if (context_ok) {
             ffxFsr4V07DestroyContext(&context, nullptr);
             context_ok = false;
@@ -126,8 +163,7 @@ struct Fsr4Upscaler::Impl {
         std::vector<u8> initializer, weights;
         // bbport: tools/fsr4_optimize.sh puts fixed or faster passes into opt/ (post through
         // shared memory, pass 11 without out-of-bounds writes); BB_FSR4_OPT=0 keeps the originals.
-        const char* opt_env = std::getenv("BB_FSR4_OPT");
-        const bool use_opt = !(opt_env && opt_env[0] == '0');
+        const bool use_opt = !bb_env_off("BB_FSR4_OPT");
         u32 optimized = 0;
         const auto load = [&](const char* name, std::vector<u8>& data) {
             if (use_opt && ReadFile(dir + "opt/" + name, data)) {
@@ -235,17 +271,98 @@ struct Fsr4Upscaler::Impl {
         return ffxFsr4VkSetExternalImageState(&backend, &state);
     }
 
+    /// A replay for the menu's fsr4_model (BbSettings::Fsr4Model); also tells the menu which
+    /// models there are.
+    std::unique_ptr<Fsr411::Upscaler> MakeFsr411(int model) const {
+        const char* env = bb_env("BB_FSR411_DIR");
+        const std::string dir = env && env[0] ? env : "fsr4_411";
+        Fsr411::Features features{.fp8_matrices = instance.IsFsr411Fp8Supported(),
+                                  .fp16_matrices = instance.IsFsr411MatrixSupported(),
+                                  .integrated = instance.IsIntegrated()};
+        features.model = BbSettings::Fsr4ModelName(model);
+        BbSettings::Get().fsr4_models_available.store(Fsr411::AvailableModels(dir, features),
+                                                      std::memory_order_relaxed);
+        return std::make_unique<Fsr411::Upscaler>(instance.GetPhysicalDevice(), instance.GetDevice(),
+                                                  dir, features);
+    }
+
+    /// BB_FSR4_MODEL_CYCLE=N (diagnostics): the menu's model switched to the next available one
+    /// every N seconds, as a player switching it live would.
+    static void CycleModel() {
+        static const long period = [] {
+            const char* env = bb_env("BB_FSR4_MODEL_CYCLE");
+            return env ? std::strtol(env, nullptr, 10) : 0L;
+        }();
+        if (period <= 0) {
+            return;
+        }
+        static auto last = std::chrono::steady_clock::now();
+        const auto now = std::chrono::steady_clock::now();
+        if (now - last < std::chrono::seconds(period)) {
+            return;
+        }
+        last = now;
+        auto& settings = BbSettings::Get();
+        const unsigned available = settings.fsr4_models_available.load(std::memory_order_relaxed);
+        const int current = settings.fsr4_model.load(std::memory_order_relaxed);
+        for (int step = 1; step < BbSettings::Fsr4ModelCount; ++step) {
+            const int next = 1 + (current - 1 + step + BbSettings::Fsr4ModelCount - 1) %
+                                     (BbSettings::Fsr4ModelCount - 1);
+            if (available & (1u << next)) {
+                settings.fsr4_model.store(next, std::memory_order_relaxed);
+                std::printf("Upscaler: FSR 4 model cycled to %s (BB_FSR4_MODEL_CYCLE)\n",
+                            BbSettings::Fsr4ModelName(next));
+                return;
+            }
+        }
+    }
+
+    /// Prepare() for FSR 4.1.1: its asset set is built by a second replay on a thread.
+    bool Prepare411(int preset, u32 ow, u32 oh) {
+        CycleModel();
+        const bool ultra = preset >= 4;
+        const int wanted = BbSettings::Get().fsr4_model.load(std::memory_order_relaxed);
+        if (!instance.IsFsr411Supported() ||
+            (fsr411 && fsr411_model == wanted && fsr411->Matches(ultra, ow, oh))) {
+            return true;
+        }
+        if (staging411_thread.joinable()) {
+            if (!staging411_done.load(std::memory_order_acquire)) {
+                return false;
+            }
+            staging411_thread.join();
+            if (staging411_ultra == ultra && staging411_width == ow && staging411_height == oh &&
+                staging411_model == wanted) {
+                scheduler.Finish(); // the replay it replaces may still be in flight
+                fsr411 = std::move(staging411); // a failed build reports through Record()
+                fsr411_model = staging411_model;
+                fsr411_ticks.clear();
+                return true;
+            }
+            staging411.reset(); // built for another output; never recorded with
+        }
+        staging411 = MakeFsr411(wanted);
+        staging411_model = wanted;
+        staging411_ultra = ultra;
+        staging411_width = ow;
+        staging411_height = oh;
+        staging411_done.store(false, std::memory_order_relaxed);
+        staging411_thread = std::thread([this] {
+            staging411->Build(staging411_ultra, staging411_width, staging411_height);
+            staging411_done.store(true, std::memory_order_release);
+        });
+        std::printf("Upscaler: FSR 4.1.1 %ux%u being built in the background (FSR 3.1 meanwhile)\n", ow, oh);
+        return false;
+    }
+
     bool Record411(const Frame& f) {
         if (!instance.IsFsr411Supported()) {
             Fail("FSR 4.1.1 needs INT8 dot products and VK_VALVE_shader_mixed_float_dot_product", true);
             return false;
         }
         if (!fsr411) {
-            const char* env = std::getenv("BB_FSR411_DIR");
-            const Fsr411::Features features{.fp8_matrices = instance.IsFsr411Fp8Supported(),
-                                            .fp16_matrices = instance.IsFsr411MatrixSupported()};
-            fsr411 = std::make_unique<Fsr411::Upscaler>(instance.GetPhysicalDevice(), instance.GetDevice(),
-                                                        env && env[0] ? env : "fsr4_411", features);
+            fsr411_model = BbSettings::Get().fsr4_model.load(std::memory_order_relaxed);
+            fsr411 = MakeFsr411(fsr411_model);
         }
         // Its constant ring holds kFramesInFlight frames: the oldest must be done.
         while (fsr411_ticks.size() >= Fsr411::kFramesInFlight) {
@@ -277,12 +394,99 @@ struct Fsr4Upscaler::Impl {
         if (const std::string d = fsr411->Describe(); d != fsr411_described) {
             fsr411_described = d;
             std::printf("Upscaler: FSR 4.1.1 replay, %s\n", d.c_str());
+            BbSettings::Get().fsr4_model_active.store(fsr411->ModelName(), std::memory_order_relaxed);
         }
         problem.clear();
         return true;
     }
 
+    /// Whether the model for `preset` and this output is ready; if not, it is built in the
+    /// background (false until then). Permanent problems answer true: Record() reports them.
+    bool Prepare(int preset, u32 ow, u32 oh) {
+        if (BbSettings::Get().upscaler == BbSettings::UpscalerFsrAmd) {
+            return !amd || amd->Prepare(ow, oh, BbSettings::Get().fsr4_auto_exposure);
+        }
+        if (BbSettings::Get().upscaler == BbSettings::UpscalerFsr411) {
+            return Prepare411(std::clamp(preset, 0, 4), ow, oh);
+        }
+        if (fatal || !instance.IsFsr4Int8Supported()) {
+            return true;
+        }
+        preset = std::clamp(preset, 0, 4);
+        if (context_ok && preset == model && ow == out_width && oh == out_height) {
+            return true;
+        }
+        if (staging_thread.joinable()) {
+            if (!staging_done.load(std::memory_order_acquire)) {
+                return false;
+            }
+            staging_thread.join();
+            if (staging_preset == preset && staging_width == ow && staging_height == oh) {
+                Install();
+                return true;
+            }
+            staging->DestroyObjects(); // built for another preset or output
+            staging.reset();
+        }
+        staging = std::make_unique<Impl>(instance, scheduler);
+        staging_preset = preset;
+        staging_width = ow;
+        staging_height = oh;
+        staging_done.store(false, std::memory_order_relaxed);
+        staging_thread = std::thread([this] {
+            staging->CreateBackend(staging_preset, staging_width, staging_height);
+            staging_done.store(true, std::memory_order_release);
+        });
+        std::printf("Upscaler: FSR 4 model %ux%u being built in the background (FSR 3.1 meanwhile)\n",
+                    ow, oh);
+        return false;
+    }
+
+    /// A fresh start after a menu change: no context, no permanent failure; a model being
+    /// built keeps building (Prepare() takes it if it fits).
+    void Reset() {
+        Destroy();
+        if (amd) amd->Reset();
+        fsr411.reset();
+        fsr411_ticks.clear();
+        fsr411_described.clear();
+        problem.clear();
+        fatal = false;
+    }
+
+    /// The staged model replaces the current one (or its failure is reported).
+    void Install() {
+        if (!staging->context_ok) {
+            Fail(staging->problem.empty() ? "model creation failed" : staging->problem, staging->fatal);
+            staging->DestroyObjects();
+            staging.reset();
+            return;
+        }
+        Destroy();
+        scratch.swap(staging->scratch);
+        backend = staging->backend;
+        backend_ok = staging->backend_ok;
+        context = staging->context;
+        context_ok = staging->context_ok;
+        model = staging->model;
+        out_width = staging->out_width;
+        out_height = staging->out_height;
+        staging->backend_ok = staging->context_ok = false; // now ours
+        staging.reset();
+        problem.clear();
+    }
+
     bool Record(const Frame& f) {
+        if (BbSettings::Get().upscaler == BbSettings::UpscalerFsrAmd) {
+            std::string why;
+            bool permanent = false;
+            if (!amd || !amd->Record(f, why, permanent)) {
+                Fail(amd ? why : "AMD's FSR DLLs are not loaded", permanent || !amd);
+                return false;
+            }
+            problem.clear();
+            return true;
+        }
         if (BbSettings::Get().upscaler == BbSettings::UpscalerFsr411) {
             return Record411(f);
         }
@@ -388,12 +592,26 @@ struct Fsr4Upscaler::Impl {
 };
 
 Fsr4Upscaler::Fsr4Upscaler(const Instance& instance, Scheduler& scheduler)
-    : impl{std::make_unique<Impl>(instance, scheduler)} {}
+    : impl{std::make_unique<Impl>(instance, scheduler)} {
+    impl->amd = std::make_unique<FsrAmd>(instance, scheduler);
+}
 
 Fsr4Upscaler::~Fsr4Upscaler() = default;
 
+bool Fsr4Upscaler::AmdAvailable() const noexcept {
+    return impl->amd && impl->amd->Available();
+}
+
 bool Fsr4Upscaler::Record(const Frame& frame) {
     return impl->Record(frame);
+}
+
+bool Fsr4Upscaler::Prepare(int preset, u32 output_width, u32 output_height) {
+    return impl->Prepare(preset, output_width, output_height);
+}
+
+void Fsr4Upscaler::Reset() {
+    impl->Reset();
 }
 
 const char* Fsr4Upscaler::Problem() const noexcept {

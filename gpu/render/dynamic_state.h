@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport render: the pipeline state set by commands rather than baked into pipelines
 // (viewports, depth and stencil tests, rasterizer switches, blend constants...). Setters mark

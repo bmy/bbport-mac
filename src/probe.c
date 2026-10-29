@@ -1,6 +1,9 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* Minimal x86-64 native loader experiment. Not a PS4 emulator or game port. */
 #define _GNU_SOURCE
 #include <stdint.h>
+#include "../gpu/shim/bb_env.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,6 +11,7 @@
 #include <cpuid.h>
 #include "runtime.h"
 #include "platform.h"
+#include "runtime_trophy.h"
 #include "gpu/bbgpu.h"
 #if !defined(__x86_64__) || !defined(__GNUC__)
 #error This prototype requires x86-64 GCC or Clang (including MinGW).
@@ -51,12 +55,58 @@ int vulkan_smoke(void);
 
 static void fail(const char *message) { fprintf(stderr, "ERROR: %s\n", message); exit(1); }
 
+/* The BB_* variables set (gpu/shim/bb_env_vars.def, docs/ENVIRONMENT.md), and any BB_* name the
+ * port does not read: a typo leaves a setting off without a word. The internal ones (run.py and the
+ * launchers set them every run) are left out, accounts and keys shown as set only. */
+static int name_has(const char *entry, size_t length, const char *part) {
+    const char *at = strstr(entry, part);
+    return at && (size_t)(at - entry) < length;
+}
+
+enum { BB_ENV_SETTING, BB_ENV_TUNING, BB_ENV_DEBUG, BB_ENV_INTERNAL, BB_ENV_BUILD };
+static void print_environment(void) {
+    static const struct { const char *name; int kind; } known[] = {
+#define BB_ENV(name, kind, text) {#name, BB_ENV_##kind},
+#include "../gpu/shim/bb_env_vars.def"
+#undef BB_ENV
+    };
+#ifdef _WIN32
+    char **env = _environ;
+#else
+    extern char **environ;
+    char **env = environ;
+#endif
+    int printed = 0;
+    for (; env && *env; ++env) {
+        const char *entry = *env, *eq = strchr(entry, '=');
+        if (strncmp(entry, "BB_", 3) || !eq) continue;
+        const size_t length = (size_t)(eq - entry);
+        int kind = -1;
+        for (size_t i = 0; i < sizeof(known) / sizeof(known[0]); ++i) {
+            if (strlen(known[i].name) == length && !strncmp(known[i].name, entry, length)) {
+                kind = known[i].kind;
+                break;
+            }
+        }
+        if (kind < 0) {
+            printf("Environment: %.*s is not a bbport variable (a typo? docs/ENVIRONMENT.md)\n",
+                   (int)length, entry);
+            continue;
+        }
+        if (kind == BB_ENV_INTERNAL || kind == BB_ENV_BUILD) continue;
+        const int secret = name_has(entry, length, "PASSWORD") || name_has(entry, length, "TOKEN") ||
+                           name_has(entry, length, "_KEY");
+        printf("%s %.*s=%s", printed++ ? "" : "Environment:", (int)length, entry, secret ? "(set)" : eq + 1);
+    }
+    if (printed) printf("\n");
+}
+
 /* The game's code was compiled for the PS4's CPU (AMD Jaguar) and runs as it is: AVX, BMI1
  * (andn/bextr/blsr/tzcnt), MOVBE, LZCNT and POPCNT, thousands of each in eboot.bin. A CPU without
  * them stops at the first one with SIGILL (exit code 132, issue #26), and lzcnt/tzcnt even run as
  * bsr/bsf there, with other results. Said before the game starts; BB_SKIP_CPU_CHECK=1 skips it. */
 static void check_cpu(void) {
-    const char *skip = getenv("BB_SKIP_CPU_CHECK");
+    const char *skip = bb_env("BB_SKIP_CPU_CHECK");
     if (skip && !strcmp(skip, "1")) return;
 #ifdef __APPLE__
     /* bbport (macOS): Rosetta 2 runs AVX, BMI1, MOVBE and LZCNT but does not report them in
@@ -119,9 +169,12 @@ static void protect(void *p, size_t size, unsigned flags) {
     else if (flags & 4) mode = PAGE_READONLY;
     if (!VirtualProtect(p, size, mode, &old)) fail("VirtualProtect failed");
     FlushInstructionCache(GetCurrentProcess(), p, size);
+    runtime_low_protect((uintptr_t)p, size, ((flags & 4) ? PROT_READ : 0) | ((flags & 2) ? PROT_WRITE : 0) |
+                                            ((flags & 1) ? PROT_EXEC : 0));
 #else
     int mode = ((flags & 4) ? PROT_READ : 0) | ((flags & 2) ? PROT_WRITE : 0) | ((flags & 1) ? PROT_EXEC : 0);
     if (mprotect(p, size, mode)) fail("mprotect failed");
+    runtime_low_protect((uintptr_t)p, size, mode);
 #endif
 }
 static ABI __attribute__((noreturn)) void unresolved(uint32_t id, uintptr_t argument) {
@@ -210,6 +263,21 @@ static void fault(int sig, siginfo_t *info, void *context) {
     else
         snprintf(line, sizeof(line), "Fault (signal %d) at RIP %p, address %p\n", sig, (void *)rip, info->si_addr);
     { ssize_t written_=write(2, line, strlen(line)); (void)written_; }
+#ifdef _WIN32
+    {
+        char mem[256];
+        bb_win32_describe_address(info->si_addr, mem, sizeof(mem));
+        char out[320];
+        const int n = snprintf(out, sizeof(out), "  the address: %s\n", mem);
+        ssize_t written_=write(2, out, (size_t)n); (void)written_;
+        const greg_t *g = uc->uc_mcontext.gregs;
+        const int m = snprintf(out, sizeof(out), "  rax %llx rbx %llx rcx %llx rdx %llx rsi %llx rdi %llx r8 %llx r9 %llx\n",
+                               (unsigned long long)g[REG_RAX], (unsigned long long)g[REG_RBX], (unsigned long long)g[REG_RCX],
+                               (unsigned long long)g[REG_RDX], (unsigned long long)g[REG_RSI], (unsigned long long)g[REG_RDI],
+                               (unsigned long long)g[REG_R8], (unsigned long long)g[REG_R9]);
+        written_=write(2, out, (size_t)m); (void)written_;
+    }
+#endif
     /* A guest fault: its thread and the game's call chain (return addresses along rbp, read with
      * process_vm_readv so a broken chain cannot fault again). */
     if (rip - (uintptr_t)image < 0x10000000) {
@@ -490,7 +558,29 @@ static int probe_main(int argc, char **argv) {
 #endif
 #endif
     if (argc == 2 && !strcmp(argv[1], "--vulkan-only")) return vulkan_smoke();
+    /* Shader recipes (gpu/render/shader_rebuild.h): no game here, the guest's addresses stay free. */
+    if (argc == 5 && !strcmp(argv[1], "--export-shader-recipes"))
+        return bbgpu_export_shader_recipes(argv[2], argv[3], argv[4]);
+    if (argc == 7 && !strcmp(argv[1], "--import-shaders"))
+        return bbgpu_import_shader_recipes(argv[2], argv[3], argv[4], strtoull(argv[5], NULL, 16),
+                                           strtoull(argv[6], NULL, 16));
+    if (argc == 3 && !strcmp(argv[1], "--rebuild-shader-cache"))
+        return bbgpu_rebuild_shader_cache(argv[2]);
+    if (argc == 9 && !strcmp(argv[1], "--merge-shader-metas"))
+        return bbgpu_merge_shader_metas(argv[2], argv[3], argv[4], argv[5], argv[6], argv[7], atoi(argv[8]));
+#ifndef _WIN32
+    if (argc == 7 && !strcmp(argv[1], "--predict-shaders-test"))
+        return bbgpu_predict_shaders_test(argv[2], argv[3], argv[4], argv[5], atoi(argv[6]));
+    if (argc == 9 && !strcmp(argv[1], "--merge-shader-packs"))
+        return bbgpu_merge_shader_packs(argv[2], argv[3], argv[4], argv[5], argv[6], argv[7], atoi(argv[8]));
+    if (argc == 5 && !strcmp(argv[1], "--meta-reconstruct-test"))
+        return bbgpu_meta_reconstruct_test(argv[2], argv[3], argv[4]);
+#endif
+    print_environment();
     check_cpu();
+    /* Before the guest's memory exists: the recorded shader inputs are mapped back at their
+     * addresses to translate them again for this build (render/shader_rebuild.h). */
+    bbgpu_rebuild_shader_caches();
     runtime_memory_reserve();
     int cpu_only = 0, strict_imports = 0;
     unsigned timeout_seconds = 10;
@@ -533,6 +623,7 @@ static int probe_main(int argc, char **argv) {
         sfo_value(sfo,"TITLE",title,sizeof(title),NULL);
         sfo_value(sfo,"APP_VER",version,sizeof(version),NULL);
         runtime_net_configure(app0,serial,title,version);
+        trophy_store_configure(serial);
     }
     bbgpu_register_kernel();
     page_size = (size_t)sysconf(_SC_PAGESIZE);
@@ -678,8 +769,7 @@ static int probe_main(int argc, char **argv) {
     }
     /* BB_LIST_UNRESOLVED=1 (porting another game): every import neither the runtime nor a
      * native module provides, once each, before the game runs. */
-    const char *list_env = getenv("BB_LIST_UNRESOLVED");
-    unsigned char *listed = list_env && list_env[0] == '1' ? calloc(import_count + 1, 1) : NULL;
+    unsigned char *listed = bb_env_on("BB_LIST_UNRESOLVED") ? calloc(import_count + 1, 1) : NULL;
     uint64_t unresolved_count = 0;
     for (uint64_t i = 0; i < nr; ++i) {
         uintptr_t value = relocs[i].kind == 2 ? (uintptr_t)(data_traps + page_size * relocs[i].value + relocs[i].addend)
@@ -780,6 +870,17 @@ static int probe_main(int argc, char **argv) {
         }
     }
     runtime_net_start(); /* online sessions start with the game */
+    if (bb_env("BB_LOW_INFO_TEST")) {
+        /* What the online module's memory queries get for the game's statics (#282): the local
+         * player's and the global state's pointers, code, and the end of the image. */
+        const uint64_t offsets[]={0x553E878,0x5556678,0x553B130,0x5540300,0x1000,0x2000000};
+        for (size_t i=0;i<sizeof(offsets)/sizeof(*offsets);++i) {
+            int prot=0; uintptr_t end=0;
+            const int ok=runtime_memory_low_info((uintptr_t)image+offsets[i],&prot,&end);
+            printf("Low info: image+%#" PRIx64 ": %s prot %d end image+%#" PRIxPTR "\n",offsets[i],
+                   ok ? "mapped" : "NOT mapped",prot,ok ? end-(uintptr_t)image : 0);
+        }
+    }
     printf("Entering original x86-64 code at guest offset 0x%" PRIx64 "\n", entry);
     entered_game=1;
     struct { uint64_t argc; const char *argv[2]; } params = {1, {"/app0/eboot.bin", NULL}};

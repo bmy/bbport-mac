@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* libSceSaveData on host directories:
  *   <user>/savedata/<user id>/<title id>/<dir name>/        files the game writes
  *   <user>/savedata/<user id>/<title id>/<dir name>.sce_sys/ param.bin, icon0.png
@@ -6,6 +8,7 @@
  * Metadata lives beside the directory so the guest's own files are untouched. */
 #define _GNU_SOURCE
 #include "runtime.h"
+#include "../gpu/shim/bb_env.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -74,8 +77,7 @@ static size_t mounts_done, memory_writes;
  * BB_SOUND_HACK=0 leaves saves untouched. */
 static void bloodborne_sound_hack(void) {
     static const char *const ids[]={"CUSA00207","CUSA00208","CUSA00299","CUSA00900","CUSA01363","CUSA03014","CUSA03023","CUSA03173","CUSA03179"};
-    const char *env=getenv("BB_SOUND_HACK");
-    if (env && env[0]=='0') return;
+    if (bb_env_off("BB_SOUND_HACK")) return;
     int bloodborne=0;
     for (size_t i=0;i<sizeof(ids)/sizeof(*ids);++i) if (!strcmp(title_id,ids[i])) bloodborne=1;
     if (!bloodborne) return;

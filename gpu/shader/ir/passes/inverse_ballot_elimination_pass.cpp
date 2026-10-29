@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // GCN keeps per-lane booleans as 64-bit masks (VCC, EXEC, compare results): the translator
 // builds them with Ballot and reads them back with InverseBallot. This pass turns the round

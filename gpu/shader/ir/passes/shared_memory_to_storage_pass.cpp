@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Compute shaders whose LDS does not fit the host's shared memory (or that alias several types
 // in it without explicit workgroup layouts) get it as a storage buffer instead: one slice of

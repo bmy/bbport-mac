@@ -7,7 +7,8 @@ gpu/shadps4 was removed on 2026-10-13. The shader translator was checked against
 translator it replaced on a corpus of the game's shaders (byte-identical SPIR-V,
 tests/test_shader_corpus.cpp).
 
-The online module (gpu/bbnet) keeps its shadPS4 network and NP code (bbnet/shadps4).
+The online module (gpu/bbnet20) keeps shadPS4 v0.20.0's network, NP and shadNet code
+(bbnet20/vendor/shadps4, SHADNET-PORT.md).
 
 Third-party libraries in third_party/: sirit (SPIR-V emitter), gcn (AMD GCN headers), half,
 httplib, imgui, fonts, amd-fsr1 (FidelityFX headers used by shaders), fsr-vulkan.

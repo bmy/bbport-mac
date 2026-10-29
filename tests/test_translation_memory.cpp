@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Exercise the production paged SPIR-V emitter and portable label writer on a real Vulkan GPU.
 #include <array>

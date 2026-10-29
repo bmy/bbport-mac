@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Prepare explicit offline AppContent metadata; SKU is a probe setting, not a license check."""
 import argparse
 import json

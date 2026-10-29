@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #pragma once
 
@@ -27,11 +28,23 @@ public:
     ~SceneTargets();
     bool SetSize(SceneResolution::Size);
     SceneResolution::Size Size() const { return size; }
-    bool Reduced() const { return size != SceneResolution::Size{}; }
+    bool Reduced() const { return size != native; }
+    /// The game's own scene size (its targets): 1920x1080, or the startup resolution patch's
+    /// (BB_RENDER_RES) when live presets run over it: the game then allocates targets of that size
+    /// (aligned up by a few pixels), and proxies stand in for them only after an in-game change.
+    void SetNative(SceneResolution::Size scene_native);
+    SceneResolution::Size Native() const { return native; }
+    /// The scene size for the shaders' FragCoord conversion, which scales by 1920x1080 / it: the
+    /// proxy size relative to 1920x1080 (the same factor as proxy / native).
+    SceneResolution::Size ShaderSceneSize() const;
     /// A reduced proxy can stand in for the image: a 1920x1080 scene target or, scaled by
     /// the same factor, a half-resolution (960x540) one (toggle SceneHalfRes).
     bool Eligible(const VideoCore::Image&) const;
-    /// Eligible at the full scene size (1920x1080): the upscaler's inputs, the scene start.
+    /// The game's depth/stencil (D32S8) can have a proxy: blittable, or resampled by a shader with
+    /// stencil export. Without (GeForce GTX 10: neither) the scene cannot be reduced at all, and a
+    /// reduced size only added work; resolution changes then apply at the next start.
+    bool DepthProxies() const;
+    /// Eligible at the full scene size (Native()): the upscaler's inputs, the scene start.
     bool EligibleScene(const VideoCore::Image&) const;
     /// The proxy size of an eligible image: the scene size divided like the native size.
     SceneResolution::Size ProxySize(const VideoCore::Image&, u32 level = 0) const;
@@ -73,9 +86,18 @@ public:
     [[nodiscard]] bool Tracks(u64 image_uid) const {
         return !copying && tracked.contains(image_uid);
     }
+    /// A whole-image copy from `src` to `dst` (same size and format, colour, one level) while
+    /// `src`'s proxy holds its current content: the proxies are copied (dst gets one) and
+    /// `dst`'s native image is left to resolve on a native access, instead of resolving `src`
+    /// first (the game copies its targets every frame for the next one). False: not done.
+    bool CopyProxy(VideoCore::ImageId src, VideoCore::ImageId dst);
     void ResolveAll();
     void CleanupStaleEntries(); ///< Remove proxy entries for images no longer in texture cache
     bool debug = false; ///< BB_SCENE_DEBUG frame: print resolves and fills
+    /// Set around a shader's sampled or storage access (Rasterizer::TransitSampled). Those
+    /// resolve the proxy first; BB_SCENE_SAMPLED_RESOLVE=0 reads the native image as it is (stale
+    /// after a live preset change: black glows and lamp travel fades, so only for diagnostics).
+    bool sampled_access = false;
 private:
     struct Entry {
         VideoCore::ImageId source{};
@@ -92,6 +114,11 @@ private:
     Entry& Get(VideoCore::ImageId, u32 level = 0);
     vk::ImageView View(Entry&, const VideoCore::Image&, const VideoCore::ImageViewInfo&);
     void Copy(Entry&, VideoCore::Image&, bool to_native);
+    /// CopyProxy of a depth proxy into a colour one (R32F): through this buffer, as Vulkan
+    /// copies no image between depth and colour aspects.
+    VkBuffer depth_copy_buffer{};
+    struct VmaAllocation_T* depth_copy_allocation{};
+    vk::DeviceSize depth_copy_size = 0;
     // Depth/stencil formats without blit support (D32S8 on RADV) are resampled by a
     // fullscreen draw writing gl_FragDepth and, with stencil export, the stencil value.
     vk::FormatFeatureFlags Features(vk::Format) const;
@@ -108,10 +135,16 @@ private:
     Runtime& runtime;
     Lookup lookup;
     SceneResolution::Size size;
+    SceneResolution::Size native; ///< 1920x1080 by default (SceneResolution::Size{})
     std::unordered_map<u64, std::unique_ptr<Entry>> entries; ///< by Key(uid, level)
     std::unordered_set<u64> tracked; ///< uids with proxies
     bool copying = false;
     bool force_stencil_bits = false; ///< test the portable resampler on any driver
+    /// No stencil export and no D32S8 blit (GeForce GTX 10): depth resampled alone, the stencil
+    /// cleared (BB_SCENE_STENCIL_ZERO=0: no depth proxies there, the scene stays native). The
+    /// game clears the stencil when the scene starts and reads it only inside the scene; one draw
+    /// instead of the eight-draw stencil reconstruction (slower than no proxies at all).
+    bool stencil_zero = false;
     u64 generation = 0;
     mutable std::unordered_map<vk::Format, vk::FormatFeatureFlags> format_features;
     mutable std::array<vk::FormatFeatureFlags, 256> format_table{};

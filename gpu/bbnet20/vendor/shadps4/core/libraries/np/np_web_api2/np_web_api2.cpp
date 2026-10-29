@@ -25,8 +25,9 @@ s32 PS4_SYSV_ABI sceNpWebApi2AddHttpRequestHeader(s64 request_id, const char* fi
         LOG_ERROR(Lib_NpWebApi2, "Invalid parameters");
         return ORBIS_NP_WEBAPI2_ERROR_INVALID_ARGUMENT;
     }
-    LOG_INFO(Lib_NpWebApi2, "called, request_id = {:#x}, field_name = {}, field_value = {}",
-             request_id, field_name, field_value);
+    // bbport: the value can be the shadNet bearer token: never in a log.
+    LOG_INFO(Lib_NpWebApi2, "called, request_id = {:#x}, field_name = {}, field_value = (hidden)",
+             request_id, field_name);
     return addHttpRequestHeader(request_id, field_name, field_value);
 }
 

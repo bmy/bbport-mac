@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Atomics on LDS, buffers and images (device scope, relaxed). Buffers reached through the page
 // table (BB_LAYER_MEMORY) get their pointer from it, out of range accesses hitting a trash area

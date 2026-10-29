@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport vulkan: how the port uses Vulkan-Hpp: functions loaded at run time, aggregate structs
 // (designated initializers), results returned instead of exceptions; VMA with dynamic functions.

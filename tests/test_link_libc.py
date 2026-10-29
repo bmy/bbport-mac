@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Cross-module identity and TLS relocation tests without game binaries."""
 from paths import ROOT
 import json

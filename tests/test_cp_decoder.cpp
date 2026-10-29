@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // The translator's PM4 decoder (gpu/cp): register state, draws, dispatches, indirect buffers,
 // COND_EXEC and malformed buffers, on hand-built command buffers (no GPU, no game).

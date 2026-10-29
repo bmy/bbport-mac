@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: BB_WAIT_TRACE=1 — where the time waiting for GPU ticks (Scheduler::Wait, "GPU ticks"
 // in the frame stats) goes: each wait is attributed to its thread and call stack, and the

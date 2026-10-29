@@ -1,13 +1,17 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // The game's buffer copy compute shader done as buffer copies: its control buffer lists
 // (destination, source, count) records of one stride; copies close together are grouped so
 // that each group needs one source and one destination buffer, and each group is one dispatch
 // of buffer_multi_copy.comp (or vkCmdCopyBuffer for a few copies).
 #include <algorithm>
+#include "shim/bb_env.h"
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
+#include <unordered_map>
+#include <xxhash.h>
 
 #include "bbgpu/shaders/buffer_multi_copy_comp.h"
 #include "bbport_toggles.h"
@@ -167,7 +171,7 @@ static bool ExecuteCopyShaderHLE(const Shader::Info& info, const Gcn::ComputePro
     copies.clear();
     copies.reserve(cs_program.dim_x);
     // BB_COPY_SHADER_TRACE=1 (diagnostics): the copy shader's buffers, every 2 s.
-    static const bool trace = std::getenv("BB_COPY_SHADER_TRACE") != nullptr;
+    static const bool trace = bb_env("BB_COPY_SHADER_TRACE") != nullptr;
     if (trace) {
         static auto last = std::chrono::steady_clock::now();
         static u32 calls = 0;
@@ -210,7 +214,7 @@ static bool ExecuteCopyShaderHLE(const Shader::Info& info, const Gcn::ComputePro
     // shader 1.5 -> 0.6 ms/frame, GPU busy 85% -> 77%, frame rate no lower.
     // BB_COPY_MERGE_KB overrides it.
     static const vk::DeviceSize MaxDistanceForMerge = [] {
-        const char* env = std::getenv("BB_COPY_MERGE_KB");
+        const char* env = bb_env("BB_COPY_MERGE_KB");
         return env ? vk::DeviceSize(std::strtoull(env, nullptr, 10)) * 1024 : vk::DeviceSize(64_KB);
     }();
     // Groups: copies are added while the group's source and destination spans stay within the
@@ -240,7 +244,7 @@ static bool ExecuteCopyShaderHLE(const Shader::Info& info, const Gcn::ComputePro
             src_buf_sharp.base_address + src_min, src_max - src_min, false);
         // BB_EXP_COPY_SRC_SNAPSHOT=1 (experiment): the source bytes as they are now, in the stream
         // buffer (what the old memory model did), not read in place when the GPU gets there.
-        static const bool snapshot = std::getenv("BB_EXP_COPY_SRC_SNAPSHOT") != nullptr;
+        static const bool snapshot = bb_env("BB_EXP_COPY_SRC_SNAPSHOT") != nullptr;
         if (snapshot && src_max - src_min <= 256_KB &&
             !buffer_cache.IsRegionGpuModified(src_buf_sharp.base_address + src_min, src_max - src_min)) {
             auto& stream = buffer_cache.GetStreamBuffer();
@@ -277,9 +281,9 @@ bool ExecuteShaderHLE(const Shader::Info& info, const Gcn::Regs& regs,
         // while the game runs. The layer's paged stores now write through to guest memory while
         // keeping the current mirrors in sync, so the original shader is the default here too.
         static const bool native_env = [copy_shader] {
-            const char* env = std::getenv("BB_COPY_SHADER_NATIVE");
+            const char* env = bb_env("BB_COPY_SHADER_NATIVE");
             const bool native = !env || env[0] != '0';
-            const bool translated = VideoCore::GuestInPlace() && native != BbToggle::Experiment(2);
+            const bool translated = native != BbToggle::Experiment(2);
             std::printf("GPU: buffer copy shader %llx: %s%s (BB_COPY_SHADER_NATIVE=0: HLE)\n",
                         (unsigned long long)copy_shader,
                         translated ? "original translated shader" : "HLE",
@@ -287,7 +291,7 @@ bool ExecuteShaderHLE(const Shader::Info& info, const Gcn::Regs& regs,
                             ? ", paged writes through to guest memory" : "");
             return native;
         }();
-        if (VideoCore::GuestInPlace() && native_env != BbToggle::Experiment(2)) {
+        if (native_env != BbToggle::Experiment(2)) {
             return false;
         }
         // Its destinations stay in the game's memory, as when it runs as itself (see
@@ -305,6 +309,151 @@ bool ExecuteShaderHLE(const Shader::Info& info, const Gcn::Regs& regs,
 
 namespace Vulkan {
 
+namespace {
+/// Merges out[first..] ([begin, end) pairs) where one begins within `gap` of the end of what
+/// precedes it in address order. The copy shader's entries come in a few ascending runs (~170
+/// entries in ~6 runs): the runs are merged rather than the whole sorted (the sort was 4-6 % of the
+/// recording thread).
+void MergeRanges(std::vector<std::pair<unsigned long long, unsigned long long>>& out, size_t first,
+                 u64 gap) {
+    using Range = std::pair<unsigned long long, unsigned long long>;
+    if (out.size() - first <= 1) {
+        return;
+    }
+    thread_local std::vector<size_t> runs;
+    runs.clear();
+    runs.push_back(first);
+    for (size_t i = first + 1; i < out.size(); ++i) {
+        if (out[i].first < out[i - 1].first) {
+            runs.push_back(i);
+        }
+    }
+    runs.push_back(out.size());
+    if (runs.size() > 34) {
+        std::sort(out.begin() + ptrdiff_t(first), out.end());
+    } else if (runs.size() > 2) {
+        // Pairwise merges of neighbouring runs through a scratch copy until one run is left.
+        thread_local std::vector<Range> scratch;
+        thread_local std::vector<size_t> next;
+        while (runs.size() > 2) {
+            scratch.resize(out.size() - first);
+            next.clear();
+            for (size_t r = 0; r + 1 < runs.size(); r += 2) {
+                const size_t lo = runs[r], mid = runs[r + 1];
+                const size_t hi = r + 2 < runs.size() ? runs[r + 2] : mid;
+                std::merge(out.begin() + ptrdiff_t(lo), out.begin() + ptrdiff_t(mid),
+                           out.begin() + ptrdiff_t(mid), out.begin() + ptrdiff_t(hi),
+                           scratch.begin() + ptrdiff_t(lo - first));
+                next.push_back(lo);
+            }
+            next.push_back(out.size());
+            std::copy(scratch.begin(), scratch.end(), out.begin() + ptrdiff_t(first));
+            runs.swap(next);
+        }
+    }
+    size_t merged = first;
+    for (size_t i = first + 1; i < out.size(); ++i) {
+        if (out[i].first <= out[merged].second + gap) {
+            out[merged].second = std::max(out[merged].second, out[i].second);
+        } else {
+            out[++merged] = out[i];
+        }
+    }
+    out.resize(merged + 1);
+}
+
+/// The copy shader's control buffer: one entry per workgroup.
+struct CopyControl {
+    u32 dst_idx;
+    u32 src_idx;
+    u32 end;
+};
+
+/// Appends the merged [begin, end) ranges the control entries name in one buffer (destinations or
+/// sources). The game reissues the same copies frame after frame (~130 calls a frame of ~160
+/// entries): the merge is kept by a hash of the entries and what turns them into addresses.
+void BuildRanges(std::vector<std::pair<unsigned long long, unsigned long long>>& out,
+                 const CopyControl* ctl, u32 groups, bool destinations, u64 base, u64 stride, u64 gap) {
+    struct Key {
+        u64 hash, base, stride, gap;
+        u32 groups, destinations;
+        bool operator==(const Key&) const = default;
+    };
+    struct KeyHash {
+        size_t operator()(const Key& key) const noexcept {
+            return key.hash ^ (key.base * 0x9E3779B97F4A7C15ull) ^ (key.stride << 7) ^ key.groups ^
+                   (u64(key.destinations) << 63);
+        }
+    };
+    thread_local std::unordered_map<Key, std::vector<std::pair<unsigned long long, unsigned long long>>,
+                                    KeyHash> memo;
+    const Key key{XXH3_64bits(ctl, size_t(groups) * sizeof(CopyControl)), base, stride, gap, groups,
+                  destinations};
+    if (const auto it = memo.find(key); it != memo.end()) {
+        out.insert(out.end(), it->second.begin(), it->second.end());
+        return;
+    }
+    const size_t first = out.size();
+    for (u32 i = 0; i < groups; ++i) {
+        const u64 begin = base + u64(destinations ? ctl[i].dst_idx : ctl[i].src_idx) * stride;
+        out.emplace_back(begin, begin + (u64(ctl[i].end) + 1) * stride);
+    }
+    MergeRanges(out, first, gap);
+    if (memo.size() >= 4096) {
+        memo.clear();
+    }
+    memo.emplace(key, std::vector<std::pair<unsigned long long, unsigned long long>>(
+                          out.begin() + ptrdiff_t(first), out.end()));
+}
+} // namespace
+
+bool CopyShaderRanges(const Shader::Info& info, u32 groups, int which, u64 gap, u64& base,
+                      std::vector<std::pair<unsigned long long, unsigned long long>>& out) {
+    const u64 copy_shader = Game::BufferCopyShader();
+    if (copy_shader == 0 || info.pgm_hash != copy_shader || info.buffers.size() < 3 || groups == 0 ||
+        (which != 1 && which != 2)) {
+        return false;
+    }
+    const auto ctl_sharp = info.buffers[0].GetSharp(info);
+    const auto sharp = info.buffers[which].GetSharp(info);
+    const u64 stride = sharp.GetStride();
+    if (ctl_sharp.GetStride() != 12 || stride == 0 || ctl_sharp.base_address == 0 ||
+        u64(groups) * 12 > ctl_sharp.GetSize()) {
+        return false;
+    }
+    const auto* ctl = reinterpret_cast<const CopyControl*>(ctl_sharp.base_address);
+    base = sharp.base_address;
+    const size_t first = out.size();
+    BuildRanges(out, ctl, groups, which == 2, sharp.base_address, stride, gap);
+    for (size_t i = first; i < out.size(); ++i) {
+        out[i].second -= out[i].first;
+    }
+    return true;
+}
+
+bool CopyShaderEntries(const Shader::Info& info, u32 groups, std::vector<CopyEntry>& out) {
+    const u64 copy_shader = Game::BufferCopyShader();
+    if (copy_shader == 0 || info.pgm_hash != copy_shader || info.buffers.size() < 3 || groups == 0) {
+        return false;
+    }
+    const auto ctl_sharp = info.buffers[0].GetSharp(info);
+    const auto src_sharp = info.buffers[1].GetSharp(info);
+    const auto dst_sharp = info.buffers[2].GetSharp(info);
+    const u64 src_stride = src_sharp.GetStride(), dst_stride = dst_sharp.GetStride();
+    if (ctl_sharp.GetStride() != 12 || src_stride == 0 || src_stride != dst_stride ||
+        ctl_sharp.base_address == 0 || u64(groups) * 12 > ctl_sharp.GetSize()) {
+        return false;
+    }
+    const auto* ctl = reinterpret_cast<const CopyControl*>(ctl_sharp.base_address);
+    for (u32 i = 0; i < groups; ++i) {
+        out.push_back({src_sharp.base_address + u64(ctl[i].src_idx) * src_stride,
+                       dst_sharp.base_address + u64(ctl[i].dst_idx) * dst_stride,
+                       (u64(ctl[i].end) + 1) * dst_stride,
+                       ctl_sharp.base_address + u64(i) * sizeof(CopyControl)});
+    }
+    return true;
+}
+
 bool CopyShaderDestinations(const Shader::Info& info, u32 groups, u64 gap,
                             std::vector<std::pair<unsigned long long, unsigned long long>>& out) {
     const u64 copy_shader = Game::BufferCopyShader();
@@ -318,27 +467,9 @@ bool CopyShaderDestinations(const Shader::Info& info, u32 groups, u64 gap,
         u64(groups) * 12 > ctl_sharp.GetSize()) {
         return false;
     }
-    struct Control {
-        u32 dst_idx;
-        u32 src_idx;
-        u32 end;
-    };
-    const auto* ctl = reinterpret_cast<const Control*>(ctl_sharp.base_address);
+    const auto* ctl = reinterpret_cast<const CopyControl*>(ctl_sharp.base_address);
     const size_t first = out.size();
-    for (u32 i = 0; i < groups; ++i) {
-        const u64 begin = dst_sharp.base_address + u64(ctl[i].dst_idx) * stride;
-        out.emplace_back(begin, begin + (u64(ctl[i].end) + 1) * stride);
-    }
-    std::sort(out.begin() + first, out.end());
-    size_t merged = first;
-    for (size_t i = first + 1; i < out.size(); ++i) {
-        if (out[i].first <= out[merged].second + gap) {
-            out[merged].second = std::max(out[merged].second, out[i].second);
-        } else {
-            out[++merged] = out[i];
-        }
-    }
-    out.resize(merged + 1);
+    BuildRanges(out, ctl, groups, true, dst_sharp.base_address, stride, gap);
     // As sizes from here on.
     for (size_t i = first; i < out.size(); ++i) {
         out[i].second -= out[i].first;
@@ -351,16 +482,13 @@ bool CopyShaderDestinations(const Shader::Info& info, u32 groups, u64 gap,
 namespace Vulkan {
 
 bool CopyDestinationsPrecise() {
-    static const bool on = [] {
-        const char* env = std::getenv("BB_COPY_DEST_PRECISE");
-        return !(env && env[0] == '0');
-    }();
+    static const bool on = !bb_env_off("BB_COPY_DEST_PRECISE");
     return on;
 }
 
 unsigned long long CopyDestinationGap() {
     static const unsigned long long gap = [] {
-        const char* env = std::getenv("BB_COPY_DEST_GAP");
+        const char* env = bb_env("BB_COPY_DEST_GAP");
         return env ? std::strtoull(env, nullptr, 0) : 256ull;
     }();
     return gap;

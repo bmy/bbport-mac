@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: hooks on the entry points of the eboot's libGnm (sce::Gnm command buffer methods, linked
 // statically into the game: it writes its own PM4). They are the game's graphics API, the level a

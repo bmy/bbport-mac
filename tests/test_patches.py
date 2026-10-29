@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 from paths import ROOT
 import struct
 import tempfile
@@ -219,6 +221,87 @@ class GxCommandHeapTests(unittest.TestCase):
         expected = {0x2195c0a: struct.pack('<I', 1024 * 1024),
                     0x2195c47: struct.pack('<I', 1024 * 1024)}
         self.assertEqual(writes, expected)
+
+
+class GraphicsHeapTests(unittest.TestCase):
+    """The graphics heaps grow with the scene (patches.graphics_heap_writes)."""
+
+    def eboot(self, original=True):
+        # One PT_LOAD segment mapping virtual address 0 at file offset 0x1000.
+        table = patches.GRAPHICS_HEAPS[0][0] - patches.EBOOT_BASE
+        elf = bytearray(0x1000 + table + 0x100)
+        struct.pack_into('<Q', elf, 0x20, 0x40)
+        struct.pack_into('<HH', elf, 0x36, 56, 1)
+        struct.pack_into('<IIQQQQQQ', elf, 0x40, 1, 5, 0x1000, 0, 0, len(elf) - 0x1000, len(elf), 0)
+        for address, size, _ in patches.GRAPHICS_HEAPS:
+            struct.pack_into('<Q', elf, 0x1000 + address - patches.EBOOT_BASE,
+                             size if original else size + 1)
+        return bytes(elf)
+
+    def sizes(self, scene):
+        writes = patches.graphics_heap_writes(self.eboot(), scene)
+        return [struct.unpack('<Q', data)[0] for _, data in writes]
+
+    def test_4k_gets_the_community_patch_sizes(self):
+        self.assertEqual(self.sizes((3840, 2160)), [full for _, _, full in patches.GRAPHICS_HEAPS])
+
+    def test_a_scene_slightly_above_1080p_grows_the_heaps_a_little(self):
+        sizes = self.sizes((2560, 1080))
+        for size, (_, original, full) in zip(sizes, patches.GRAPHICS_HEAPS):
+            self.assertGreater(size, original)
+            self.assertLess(size - original, (full - original) // 5)
+            self.assertEqual((size - original) % (16 << 20), 0)
+
+    def test_another_eboot_falls_back_to_the_community_patch(self):
+        self.assertIsNone(patches.graphics_heap_writes(self.eboot(False), (2560, 1080)))
+
+
+class GameLanguageTests(unittest.TestCase):
+    """Issue #269: the sell regions' language tables (patches.language_writes)."""
+
+    def eboot(self):
+        site, table = patches.EU_TEXT_TABLE
+        elf = bytearray(0x4000 + max(patches.TEXT_TABLES + patches.VOICE_TABLES) + 84)
+        struct.pack_into('<21i', elf, 0x4000 + site, *table)
+        return bytes(elf)
+
+    def tables(self, writes):
+        return {site: list(struct.unpack('<21i', data)) for site, data in writes}
+
+    def test_auto_lifts_the_region_limits(self):
+        tables = self.tables(patches.language_writes({}, self.eboot()))
+        self.assertEqual(tables[patches.TEXT_TABLES[2]], list(range(21)))
+        voice = tables[patches.VOICE_TABLES[2]]
+        self.assertEqual(voice[:patches.VOICE_COUNT], list(range(patches.VOICE_COUNT)))
+        self.assertTrue(all(v == patches.ENGLISH for v in voice[patches.VOICE_COUNT:]))
+
+    def test_chosen_languages_win_in_every_region(self):
+        writes = patches.language_writes({'game_text_language': 'zhcn',
+                                          'game_voice_language': 'jajp'}, self.eboot())
+        tables = self.tables(writes)
+        for site in patches.TEXT_TABLES:
+            self.assertEqual(set(tables[site]), {patches.GAME_LANGUAGES.index('zhcn')})
+        for site in patches.VOICE_TABLES:
+            self.assertEqual(set(tables[site]), {0})
+
+    def test_a_voice_without_files_and_an_unknown_eboot_are_left_alone(self):
+        tables = self.tables(patches.language_writes({'game_voice_language': 'ruru'}, self.eboot()))
+        self.assertEqual(tables[patches.VOICE_TABLES[0]][0], 0)  # auto: Japanese stays Japanese
+        self.assertEqual(patches.language_writes({}, bytes(120)), [])
+
+
+class GraphicsHeapTests(unittest.TestCase):
+    def test_above_1080p_or_for_a_texture_pack(self):
+        self.assertFalse(patches.graphics_heaps(None, False))
+        self.assertFalse(patches.graphics_heaps((1706, 960), False))
+        self.assertTrue(patches.graphics_heaps((2560, 1440), False))
+        # #240: live resolution (no scene patch) with a texture pack.
+        self.assertTrue(patches.graphics_heaps(None, True))
+
+    def test_compiled_patch_grows_the_two_graphics_heaps(self):
+        # The size table's 2287 MiB (0x8ef00000) and 886 MiB (0x37600000) entries: 3952, 2560 MiB.
+        writes = dict(compile_patches(XML, [patches.GRAPHICS_HEAP_PATCH], '01.09', SEGMENTS))
+        self.assertEqual(writes, {0x4736dda: b'\x00\xf7', 0x4736de2: b'\x00\xa0'})
 
 
 if __name__ == '__main__':

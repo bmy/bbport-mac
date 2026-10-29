@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport shader backend: the emitter of each IR opcode (Emit<Opcode>). Their parameters say how
 // the dispatcher passes the instruction's operands: Id for values, the IR types for

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: an arena for objects of one type that are all released at once (the translator's
 // instructions and blocks, page table pages). Objects are placed one after another in chunks;

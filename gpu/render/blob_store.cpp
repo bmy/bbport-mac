@@ -1,7 +1,9 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "render/blob_store.h"
 
 #include <cstring>
+#include <fmt/format.h>
 
 #include "common/elf_info.h"
 #include "common/io_file.h"
@@ -23,6 +25,8 @@ const char* Extension(BlobType type) {
         return ".key";
     case BlobType::ShaderProfile:
         return ".bin";
+    case BlobType::ShaderInput:
+        return ".in";
     }
     return ".blob";
 }
@@ -170,13 +174,44 @@ void BlobStore::Clear() {
         return;
     }
     std::error_code ec;
-    u64 removed = 0;
+    u64 removed = 0, kept = 0;
+    // The old build's metadata and pipeline keys are kept in previous/: the next shader recipe
+    // import rebuilds what it can of them for this build (ImportRecipes, MergeMetas). A cache of
+    // another version used to be lost whole (2026-10-27: 1531 files of a player's own cache, the
+    // pipelines the recipes lacked compiled again while they played).
+    const auto previous = dir / "previous";
+    std::filesystem::remove_all(previous, ec);
+    std::filesystem::create_directories(previous, ec);
     for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
-        if (entry.is_regular_file(ec) && std::filesystem::remove(entry.path(), ec)) {
+        const auto ext = entry.path().extension();
+        if (ext == ".in") {
+            continue; // the inputs translate again for this build (shader_rebuild.h)
+        }
+        if (!entry.is_regular_file(ec)) {
+            continue;
+        }
+        if (ext == ".meta" || ext == ".key") {
+            std::filesystem::rename(entry.path(), previous / entry.path().filename(), ec);
+            if (!ec) {
+                ++kept;
+                continue;
+            }
+        }
+        if (std::filesystem::remove(entry.path(), ec)) {
             ++removed;
         }
     }
-    LOG_WARNING(Render, "Pipeline cache cleared ({} files): it is rebuilt for this build", removed);
+    if (kept == 0) {
+        std::filesystem::remove_all(previous, ec);
+    }
+    // Shader recipes translated for the old profile (shader_rebuild.h): translated again.
+    std::filesystem::remove_all(dir / "import", ec);
+    std::filesystem::remove_all(dir / "import.tmp", ec);
+    LOG_WARNING(Render, "Pipeline cache cleared ({} files): it is rebuilt for this build{}", removed,
+                kept ? fmt::format(" ({} metadata and pipeline files kept in previous/ for the "
+                                   "shader recipe import)",
+                                   kept)
+                     : std::string{});
 }
 
 } // namespace BbCache

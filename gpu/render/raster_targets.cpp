@@ -1,8 +1,11 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport render: Rasterizer, render targets: special passes (fast clear elimination, resolve, depth
 // copies), target lookup, the render pass (BeginRendering) and the UI placement.
 
+#include <bit>
 #include "render/raster_internal.h"
+#include "shim/bb_env.h"
 
 namespace Vulkan {
 
@@ -449,6 +452,17 @@ void Rasterizer::BindColorAttachments(RenderState& state, const GraphicsPipeline
         const u32 slice = view.info.range.base.layer;
         const u32 mip = view.info.range.base.level;
         const auto& col_buf = regs.color_buffers[cb];
+        if (FrameCapture::Active() && (slice || image->info.resources.layers > 1)) {
+            char note[160];
+            std::snprintf(note, sizeof(note),
+                          "\n  color%u %#llx slice %u layers %u of %u (image type %u) view slices "
+                          "%u-%u",
+                          cb, (unsigned long long)image->info.guest_address, slice,
+                          view.info.range.extent.layers, image->info.resources.layers,
+                          u32(image->info.type), u32(col_buf.view.slice_start),
+                          u32(col_buf.view.slice_max));
+            FrameCapture::Note(note);
+        }
         const bool is_clear = texture_cache.IsMetaCleared(col_buf.CmaskAddress(), slice);
         texture_cache.TouchMeta(col_buf.CmaskAddress(), slice, false);
 
@@ -567,7 +581,17 @@ void Rasterizer::BindDepthAttachment(RenderState& state, bool reduced, TargetRed
         attachment.image_layout = target.layout;
     }
     image.usage.depth_target = true;
-    if (upscaler->Enabled()) {
+    // A pass without a colour attachment (a Scaleform mask: colour writes off) writes the stencil
+    // the next draws into the colour target still bound test: its depth goes where theirs does,
+    // into the UI's only with the UI's colour target. Redirected under another target (the HUD's
+    // own), the masks were lost to the draws they cut out (drawn into the guest depth): the HUD's
+    // item icon strip was drawn whole, a grid of item icons over the screen (2026-10-28).
+    const bool depth_only = std::ranges::none_of(
+        std::span{state.color_attachments}.first(state.num_color_attachments),
+        [](const auto& color) { return bool(color.image_view); });
+    const auto& cb0 = regs.color_buffers[0];
+    const bool other_target = depth_only && cb0 && !upscaler->IsUiColorAddress(cb0.Address());
+    if (upscaler->Enabled() && !other_target) {
         TemporalUpscaler::Target depth_target;
         redirect.depth = upscaler->RedirectDepth(image_id, depth_target);
         if (redirect.depth) {
@@ -649,14 +673,14 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
     attachment_feedback_loop = false;
     const auto& key = pipeline->GetGraphicsKey();
     // The G-buffer pass of an eligible scene starts the scene (reduced to the proxies from
-    // here on, BB_SCENE_RESOLUTION).
+    // here on).
     if (std::popcount(key.mrt_mask & 0x7f) >= 5 && db_desc.first &&
         scene_targets->EligibleScene(texture_cache.GetImage(db_desc.first))) {
         scene_started = true;
     }
     std::optional<SceneResolution::Size> pass_size;
     const bool reduced = ReducedPass(pipeline, pass_size);
-    push_data.scene_size = reduced ? SceneResolution::Pack(scene_targets->Size()) : 0;
+    push_data.scene_size = reduced ? SceneResolution::Pack(scene_targets->ShaderSceneSize()) : 0;
 
     RenderState state;
     state.width = instance.GetMaxFramebufferWidth();
@@ -666,16 +690,20 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
     BindColorAttachments(state, key, reduced, redirect);
     BindDepthAttachment(state, reduced, redirect);
     ApplyTargetRedirect(state, redirect);
+    ui_trace_draw.redirect = (redirect.color ? 1u : 0u) | (redirect.depth ? 2u : 0u) |
+                             (state.depth_stencil_attachment.has_stencil ? 4u : 0u);
     if (state.num_layers == std::numeric_limits<u16>::max()) {
         state.num_layers = 1;
     }
     if (reduced) {
-        // Half-resolution passes keep the scene's factor (proxy / native = scene / 1920).
+        // Half-resolution passes keep the scene's factor (proxy / native = scene / native scene).
         const auto size = scene_targets->Size();
+        const auto native = scene_targets->Native();
         const auto proxy = pass_size.value_or(size);
         state.width = proxy.width;
         state.height = proxy.height;
-        target_scale = {float(size.width) / 1920.0f, float(size.height) / 1080.0f};
+        target_scale = {float(size.width) / float(native.width),
+                        float(size.height) / float(native.height)};
     }
     if (state.num_color_attachments == 0 && !state.depth_stencil_attachment.has_depth &&
         !state.depth_stencil_attachment.has_stencil && !key.motion_vectors &&
@@ -704,10 +732,10 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
 }
 
 void Rasterizer::UiEdgeStretch(const GraphicsPipeline* pipeline) {
-    // BB_UI_DRAWS=<file>: while it exists, one frame's UI draws on another aspect ratio are
-    // logged (then it is removed).
-    static const char* trace_file = std::getenv("BB_UI_DRAWS");
-    if (trace_file && ui_placement.edge_x != 0.0f) {
+    // BB_UI_DRAWS=<file>: while it exists, one frame's UI draws (on another aspect ratio, or in
+    // the upscaler's UI phase) are logged (then it is removed).
+    static const char* trace_file = bb_env("BB_UI_DRAWS");
+    if (trace_file && (ui_placement.edge_x != 0.0f || upscaler->InUiPhase())) {
         static u64 traced_frame = ~0ull;
         const u64 frame = BbStats::frame_number.load(std::memory_order_relaxed);
         static bool tracing = false;
@@ -737,13 +765,84 @@ void Rasterizer::UiEdgeStretch(const GraphicsPipeline* pipeline) {
             const auto& vsc = Regs().viewport_scissors[0];
             std::printf("UI draw: vs %016llx ps %016llx images %zu (%ux%u) clip %d indices %u viewport "
                         "%.0fx%.0f at %.0f,%.0f scissors screen %d,%d-%d,%d window %d,%d-%d,%d vp %d,%d-%d,%d "
-                        "vport_scissor %d\n", (unsigned long long)vs.pgm_hash,
+                        "vport_scissor %d target %#llx %ux%u mrt %#x depth %u stencil %d/%d func %u "
+                        "ref %u mask %u wmask %u\n", (unsigned long long)vs.pgm_hash,
                         (unsigned long long)(ps ? ps->pgm_hash : 0), ps ? ps->images.size() : 0, tw, th,
                         Regs().IsClipDisabled() ? 0 : 1, Regs().num_indices, vp.xscale * 2, vp.yscale * 2,
                         vp.xoffset, vp.yoffset, sc.top_left_x, sc.top_left_y, sc.bottom_right_x,
                         sc.bottom_right_y, wsc.top_left_x, wsc.top_left_y, wsc.bottom_right_x,
                         wsc.bottom_right_y, vsc.top_left_x, vsc.top_left_y, vsc.bottom_right_x,
-                        vsc.bottom_right_y, Regs().mode_control.vport_scissor_enable ? 1 : 0);
+                        vsc.bottom_right_y, Regs().mode_control.vport_scissor_enable ? 1 : 0,
+                        (unsigned long long)Regs().color_buffers[0].Address(),
+                        cb_descs[0].first ? texture_cache.GetImage(cb_descs[0].first).info.size.width : 0,
+                        cb_descs[0].first ? texture_cache.GetImage(cb_descs[0].first).info.size.height : 0,
+                        pipeline->GetGraphicsKey().mrt_mask, u32(db_desc.first.index),
+                        Regs().depth_control.stencil_enable ? 1 : 0,
+                        Regs().depth_buffer.StencilValid() ? 1 : 0,
+                        u32(Regs().depth_control.stencil_ref_func),
+                        u32(Regs().stencil_ref_front.stencil_test_val),
+                        u32(Regs().stencil_ref_front.stencil_mask),
+                        u32(Regs().stencil_ref_front.stencil_write_mask));
+            u64 tex_addr = 0;
+            if (ps && !ps->images.empty()) {
+                tex_addr = ps->images[0].GetSharp(*ps).Address();
+            }
+            const auto& r = Regs().reg_array;
+            std::printf("UI draw:   cmask %#x blend %#x ztest %d zfunc %u tex %#llx cliprule %#x "
+                        "rects %x-%x %x-%x %x-%x %x-%x generic %x-%x woff %x ui_color %u ui_depth %u "
+                        "sten ops %#x db_render %#x stencil_clear %#x state %#llx redirect %u\n",
+                        Regs().color_target_mask.GetMask(0), std::bit_cast<u32>(Regs().blend_control[0]),
+                        Regs().depth_control.depth_enable ? 1 : 0, u32(Regs().depth_control.depth_func),
+                        (unsigned long long)tex_addr, r[0xA083], r[0xA084], r[0xA085], r[0xA086],
+                        r[0xA087], r[0xA088], r[0xA089], r[0xA08A], r[0xA08B], r[0xA090], r[0xA091],
+                        r[0xA080], u32(upscaler->RedirectState() >> 8 & 0xFFFFFFF),
+                        u32(upscaler->RedirectState() >> 36), r[0xA10B], r[0xA000], r[0xA00A],
+                        (unsigned long long)(upscaler->RedirectState() & 0xFF), ui_trace_draw.redirect);
+            // BB_UI_DRAWS_PS=<hex>: that pixel shader's draws also dump their vertex streams
+            // and the vertex shader's first constant buffer.
+            static const u64 dump_ps = [] {
+                const char* s = bb_env("BB_UI_DRAWS_PS");
+                return s ? std::strtoull(s, nullptr, 16) : 0ull;
+            }();
+            if (ps && ps->pgm_hash == dump_ps) {
+                if (const auto& fetch = pipeline->GetFetchShader()) {
+                    for (const auto& attrib : fetch->attributes) {
+                        const auto vb = attrib.GetSharp(vs);
+                        std::printf("UI draw:   attr %u base %#llx stride %u records %u fmt %u/%u:",
+                                    u32(attrib.semantic), (unsigned long long)vb.base_address,
+                                    u32(vb.GetStride()), u32(vb.num_records), u32(vb.data_format),
+                                    u32(vb.num_format));
+                        const auto* f = reinterpret_cast<const u32*>(vb.base_address);
+                        for (u32 i = 0; vb.base_address && i < std::min<u32>(vb.num_records, 24); ++i) {
+                            const u32 at = i * u32(vb.GetStride()) / 4;
+                            std::printf(" (%08x %08x)", f[at], f[at + 1]);
+                        }
+                        std::printf("\n");
+                    }
+                }
+                if (!vs.buffers.empty()) {
+                    const auto cb = vs.buffers[0].GetSharp(vs);
+                    const auto* f = reinterpret_cast<const float*>(cb.base_address);
+                    std::printf("UI draw:   vs cb %#llx:", (unsigned long long)cb.base_address);
+                    for (u32 i = 0; cb.base_address && i < 16; ++i) {
+                        std::printf(" %g", f[i]);
+                    }
+                    std::printf("\n");
+                }
+                const u32 index_size =
+                    Regs().index_buffer_type.index_type == Gcn::IndexType::Index16 ? 2u : 4u;
+                const VAddr ib = Regs().index_base_address.Address<VAddr>() +
+                                 u64(ui_trace_draw.index_offset) * index_size;
+                std::printf("UI draw:   indices at %#llx (offset %u, indexed %d, size %u, base vertex "
+                            "%u):",
+                            (unsigned long long)ib, ui_trace_draw.index_offset,
+                            ui_trace_draw.is_indexed ? 1 : 0, index_size, Regs().index_offset);
+                for (u32 i = 0; ib && i < std::min<u32>(Regs().num_indices, 30); ++i) {
+                    std::printf(" %u", index_size == 2 ? u32(reinterpret_cast<const u16*>(ib)[i])
+                                                       : reinterpret_cast<const u32*>(ib)[i]);
+                }
+                std::printf("\n");
+            }
         }
     }
     // Every vertex shader but the motion vectors' has the corner snap (EmitUiEdgeStretch). A

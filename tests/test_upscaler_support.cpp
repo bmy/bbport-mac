@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Saved FSR 4 choices must be safe before the first rendered frame on older GPUs.
 #include <cassert>

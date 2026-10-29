@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 # tools/bench.sh NAME [ENV=VALUE...]: starts the game through tools/restart.sh (title: cross,
 # cross; waits for the level), stands still there for ${HOLD:-60} s, then closes it. The log is
 # out/bench_NAME_<time>.log, the per-frame CSV out/bench_NAME_<time>.frames.csv.

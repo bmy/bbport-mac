@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: a move-only callable (what std::function would be without copies). Closures up to
 // InlineSize bytes live inside the object: queued GPU commands and submit callbacks are created

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: one GPU clock value of the command processor (an end-of-pipe timestamp, COPY_DATA from
 // the GPU clock; vk_timestamps.cpp). A Vulkan timestamp (device ticks) becomes the PS4's GPU

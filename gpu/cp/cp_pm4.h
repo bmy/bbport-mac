@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport cp: the PM4 packet format of the PS4's command processor (GCN, CIK generation), as the
 // translator's own code: headers, opcodes, register banks. Only hardware facts live here; what a

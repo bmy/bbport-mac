@@ -1,9 +1,11 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport render: Rasterizer, the dynamic state of a draw (viewports and scissors, depth and
 // stencil, primitive assembly, rasterization, blending), set on the scheduler's DynamicState
 // (only what changed is recorded), and debug markers.
 
 #include <mutex>
+#include "shim/bb_env.h"
 #include <unordered_map>
 
 #include "render/raster_internal.h"
@@ -173,6 +175,39 @@ void Rasterizer::UpdateViewportScissorState() const {
     auto& dynamic_state = scheduler.GetDynamicState();
     dynamic_state.SetViewports(viewports);
     dynamic_state.SetScissors(scissors);
+}
+
+vk::Rect2D Rasterizer::ClearDrawRect(u32 width, u32 height) const {
+    const auto& regs = Regs();
+    const Gcn::Scissor combined = CombinedScissor(regs);
+    s32 x0 = Gcn::Scissor::Clamp(combined.top_left_x);
+    s32 y0 = Gcn::Scissor::Clamp(combined.top_left_y);
+    s32 x1 = Gcn::Scissor::Clamp(combined.bottom_right_x);
+    s32 y1 = Gcn::Scissor::Clamp(combined.bottom_right_y);
+    if (regs.mode_control.vport_scissor_enable) {
+        const auto& own = regs.viewport_scissors[0];
+        x0 = std::max<s32>(x0, own.top_left_x);
+        y0 = std::max<s32>(y0, own.top_left_y);
+        x1 = std::min<s32>(x1, own.bottom_right_x);
+        y1 = std::min<s32>(y1, own.bottom_right_y);
+    }
+    const auto& vp = regs.viewports[0];
+    const auto& ctl = regs.viewport_control;
+    if (!regs.IsClipDisabled() && vp.xscale != 0) {
+        const float xoffset = ctl.xoffset_enable ? vp.xoffset : 0.f;
+        const float xscale = std::abs(ctl.xscale_enable ? vp.xscale : 1.f);
+        const float yoffset = ctl.yoffset_enable ? vp.yoffset : 0.f;
+        const float yscale = std::abs(ctl.yscale_enable ? vp.yscale : 1.f);
+        x0 = std::max(x0, s32(std::floor(xoffset - xscale)));
+        y0 = std::max(y0, s32(std::floor(yoffset - yscale)));
+        x1 = std::min(x1, s32(std::ceil(xoffset + xscale)));
+        y1 = std::min(y1, s32(std::ceil(yoffset + yscale)));
+    }
+    x0 = std::clamp<s32>(x0, 0, s32(width));
+    y0 = std::clamp<s32>(y0, 0, s32(height));
+    x1 = std::clamp<s32>(x1, x0, s32(width));
+    y1 = std::clamp<s32>(y1, y0, s32(height));
+    return {.offset = {x0, y0}, .extent = {u32(x1 - x0), u32(y1 - y0)}};
 }
 
 void Rasterizer::UpdateDepthStencilState() const {
@@ -348,11 +383,6 @@ std::thread::id Rasterizer::GetGpuCommandProcessorThread() {
     return liverpool->GetGpuCommandProcessorThread();
 }
 
-#ifdef __linux__
-u32 Rasterizer::GetGpuCommandProcessorThreadId() {
-    return liverpool->GetGpuCommandProcessorThreadId();
-}
-#endif
 
 } // namespace Vulkan
 
@@ -405,10 +435,7 @@ std::string Text(const Viewports& v) {
 } // namespace
 
 bool Enabled() {
-    static const bool on = [] {
-        const char* env = std::getenv("BB_DYNSTATE_CHECK");
-        return env && env[0] == '1';
-    }();
+    static const bool on = bb_env_on("BB_DYNSTATE_CHECK");
     return on;
 }
 

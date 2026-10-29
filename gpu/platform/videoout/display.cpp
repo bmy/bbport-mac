@@ -1,10 +1,14 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include <algorithm>
+#include "shim/bb_env.h"
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
+#include "bbport_toggles.h"
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "common/thread.h"
@@ -19,6 +23,11 @@
 #include "cp/command_processor.h"
 #include "render/presenter.h"
 #include "remote/bb_remote.h"
+#include "bbport_frame_rate.h"
+#include "bbport_timeline.h"
+#include "bbport_sections.h"
+
+extern "C" uint64_t runtime_tsc_frequency(void);
 
 extern std::unique_ptr<Vulkan::Presenter> presenter;
 extern std::unique_ptr<BbCp::CommandProcessor> liverpool;
@@ -26,6 +35,10 @@ extern std::unique_ptr<BbCp::CommandProcessor> liverpool;
 namespace BbVideoOut {
 
 namespace {
+/// The game shows its world now (Display::Flip): the pad recording clock runs (bbgpu_world_active).
+std::atomic<bool> world_active{false};
+/// Microseconds of world frames (each flip's interval while the world is shown): the pad clock.
+std::atomic<u64> world_us{0};
 
 constexpr s32 ErrorInvalidValue = s32(0x80290001);
 constexpr s32 ErrorInvalidPitch = s32(0x80290004);
@@ -93,8 +106,7 @@ Display::Display(u32 width, u32 height) {
     if (BbRemote::BackActive()) {
         main_port.buffer_labels = BbRemote::Back::VideoOutLabels();
     }
-    const char* separate = std::getenv("BB_PRESENT_THREAD");
-    separate_present = !(separate && separate[0] == '0');
+    separate_present = !bb_env_off("BB_PRESENT_THREAD");
     if (separate_present) {
         present_thread = std::jthread([this](std::stop_token stop) { PresentThread(stop); });
     }
@@ -265,21 +277,20 @@ void Display::QueueFlip(Port* port, s32 index, s64 flip_arg, bool at_eop) {
     // when this flip is queued instead of when it is shown at the next vblank. A game with two
     // display buffers otherwise waits for a vblank whenever a frame takes a little longer than
     // one (45-55 FPS shown as 30/60 alternating). End-of-pipe flips only: they are queued once
-    // the GPU has finished the frame (BB_HONEST_LABELS), so as on the console the game starts a
+    // the GPU has finished the frame (honest labels), so as on the console the game starts a
     // frame only after the GPU finished the one before. (Giving back this flip's own buffer let
     // it run two frames ahead: another game rewrote per-frame data the GPU had still to read,
     // garbage indirect draws lost the device, shader code read zero.) The frame has its own copy
     // of the buffer, recorded before any later drawing into it. At most BB_FLIP_AHEAD flips wait
     // to be shown.
     static const u32 ahead_frames = [] {
-        const char* env = std::getenv("BB_FLIP_AHEAD");
+        const char* env = bb_env("BB_FLIP_AHEAD");
         return env ? u32(std::max(0, std::atoi(env))) : 1u;
     }();
     bool ahead;
     {
         std::scoped_lock lock{request_mutex};
-        ahead = index >= 0 && at_eop && Vulkan::Rasterizer::HonestLabels() &&
-                requests.size() < ahead_frames;
+        ahead = index >= 0 && at_eop && requests.size() < ahead_frames;
         requests.push({frame, port, flip_arg, index, at_eop});
     }
     request_cv.notify_one();
@@ -342,6 +353,29 @@ void Display::PresentThread(std::stop_token stop) {
 }
 
 void Display::Flip(const Request& request) {
+    static u64 flips = 0;
+    // The game shows its world (a frame of BB_PAD_WORLD_DRAWS draws or more, 150): the clock of pad
+    // recordings runs (bbgpu_world_active), loading screens and the title do not count.
+    {
+        static const u64 world_draws = [] {
+            const char* env = bb_env("BB_PAD_WORLD_DRAWS");
+            return env && *env ? std::strtoull(env, nullptr, 10) : 150ull;
+        }();
+        static u64 last_draws = 0;
+        static auto last_flip = std::chrono::steady_clock::now();
+        const auto now = std::chrono::steady_clock::now();
+        const u64 draws = BbStats::draws.load(std::memory_order_relaxed);
+        const bool world = draws - last_draws >= world_draws;
+        if (world) {
+            world_us.fetch_add(u64(std::chrono::duration_cast<std::chrono::microseconds>(now - last_flip).count()),
+                               std::memory_order_relaxed);
+        }
+        last_flip = now;
+        world_active.store(world, std::memory_order_relaxed);
+        last_draws = draws;
+    }
+    BbTimeline::Note(BbTimeline::FlipProcessed, ++flips);
+    BbSections::FrameEnd(runtime_tsc_frequency());
     RunPresenter([frame = request.frame, hdr = request.port->is_hdr] {
         presenter->SetHDR(hdr);
         presenter->Present(frame);
@@ -354,10 +388,7 @@ void Display::Flip(const Request& request) {
     }
     // BB_HONEST_FLIPS=1 (an experiment): the flip completes once the GPU has finished the frame,
     // as on the console (a vblank after the frame's commands end), instead of when it is queued.
-    static const bool honest_flips = [] {
-        const char* env = std::getenv("BB_HONEST_FLIPS");
-        return env && env[0] == '1';
-    }();
+    static const bool honest_flips = bb_env_on("BB_HONEST_FLIPS");
     if (honest_flips) {
         presenter->WaitRendered(request.frame);
     }
@@ -409,20 +440,29 @@ void Display::VblankThread(std::stop_token stop) {
     Common::SetCurrentThreadName("bb:Vblank");
     Common::AccurateTimer timer{vblank_period};
 
-    // A frame limit (EmulatorSettings::GetFrameLimit): a flip waits for its slot; slots advance
-    // by one period (no drift) and never lag more than one behind.
+    // A frame limit (BB_FPS_LIMIT, or the one set while the game runs: BbFrameRate::SetLimit): a
+    // flip waits for its slot, one period after the slot before. A late flip moves the slots
+    // (BB_PACE_CATCHUP=1: they advance by one period and may lag one behind, so a late frame was
+    // followed by an early one: 48 ms then 18 ms at 30 FPS, a saw in the frame time graph).
     const u32 frame_limit = EmulatorSettings.GetFrameLimit();
-    const auto frame_period = frame_limit ? std::chrono::nanoseconds(1'000'000'000 / frame_limit)
-                                          : std::chrono::nanoseconds(0);
+    static const bool catch_up = bb_env_on("BB_PACE_CATCHUP");
+    const auto period_now = [&] {
+        const int live = BbFrameRate::Limit();
+        const u32 fps = live > 0 ? u32(std::clamp(live, 30, 480)) : frame_limit;
+        return fps ? std::chrono::nanoseconds(1'000'000'000 / fps) : std::chrono::nanoseconds(0);
+    };
     auto next_flip = std::chrono::steady_clock::now();
     std::printf("VideoOut: vblank %u Hz, frame limit %u FPS\n",
                 EmulatorSettings.GetVblankFrequency(), frame_limit);
     // With a frame limit or the uncapped presets a flip is shown as soon as it arrives (and its
     // slot allows), between vblanks, instead of at the next vblank.
-    const bool immediate_flips = frame_limit != 0 || EmulatorSettings.IsUncappedVblank();
+    const auto immediate_flips = [&] {
+        return frame_limit != 0 || BbFrameRate::Limit() > 0 || EmulatorSettings.IsUncappedVblank();
+    };
     const auto flip = [&](const Request& request, std::chrono::steady_clock::time_point now) {
-        if (frame_limit) {
-            next_flip = std::max(next_flip + frame_period, now - frame_period);
+        if (const auto frame_period = period_now(); frame_period.count()) {
+            next_flip = catch_up ? std::max(next_flip + frame_period, now - frame_period)
+                                 : std::max(next_flip, now) + frame_period;
         }
         Flip(request);
     };
@@ -432,7 +472,7 @@ void Display::VblankThread(std::stop_token stop) {
         timer.Start();
         const auto tick_deadline = std::chrono::steady_clock::now() + vblank_period;
         const auto now = std::chrono::steady_clock::now();
-        if ((!frame_limit || now >= next_flip) &&
+        if ((!period_now().count() || now >= next_flip) &&
             port.vblank_status.count % u64(port.flip_rate + 1) == 0) {
             Request request;
             if (TakeRequest(request)) {
@@ -454,7 +494,7 @@ void Display::VblankThread(std::stop_token stop) {
                 BbRemote::Back::VoVblank(port.vblank_status, event_count);
             }
         }
-        if (!immediate_flips || port.flip_rate != 0) {
+        if (!immediate_flips() || port.flip_rate != 0) {
             timer.End();
             continue;
         }
@@ -462,7 +502,7 @@ void Display::VblankThread(std::stop_token stop) {
         while (!stop.stop_requested()) {
             {
                 std::unique_lock lock{request_mutex};
-                if (!request_cv.wait_until(lock, tick_deadline,
+                if (!Common::WaitUntil(request_cv, lock, tick_deadline,
                                            [this] { return !requests.empty(); })) {
                     break;
                 }
@@ -471,15 +511,25 @@ void Display::VblankThread(std::stop_token stop) {
                 if (next_flip >= tick_deadline) {
                     break;
                 }
-                std::this_thread::sleep_until(next_flip);
+                Common::SleepUntil(next_flip);
             }
             Request request;
             if (TakeRequest(request)) {
                 flip(request, std::chrono::steady_clock::now());
             }
         }
-        std::this_thread::sleep_until(tick_deadline);
+        Common::SleepUntil(tick_deadline);
     }
 }
 
 } // namespace BbVideoOut
+
+/// The game shows its world (a frame of BB_PAD_WORLD_DRAWS draws or more): runtime_pad.c times
+/// recordings and replays by it, so loading screens of any length do not shift them.
+extern "C" int bbgpu_world_active(void) {
+    return BbVideoOut::world_active.load(std::memory_order_relaxed) ? 1 : 0;
+}
+
+extern "C" unsigned long long bbgpu_world_us(void) {
+    return BbVideoOut::world_us.load(std::memory_order_relaxed);
+}

@@ -1,0 +1,27 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
+// bbport: frame generation interpolates the game's finished frame before its display pass, which
+// sends each byte through a curve (Bloodborne: the brightness setting and colour grading, a LUT
+// texture with one row per byte). The generated frames went to the screen without it: darker and
+// cooler than the real ones, a flicker at the generated rate. Applied here, in place, with the
+// game's own LUT image and sampler and its coordinates (value, layer).
+// The LUT is a 1D array (Bloodborne 1.09: 1025 x 3 layers, R32F, one layer per channel): read as
+// one. Read as a 2D texture it gave AMD layer 0 for all three channels and NVIDIA zeros: every
+// generated frame black (DLSS FG on an RTX 5060, Windows, 2026-10-28).
+#version 450
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0, rgba8) uniform image2D frame_img;
+layout(binding = 1) uniform texture1DArray lut_tex;
+layout(binding = 2) uniform sampler lut_samp;
+
+void main() {
+    const ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(pixel, imageSize(frame_img)))) {
+        return;
+    }
+    const vec4 c = imageLoad(frame_img, pixel);
+    const vec4 o = vec4(textureLod(sampler1DArray(lut_tex, lut_samp), vec2(c.r, 0.0), 0.0).r,
+                        textureLod(sampler1DArray(lut_tex, lut_samp), vec2(c.g, 1.0), 0.0).r,
+                        textureLod(sampler1DArray(lut_tex, lut_samp), vec2(c.b, 2.0), 0.0).r, c.a);
+    imageStore(frame_img, pixel, o);
+}

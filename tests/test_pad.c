@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 #define _GNU_SOURCE
 #include <assert.h>
 #include <unistd.h>
@@ -12,6 +14,14 @@ void bbgpu_mouse_look_enable(int enabled) { (void)enabled; }
 void bbgpu_mouse_capture(void) {}
 int bbgpu_camera_look(float yaw, float pitch) { (void)yaw; (void)pitch; return 0; }
 void bbgpu_filter_pad(uint32_t *buttons, const uint8_t *sticks) { (void)buttons; (void)sticks; }
+int bbgpu_pointer_wanted(void) { return 0; }
+/* The game's image is not mapped here: the mouse's auto-rotation hold leaves its code alone. */
+int runtime_memory_low_info(uintptr_t address, int *prot, uintptr_t *end) { (void)address; (void)prot; (void)end; return 0; }
+int bbgpu_video_active(void) { return 0; }
+int bbgpu_world_active(void) { return 1; }
+unsigned long long bbgpu_world_us(void) { return 0; }
+int bbgpu_video_skip(void) { return 0; }
+int bbgpu_free_camera(void) { return 0; }
 void runtime_re_watch_tick(const void *pad_buffer, uint64_t reads) { (void)pad_buffer; (void)reads; }
 uintptr_t runtime_libc_base;
 uintptr_t runtime_lookup(const RuntimeExport *table, size_t count, const char *name) {

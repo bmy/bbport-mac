@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Bloodborne (1.09): the mouse as a pointer in the game's Scaleform menus.
 //
@@ -24,6 +25,7 @@
 //    blocked), 0x5562878 another input block (+0x2e4), 0x5128948 the region (5: Japan, circle
 //    confirms), 0x557fc60 the menu sound request (+8 its label: 0x49344e4 the cursor's move).
 #include "bloodborne_menu_pointer.h"
+#include "shim/bb_env.h"
 
 #include <algorithm>
 #include <atomic>
@@ -529,7 +531,7 @@ void PS4_SYSV_ABI OnListUpdate(std::uint64_t, const Core::GuestRegisterSnapshot*
     if (clicked) {
         click.store(false, std::memory_order_relaxed);
     }
-    static const bool trace = std::getenv("BB_MENU_POINTER_FILE") != nullptr;
+    static const bool trace = bb_env("BB_MENU_POINTER_FILE") != nullptr;
     if (trace) {
         std::printf("Menu pointer: list %p item %d (cursor %d)%s\n", static_cast<void*>(component),
                     index, list.CursorIndex(), clicked ? " click" : "");
@@ -561,10 +563,7 @@ void SetPointer(SDL_Window* window, float wx, float wy) {
 
 int PointerWanted() {
     // BB_MENU_POINTER_LOG=1: each of the signals InMenu is made of, with the time of every change.
-    static const bool log = [] {
-        const char* env = std::getenv("BB_MENU_POINTER_LOG");
-        return env && env[0] == '1';
-    }();
+    static const bool log = bb_env_on("BB_MENU_POINTER_LOG");
     if (log) {
         static int last = -1;
         const Addr flow = Get<Addr>(At(MenuFlow));
@@ -640,7 +639,7 @@ int OnEvent(const void* sdl_event, void* sdl_window) {
 /// BB_MENU_POINTER_FILE=<file> (tests): "x y [click|right|up|down]" in stage pixels, applied
 /// when the file changes, as the mouse would.
 void ReadTestFile() {
-    static const char* path = std::getenv("BB_MENU_POINTER_FILE");
+    static const char* path = bb_env("BB_MENU_POINTER_FILE");
     static std::int64_t next_ms = 0;
     static char last[128] = {};
     const std::int64_t now = NowMs();
@@ -718,7 +717,7 @@ void OnPad(std::uint32_t* buttons, const std::uint8_t* sticks) {
 
 void Install() {
     // BB_MENU_POINTER=0: off.
-    if (const char* setting = std::getenv("BB_MENU_POINTER"); setting && setting[0] == '0') {
+    if (bb_env_off("BB_MENU_POINTER")) {
         return;
     }
     if (!Core::InstallGuestCodeHook(reinterpret_cast<void*>(At(ListUpdate)), ListUpdateEntry, 0,

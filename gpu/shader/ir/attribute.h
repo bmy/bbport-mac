@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport shader translator IR: shader inputs and outputs by meaning: export targets (render
 // targets, depth, positions, parameters) and system values.

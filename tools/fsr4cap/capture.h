@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: D3D12 call recorder for fsr4cap.exe (capture.c, rootsig.c).
 #pragma once

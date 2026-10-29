@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: in-game settings menu (Dear ImGui), drawn by the presenter into the swapchain image
 // after the game frame, at display resolution. Insert (keyboard) or L3+R3 (gamepad) opens it;
@@ -5,6 +6,7 @@
 
 #pragma once
 
+#include <filesystem>
 #include <string>
 #include "common/types.h"
 #include "vulkan/vk_common.h"
@@ -30,6 +32,10 @@ void UpdateTextInput(SDL_Window* window);
 bool Visible();
 /// A line of text over the game until called with null (bbgpu_overlay_banner).
 void SetBanner(const char* text);
+/// A trophy unlocked (bbport_trophies.cpp): announced at the top right for a few seconds, one
+/// after another. grade: P G S B, '?' unknown; icon: the trophy's PNG (empty: the grade's badge).
+/// delay: seconds of drawn frames before it shows (BB_TROPHY_TEST: past the game's start).
+void ShowTrophy(char grade, const std::string& name, const std::filesystem::path& icon, float delay = 0.0f);
 
 /// Present thread: draws into `view` (layout ColorAttachmentOptimal).
 void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent);

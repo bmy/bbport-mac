@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Shader corpus replay: compiles every compilation recorded with BB_SHADER_CAPTURE
 // (render/shader_capture.h) again and compares the output with the recorded one: SPIR-V word

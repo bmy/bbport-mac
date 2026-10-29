@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: address-space operations the video core needs, backed by the C
 // runtime's VMA table (runtime_memory.c).
 #pragma once

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* Narrow, explicit PS4 libc contracts. No automatic success stubs. */
 #define _CRT_RAND_S
 #include "runtime.h"
@@ -97,9 +99,6 @@ void runtime_report(void) {
     runtime_audio_report();
     runtime_pad_report();
     runtime_savedata_report();
-    runtime_compat_report();
-    runtime_ngs2_report();
-    runtime_toypad_report();
     runtime_file_report();
     printf("Runtime: memory operations=%zu\n", (size_t)memory_calls);
 }
@@ -266,10 +265,6 @@ uintptr_t runtime_resolve(const char *name, int is_data) {
     if (save) return save;
     uintptr_t file = runtime_file_resolve(name);
     if (file) return file;
-    uintptr_t toypad = runtime_toypad_resolve(name);
-    if (toypad) return toypad;
-    uintptr_t ngs2 = runtime_ngs2_resolve(name);
-    if (ngs2) return ngs2;
     uintptr_t compat = runtime_compat_resolve(name);
     if (compat) return compat;
     return bbgpu_resolve(name);

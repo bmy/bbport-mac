@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport render: what the Rasterizer's source files share (render/raster_*.cpp): includes, the
 // register accessors of the draw being recorded, small helpers.
@@ -69,6 +70,13 @@ inline Gcn::CbDbExtent Rasterizer::DbExtent() const {
 
 /// Whether the formats are ones the hardware defines (magic_enum::enum_contains from a table:
 /// that scans every enumerator, per texture per draw).
+/// BB_VERTEX_IN_PLACE (diagnostics): also what draws read of the vertex data bound in place.
+inline bool VertexInPlaceDiag() {
+    static const bool on = bb_env("BB_VERTEX_IN_PLACE") &&
+                           std::strtoull(bb_env("BB_VERTEX_IN_PLACE"), nullptr, 0) != 0;
+    return on;
+}
+
 inline bool IsKnownFormat(Gcn::DataFormat data_fmt, Gcn::NumberFormat num_fmt) {
     static const auto tables = [] {
         std::pair<std::array<bool, 256>, std::array<bool, 256>> t{};

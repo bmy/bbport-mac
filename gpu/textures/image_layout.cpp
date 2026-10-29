@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // The layout half of ImageInfo (no renderer dependencies: tested on its own).
 #include <algorithm>

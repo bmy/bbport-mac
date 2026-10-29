@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* Explicit guest timeval layout; host pointers never escape this boundary. */
 #define _DEFAULT_SOURCE
 #include "runtime.h"

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "render/vk_timestamps.h"
 
@@ -5,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 
+#include "bbport_free_check.h"
 #include "cp/cp_packets.h"
 #include "buffers/buffer.h"
 #include "buffers/buffer_cache.h"
@@ -144,6 +146,7 @@ bool GpuTimestamps::Write(VAddr address, bool end_of_pipe) {
     buffer_cache.force_writes_in_place = true;
     const auto [buffer, offset] = buffer_cache.ObtainBuffer(address, sizeof(u64), true);
     buffer_cache.force_writes_in_place = false;
+    BbFreeCheck::NoteGpuWrite(address, sizeof(u64), 0, BbFreeCheck::GpuTimestamp);
     const u32 slot = next_slot;
     next_slot = next_slot + 1 == NumSlots ? 1 : next_slot + 1;
     Push push{};

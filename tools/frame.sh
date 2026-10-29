@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 # tools/frame.sh OUT.png: the game's next presented frame (BB_PRESENT_DUMP_TRIGGER=out/present_trigger,
 # BB_DUMP_DIR=out/present, set when the game starts) as a PNG, without a screen capture: works
 # while the game window is on another workspace.

@@ -1,6 +1,9 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include "shim/bb_env.h"
+#include <array>
 #include <cstdlib>
 
 #include "render/vk_gpu_profiler.h"
@@ -10,7 +13,7 @@
 namespace Vulkan {
 
 void GpuProfiler::Init(const Instance& instance, Scheduler& scheduler) {
-    const char* env = std::getenv("BB_GPU_PROFILE");
+    const char* env = bb_env("BB_GPU_PROFILE");
     if (!env || env[0] != '1' || instance_ptr) {
         return;
     }
@@ -32,13 +35,15 @@ GpuProfiler::GpuProfiler(const Instance& instance, Scheduler& scheduler_)
     std::printf("GPU profile: on (timestamp period %.2f ns)\n", period_ns);
 }
 
-void GpuProfiler::WriteTimestamp(u64 key) {
+void GpuProfiler::WriteTimestamp(u64 key, bool end_rendering) {
     if (used[slice] + 1 >= SliceQueries) {
         return; // the frame's slice is full: the rest of the frame goes to the last label
     }
     // Outside render passes: radv_CmdWriteTimestamp2 crashed inside some. Marks sit where a
     // pass, dispatch or submission ends anyway.
-    scheduler.EndRendering();
+    if (end_rendering) {
+        scheduler.EndRendering();
+    }
     const u32 query = slice * SliceQueries + used[slice]++;
     keys[slice].push_back(key);
     current = key;
@@ -107,10 +112,39 @@ void GpuProfiler::Print() {
     }
     std::printf("GPU profile: %.2f ms/frame over %llu frames, %zu labels\n", sum / frames,
                 static_cast<unsigned long long>(frames), sorted.size());
-    for (size_t i = 0; i < std::min<size_t>(sorted.size(), 30); ++i) {
+    // BB_GPU_PROFILE_TOP=n: the n heaviest labels (30).
+    static const size_t top = [] {
+        const char* env = bb_env("BB_GPU_PROFILE_TOP");
+        return env && *env ? size_t(std::strtoul(env, nullptr, 10)) : size_t(30);
+    }();
+    for (size_t i = 0; i < std::min<size_t>(sorted.size(), top); ++i) {
         const auto& [key, total] = sorted[i];
         std::printf("  %6.3f ms/frame %5.1f/frame  %s\n", total.ms / frames,
                     double(total.segments) / frames, described[key].c_str());
+    }
+    // BB_GPU_PROFILE_DRAWS=1: all labelled draws together, by what one draw of the pair costs.
+    {
+        struct Bin { double ms = 0; u64 draws = 0; u64 pairs = 0; };
+        std::array<Bin, 5> bins{}; // < 5 us, < 20, < 50, < 150, more
+        for (const auto& [key, total] : sorted) {
+            if (described[key].rfind("draw vs", 0) != 0 || total.segments == 0) {
+                continue;
+            }
+            const double us = total.ms * 1000.0 / double(total.segments);
+            auto& bin = bins[us < 5 ? 0 : us < 20 ? 1 : us < 50 ? 2 : us < 150 ? 3 : 4];
+            bin.ms += total.ms;
+            bin.draws += total.segments;
+            ++bin.pairs;
+        }
+        if (bins[0].draws + bins[1].draws + bins[2].draws + bins[3].draws + bins[4].draws != 0) {
+            static constexpr const char* names[5] = {"< 5 us", "5-20 us", "20-50 us", "50-150 us", "> 150 us"};
+            std::printf("  draws by cost of one:");
+            for (size_t b = 0; b < bins.size(); ++b) {
+                std::printf("  %s: %.2f ms %.0f draws (%llu pairs)", names[b], bins[b].ms / frames,
+                            double(bins[b].draws) / frames, (unsigned long long)bins[b].pairs);
+            }
+            std::printf("\n");
+        }
     }
     if (!gaps.empty()) {
         // The gaps one by one: the presenter's own submissions (outside this scheduler) fall in

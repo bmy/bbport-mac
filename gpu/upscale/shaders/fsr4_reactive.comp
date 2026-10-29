@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: FSR 4 has no reactive input (its model reads colour, depth, motion, history and
 // exposure). Where the reactive mask marks the game's blended effects (fog, light shafts, water,

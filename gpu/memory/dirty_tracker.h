@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport memory: which pages of GPU-used memory the CPU changed (to upload before the GPU reads
 // them) and which the GPU changed (to copy back before the CPU reads them, readbacks). Kept per
@@ -6,6 +7,7 @@
 #pragma once
 
 #include <array>
+#include "shim/bb_env.h"
 #include <atomic>
 #include <chrono>
 #include <deque>
@@ -74,8 +76,6 @@ public:
         if constexpr (side == Side::Cpu && set) {
             cpu_change_epoch.fetch_add(1, std::memory_order_acq_rel);
             CountWriteFaults(first, last);
-            last_cpu_write_frame = BbStats::frame_number.load(std::memory_order_relaxed);
-            NotePreuploadChurn();
         }
         auto& bits = Bits<side>();
         if constexpr (set) {
@@ -136,18 +136,6 @@ public:
         }
     }
 
-    /// Pre-upload: some page CPU-modified and not GPU-modified.
-    bool HasCpuOnlyPages() const {
-        return (cpu & ~gpu).Any();
-    }
-    /// Pre-upload: the frame of the newest guest write seen here.
-    u32 last_cpu_write_frame = 0;
-    /// Pre-upload: when it was last pre-uploaded, and no pre-upload before this frame: a region
-    /// the game writes again soon after a pre-upload backs off, longer each time.
-    u32 preupload_frame = 0;
-    u32 preupload_backoff_until = 0;
-    u8 preupload_strikes = 0;
-    u32 preupload_count = 0;
 
     PageLock lock;
 
@@ -176,20 +164,6 @@ private:
         watch->template WatchRegion<on, reads>(base, mask);
     }
 
-    void NotePreuploadChurn() {
-        constexpr u32 ChurnFrames = 600; // ~10 s: regions the game rewrites every few seconds
-        if (preupload_frame == 0 || last_cpu_write_frame - preupload_frame > ChurnFrames) {
-            return;
-        }
-        // One quick rewrite may be the game loading new data there (worth pre-uploading); from
-        // the second on it is data it rewrites now and then.
-        preupload_strikes = std::min<u8>(preupload_strikes + 1, 7);
-        if (preupload_strikes >= 2) {
-            preupload_backoff_until = last_cpu_write_frame + (240u << (preupload_strikes - 1));
-        }
-        preupload_frame = 0;
-    }
-
     // Hot pages (BB_HOT_PAGES=1): pages the guest writes again and again (per-frame constants,
     // skinning output) cost a fault in the writer plus a re-watch on every upload; after
     // HotFaults faults a page stays unwatched and counts as always CPU-modified, uploaded on
@@ -197,10 +171,7 @@ private:
     // to ~14k pages (56 MB), each re-uploaded on every binding, which cost far more than the
     // faults. A short period re-watches thousands of pages at once, a fault storm.
     static bool HotPagesEnabled() {
-        static const bool enabled = [] {
-            const char* env = std::getenv("BB_HOT_PAGES");
-            return env && env[0] == '1';
-        }();
+        static const bool enabled = bb_env_on("BB_HOT_PAGES");
         return enabled && !BbToggle::Disabled(BbToggle::HotPages);
     }
     static constexpr u8 HotFaults = 2;
@@ -272,31 +243,6 @@ public:
         return ForEachRegion<false>(address, size, [](Region& r, u64 offset, u64 bytes) {
             return r.Modified<Side::Gpu>(offset, bytes);
         });
-    }
-
-    /// Pre-upload: whether the region at `region` holds CPU-modified pages that are not
-    /// GPU-modified, with no guest write seen since frame `quiet_since`. `rewritten`: only
-    /// regions the guest wrote after the GPU had used them (write faults).
-    bool PreuploadCandidate(VAddr region, u32 quiet_since, bool rewritten) {
-        Region* r = Find(region);
-        if (!r) {
-            return !rewritten; // never used by the GPU: all of it is CPU-modified
-        }
-        std::scoped_lock lk{r->lock};
-        if (rewritten && r->last_cpu_write_frame == 0) {
-            return false;
-        }
-        return r->last_cpu_write_frame < quiet_since &&
-               r->preupload_backoff_until <= quiet_since && r->HasCpuOnlyPages();
-    }
-    /// Pre-upload: the region was pre-uploaded at `frame`; how many times it was before.
-    u32 NotePreuploaded(VAddr region, u32 frame) {
-        if (Region* r = Find(region)) {
-            std::scoped_lock lk{r->lock};
-            r->preupload_frame = frame;
-            return r->preupload_count++;
-        }
-        return 0;
     }
 
     void MarkRegionAsCpuModified(VAddr address, u64 size) {

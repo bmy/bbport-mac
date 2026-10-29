@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: BB_GPU_PROFILE=1 — GPU time per render pass, dispatch and upscaler run. A timestamp is
 // written where each of them starts (and at the frame end); the time to the next timestamp is
@@ -42,6 +43,17 @@ public:
     [[nodiscard]] u64 Current() const noexcept {
         return current;
     }
+    /// A mark inside the open render pass (BB_GPU_PROFILE_DRAWS=1: one before each draw, labelled by
+    /// its shaders). The timestamps wait for everything before them (all-commands stage): the
+    /// draws are serialised, so the times are for ranking draws, not their cost in the pipeline.
+    template <typename Describe>
+    void MarkInPass(u64 key, Describe&& describe) {
+        if (!described.contains(key)) {
+            described.emplace(key, describe());
+        }
+        WriteTimestamp(key, false);
+    }
+
     /// Continues the segment of `key` (a label seen before) where a nested one ends.
     void Resume(u64 key) {
         WriteTimestamp(key);
@@ -57,7 +69,7 @@ public:
 
 private:
     GpuProfiler(const Instance& instance, Scheduler& scheduler);
-    void WriteTimestamp(u64 key);
+    void WriteTimestamp(u64 key, bool end_rendering = true);
     void Collect(u32 slice);
     void Print();
 

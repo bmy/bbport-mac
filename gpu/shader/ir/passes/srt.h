@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport shader translator: the shader resource table walker kept with a shader: generated code
 // that copies the descriptors the shader reads through pointers in its user data into one flat

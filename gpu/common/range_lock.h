@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: holds a run of locks from an array. Every holder takes its run in ascending order, so
 // two overlapping runs cannot deadlock (no thread waits for a lock below one it holds).

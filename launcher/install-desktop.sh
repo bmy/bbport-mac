@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Adds the launcher to the application menu (~/.local/share/applications) for this checkout.
 set -euo pipefail
 here=$(cd -- "$(dirname -- "$0")" && pwd)

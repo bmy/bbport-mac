@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: the display's threads. The vblank thread ticks at the vblank rate (BB_VBLANK_HZ),
 // takes queued flips (every (flip_rate + 1) vblanks; with a frame limit or the uncapped presets,

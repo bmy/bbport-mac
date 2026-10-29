@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* Offline AppContent provider for the configured base-game profile.
  * No package/DLC mounting, downloads, entitlement or license emulation; add-on folders in
  * <user>/addcont are reported as installed (see addon_list). */

@@ -151,6 +151,14 @@ The previous frame's matrices are not there; the port keeps them itself.
 - Frame-to-frame difference while standing still: ~33% lower with FSR.
 - Missing: motion of animated objects (characters, cloth, foliage), reactive/transparency
   masks for particles and fog, render-resolution scaling, frame generation.
+- Frame generation (2026-10-18): two providers in `upscale/vk_frame_generation`. FSR 3.1 frame
+  interpolation (FSR-Vulkan) stays hidden behind `BB_FRAME_GEN=1` until its artifacts are fixed.
+  DLSS Frame Generation runs through the DLSS bridge (ABI 2) with NVIDIA's Linux
+  `libnvidia-ngx-dlssg.so`: inputs are the finished frame, the frame before its UI, a copy of the
+  scene depth, the motion vectors (camera and object motion, previous minus current, render
+  pixels) and the cameras as D3D clip-space matrices (`upscale/camera_matrices.h`: the game's
+  y scale negated, w = view z). One to three generated frames per game frame; the presenter shows
+  them evenly spaced before the real one.
 
 ## 2026-10-01: FSR 4 при выводе 1440p/2160p не работал (мерцание и дрожание)
 

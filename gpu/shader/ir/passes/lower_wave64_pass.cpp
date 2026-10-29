@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Compute shaders written for 64-lane waves on hosts with smaller subgroups (32): 64-bit ballots,
 // reads of a fixed lane and the lane-below mask go through shared memory scratch (one dword per

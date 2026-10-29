@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: one media source of the player: FFmpeg demuxing on one thread, video and audio decoding
 // on one thread each, into buffers the game allocated (its allocator callbacks). Video frames are

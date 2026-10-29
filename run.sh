@@ -55,6 +55,8 @@ if [[ ${BB_SAVE_LOG:-} == 1 ]]; then
     # Bash builtins only (the AppImage's PATH has no tee).
     exec > >(while IFS= read -r line || [[ -n $line ]]; do printf '%s\n' "$line"; printf '%s\n' "$line" >&$log_fd; done) 2>&1
 fi
+# The port's version (VERSION, issue #307), first in every log.
+[[ -f VERSION ]] && echo "bbport $(<VERSION)"
 if [[ -z ${PYTHON:-} ]]; then
     PYTHON=$(command -v python3 || true)
     if [[ -z $PYTHON ]]; then
@@ -70,7 +72,8 @@ if [[ ! -f $game/eboot.bin ]]; then echo "No eboot.bin in $game (set BB_GAME_DIR
 original_game=$game
 game=$("$PYTHON" scripts/mods.py "$game" --out "$out" \
     --mods-dir "${BB_MODS_DIR:-$data/mods}" --config "${BB_MODS_CONFIG:-$data/mods.json}" \
-    --enabled "${BB_MODS_ENABLED:-1}")
+    --enabled "${BB_MODS_ENABLED:-1}" \
+    --saves "${BB_USER_DIR:-$data/user}/savedata" --state "$data/mods.last")
 # A private merged view lasts for this launch, including restarts. Cleanup only our own view.
 if [[ $game != "$(realpath "$original_game")" ]]; then
     mod_game=$game
@@ -99,83 +102,109 @@ fps=${BB_FPS:-uncap}
 # renders at the preset's size of the output (a patch), the upscaler fills the output, the UI is
 # drawn at the output size. Preset and output changes need a restart.
 # Live resolution changes keep the guest at 1920x1080 and scale host targets at run time instead
-# (output and presets change in the menu without a restart, but post-processing stays at 1080p
-# and scene targets are copied back: much slower on the Steam Deck and older GPUs). Chosen by
-# BB_LIVE_RES=0/1, else bbport.ini live_resolution=0/1/auto (auto: the GPU check, strong
-# discrete GPUs get them); off when unset. 1080p output and TAA always use the live path.
+# (output and presets change in the menu without a restart). Over the startup patch below
+# (BB_LIVE_HYBRID) they are always on; BB_LIVE_RES=0 turns them off for tests.
 # The GPU tools (bb-gpu-capabilities: the game's GPU, its live resolution support).
 if [[ -n ${BB_PROBE:-} ]]; then caps=$(dirname -- "$BB_PROBE")/bb-gpu-capabilities
 elif [[ -n ${BB_PREBUILT:-} ]]; then caps=bin/bb-gpu-capabilities
 else caps=out/bb-gpu-capabilities; fi
-if [[ -z ${BB_RENDER_RES:-} ]]; then
-    read -r scaled_render scaled_output < <("$PYTHON" scripts/patches.py --print-scaled --settings "$BB_CONFIG") || true
+# output_res=auto (and no key, the default): the monitor's resolution, the chosen one (BB_DISPLAY:
+# its name or number) or the primary. Bash builtins only (the AppImage's PATH has no sed/grep).
+output_setting=auto
+if [[ -f $BB_CONFIG ]]; then
+    while IFS= read -r line || [[ -n $line ]]; do
+        [[ $line =~ ^output_res=(.*)$ ]] && output_setting=${BASH_REMATCH[1]}
+    done < "$BB_CONFIG"
 fi
-live=0
-if [[ -n ${scaled_output:-} ]]; then
-    live=${BB_LIVE_RES:-}
-    # Bash builtins only: the AppImage's PATH has no sed/grep (a missing one ended run.sh silently).
-    if [[ -z $live && -f $BB_CONFIG ]]; then
-        while IFS= read -r line || [[ -n $line ]]; do
-            [[ $line =~ ^live_resolution=([01]|auto)$ ]] && live=${BASH_REMATCH[1]}
-        done < "$BB_CONFIG"
-    fi
-    if [[ $live == auto ]]; then
-        live=$("$caps" --live-resolution 2> >(while IFS= read -r line; do
-            [[ $line == *MANGOHUD* ]] || printf '%s\n' "$line"; done >&2)) || live=0
-    fi
-    [[ $live == 1 ]] || live=0
+if [[ $output_setting == auto && -z ${BB_MONITOR_SIZE:-} ]]; then
+    number=0
+    while IFS=$'\t' read -r name size primary; do
+        number=$((number + 1))
+        if [[ -n ${BB_DISPLAY:-} ]]; then
+            [[ $name == "$BB_DISPLAY" || $number == "$BB_DISPLAY" ]] && BB_MONITOR_SIZE=$size
+        elif [[ $primary == 1 ]]; then
+            BB_MONITOR_SIZE=$size
+        fi
+    done < <("$caps" --displays 2> /dev/null)
+    [[ ${BB_MONITOR_SIZE:-} =~ ^[1-9][0-9]*x[1-9][0-9]*$ ]] && export BB_MONITOR_SIZE &&
+        echo "Output: the monitor's resolution, ${BB_MONITOR_SIZE} (output_res=auto)"
 fi
-if [[ $live == 1 ]]; then
-    echo "Output ${scaled_output}: live resolution changes (live_resolution=0: startup patch)"
-elif [[ -n ${scaled_output:-} ]]; then
-    export BB_RENDER_RES=$scaled_render BB_OUTPUT_RES=$scaled_output BB_AUTO_RENDER_RES=1
+# The game's larger heaps (patches.py: "Increased Graphics Heap Sizes" for a scene above 1920x1080)
+# need more direct memory; the game sizes its heaps by what it is given, and with the GPU using
+# its memory in place all of it is resident: only then (a smaller scene left 3.5 GiB more RAM
+# in use for nothing).
+large_scene_memory() {
+    local w=${1%x*} h=${1#*x}
     # bbport (macOS, BB_DMEM_AUTO): only scene pixels above 1080p need more than the PS4's 5056
     # MiB, about 448 bytes each, measured by bloodborne-native (bloodborne-runtime's run.sh: a
     # 2258x1270 scene failed at 5184 MiB and ran at 5376; 1506x848 ran at 5056; a flat 9152 lost
     # the GPU at 1440p on an 18 GB Mac). In 64 MiB steps plus one spare; scenes larger than they
     # measured keep the 9152 below.
-    if [[ ${BB_DMEM_AUTO:-} == 1 && $scaled_render =~ ^([0-9]+)x([0-9]+)$ ]]; then
-        scene_pixels=$(( BASH_REMATCH[1] * BASH_REMATCH[2] ))
-        if (( scene_pixels <= 1920 * 1080 )); then
-            export BB_DMEM_MB=5056
-        elif (( scene_pixels <= 2258 * 1270 )); then
-            export BB_DMEM_MB=$(( 5056 + ((scene_pixels - 1920 * 1080) * 448 + (64 << 20) - 1) / (64 << 20) * 64 + 64 ))
-        fi
+    if [[ ${BB_DMEM_AUTO:-} == 1 && -z ${BB_DMEM_MB:-} && $w =~ ^[0-9]+$ && $h =~ ^[0-9]+$ ]] &&
+        (( w * h > 1920 * 1080 && w * h <= 2258 * 1270 )); then
+        export BB_DMEM_MB=$(( 5056 + ((w * h - 1920 * 1080) * 448 + (64 << 20) - 1) / (64 << 20) * 64 + 64 ))
     fi
+    [[ $w =~ ^[0-9]+$ && $h =~ ^[0-9]+$ ]] && (( w * h > 1920 * 1080 )) && export BB_DMEM_MB=${BB_DMEM_MB:-9152}
+    return 0
+}
+if [[ -z ${BB_RENDER_RES:-} ]]; then
+    read -r scaled_render scaled_output < <("$PYTHON" scripts/patches.py --print-scaled --settings "$BB_CONFIG") || true
+fi
+live=0
+# 1080p output: the live path always ran there. Over the startup patch (BB_LIVE_HYBRID) a preset
+# below Native AA gets the game's targets at its size too.
+if [[ -z ${scaled_output:-} && -z ${BB_RENDER_RES:-} && ${BB_LIVE_HYBRID:-1} == 1 ]]; then
+    read -r hybrid_render hybrid_output < <("$PYTHON" scripts/patches.py --print-scaled --align 8 --settings "$BB_CONFIG") || true
+    [[ -n ${hybrid_output:-} ]] && live=1 scaled_output=$hybrid_output scaled_render=$hybrid_render
+fi
+# Live changes are always on (they cost nothing over the startup patch); BB_LIVE_RES=0 (tests):
+# the startup patch alone, presets change after a restart.
+if [[ -n ${scaled_output:-} && $live != 1 ]]; then
+    live=${BB_LIVE_RES:-1}
+    [[ $live == 1 ]] || live=0
+fi
+# Live changes run over the startup patch (BB_LIVE_HYBRID): the game's targets get the launch
+# preset's size, so a frame costs what it costs without live changes; another preset chosen in
+# the game is drawn through proxies until the next start. BB_LIVE_HYBRID=0: the game's targets
+# stay 1920x1080 and every preset goes through proxies (slower: on a Steam Deck 30 FPS against 44).
+if [[ $live == 1 && ${BB_LIVE_HYBRID:-1} == 1 ]]; then
+    read -r scaled_render scaled_output < <("$PYTHON" scripts/patches.py --print-scaled --align 8 --settings "$BB_CONFIG") || true
+    export BB_RENDER_RES=$scaled_render BB_OUTPUT_RES=$scaled_output BB_AUTO_RENDER_RES=1 BB_LIVE_HYBRID=1
+    large_scene_memory "$scaled_render"
+    echo "Output ${scaled_output}: scene ${scaled_render}, live preset changes over it (BB_LIVE_HYBRID=0: proxies only)"
+elif [[ $live == 1 ]]; then
+    echo "Output ${scaled_output}: live resolution changes (BB_LIVE_HYBRID=0: proxies only)"
+elif [[ -n ${scaled_output:-} ]]; then
+    export BB_RENDER_RES=$scaled_render BB_OUTPUT_RES=$scaled_output BB_AUTO_RENDER_RES=1
+    large_scene_memory "$scaled_render"
+    echo "Output ${scaled_output}: scene ${scaled_render}, direct memory ${BB_DMEM_MB:-5056} MiB (BB_LIVE_RES=0: no live changes)"
+fi
+# Texture packs (upscaled map textures, baked into the game folder or from the mods folder) fill
+# the game's graphics heaps where the retail game fits: its GPU allocations fail, textures flicker,
+# then it crashes (139 at Iosefka's Clinic, #240). They get the full larger heaps and the direct
+# memory those need. scripts/game_check.py finds a map texture larger than the retail game's
+# (once, kept in out/); BB_LARGE_HEAPS=1/0 forces it on or off.
+large_heaps=${BB_LARGE_HEAPS:-} pack=
+if [[ $large_heaps != [01] ]]; then
+    read -r large_heaps pack < <("$PYTHON" scripts/game_check.py --texture-pack "$game" "$out/texture-pack.json") || true
+    [[ $large_heaps == 1 ]] || large_heaps=0
+fi
+if [[ $large_heaps == 1 ]]; then
+    # bbport (macOS, BB_DMEM_AUTO): the scene's size above was not measured with texture packs.
+    [[ ${BB_DMEM_AUTO:-} == 1 ]] && unset BB_DMEM_MB
     export BB_DMEM_MB=${BB_DMEM_MB:-9152}
-    echo "Output ${scaled_output}: scene ${scaled_render}, direct memory ${BB_DMEM_MB} MiB (live_resolution=1: live changes)"
+    echo "Graphics heaps: larger (${pack:-BB_LARGE_HEAPS=1}), direct memory ${BB_DMEM_MB} MiB (BB_LARGE_HEAPS=0: the game's own sizes)"
 fi
 "$PYTHON" scripts/patches.py --out "$out" --fps "$fps" --extra "${BB_PATCHES:-}" --settings "$BB_CONFIG" --game-dir "$game" --render-res "${BB_RENDER_RES:-}" --output-res "${BB_OUTPUT_RES:-}" \
-    --patches-dir "${BB_PATCHES_DIR:-$data/patches}" --patches-config "${BB_PATCHES_CONFIG:-$data/patches.json}"
-# Background upload of the game's GPU memory into VRAM ahead of use (BufferCache::Preupload):
-# 1 = only memory already in VRAM that the game rewrote (no new VRAM), 2 = all of it (~3 GB more
-# VRAM), 0 = off. BB_GUEST_GPU_MEMORY=1 puts guest direct memory in GPU-visible dma-buf chunks
-# (BB_GUEST_IN_PLACE below implies it: it commits all allocated memory up front and rules out BB_UFFD).
-export BB_PREUPLOAD=${BB_PREUPLOAD:-1}
-# Memory model and translation. BB_PC_MODEL=1 (the launcher's "Memory model": "Auto" gives it to
-# every GPU; BB_PC_MODEL=1/0 by hand) selects how a PC release would
-# work: the GPU uses the game's memory where it is (GPU-visible system memory) and keeps the data
-# it reads often in VRAM, the command processor's work is translated rather than emulated
-# (BB_GUEST_IN_PLACE=1 and what depends on it). Every GPU gets the layer's memory module, which
-# binds the game's memory in place and keeps VRAM copies without sparse binding (NVIDIA's sparse
-# binding stalls the GPU for seconds; on AMD it is faster than the sparse arena too);
-# BB_LAYER_MEMORY=0: AMD's sparse arena, as before 0.52.
-# 0: the model of 0.3 (VRAM copies of the game's memory, write tracking),
-# with the fixes made since. BB_GUEST_IN_PLACE set by hand overrides it.
-# BB_AS_0_3=1 (the launcher's developer switch "Synchronisation as in 0.3"): what changed since the
-# 0.3 release is reverted for comparisons: the 0.3 memory model, WRITE_DATA/DMA waiting for every
-# host copy, the scheduler's concurrent recording check.
+    --patches-dir "${BB_PATCHES_DIR:-$data/patches}" --patches-config "${BB_PATCHES_CONFIG:-$data/patches.json}" --large-heaps "$large_heaps"
+# Memory model and translation: the only one there is (0.7). The GPU uses the game's memory where
+# it is (GPU-visible system memory: dma-buf chunks or imported host memory) and keeps the data it
+# reads often in VRAM through the layer's memory module (no sparse binding; BB_LAYER_MEMORY=0:
+# AMD's sparse arena); the command processor's work is translated rather than emulated.
 # The game's GPU (vendor ID and name), for the choices below that depend on it.
 gpu_vendor= gpu_name=
-if [[ -z ${BB_PC_MODEL:-} || ( ${BB_AUTO_NOHIZ:-1} != 0 && -z ${RADV_DEBUG:-} ) ]]; then
+if [[ ${BB_AUTO_NOHIZ:-1} != 0 && -z ${RADV_DEBUG:-} ]]; then
     IFS=$'\t' read -r gpu_vendor gpu_name < <("$caps" --device 2> /dev/null) || true
-fi
-# Memory model left to the port: the new one on every GPU (0.6). It goes through the layer's memory
-# module: no sparse binding of the game's memory, so nothing NVIDIA-specific stalls; a driver that
-# fails the startup checks (BbGuestMemory::Usable) still falls back to VRAM copies by itself.
-if [[ -z ${BB_PC_MODEL:-} ]]; then
-    export BB_PC_MODEL=1
-    echo "Memory model: new (${gpu_name:-GPU unknown}; BB_PC_MODEL=0: the 0.3 model)"
 fi
 # GCN 3-5 under RADV (Polaris, Vega and their APUs): with HiZ, depth compression showed black
 # halos and missing geometry (issues #54, #99); RADV_DEBUG=nohiz fixed it at some cost. Set
@@ -189,10 +218,6 @@ if [[ ${BB_AUTO_NOHIZ:-1} != 0 && -z ${RADV_DEBUG:-} && $gpu_name == *"(RADV "* 
         fi
     done
 fi
-if [[ ${BB_AS_0_3:-0} == 1 ]]; then
-    export BB_GUEST_IN_PLACE=0 BB_HOST_COPY_WAITS=all BB_PRODUCER_CHECK=1
-fi
-export BB_GUEST_IN_PLACE=${BB_GUEST_IN_PLACE:-${BB_PC_MODEL:-0}}
 # MangoHud (launcher switch: MANGOHUD=1) must be drawn once. Two overlays on top of each other
 # showed doubled, offset text: the Steam Deck's performance overlay (mangoapp, game mode) plus the
 # in-game layer, or the AppImage's bundled layer plus a system MangoHud (the layer names differ,
@@ -209,11 +234,6 @@ if [[ ${MANGOHUD:-0} == 1 ]]; then
         export VK_LOADER_LAYERS_DISABLE=${VK_LOADER_LAYERS_DISABLE:+$VK_LOADER_LAYERS_DISABLE,}VK_LAYER_MANGOHUD_overlay_64_x86_64
     fi
 fi
-# Write tracking with userfaultfd write-protection instead of mprotect (no address-space write lock:
-# a streaming burst re-protected thousands of pages, ~10-20 ms); falls back to mprotect when the
-# kernel lacks it. Off by default for now: the Steam Deck crashed 4 times in 9 minutes with it
-# (2026-10-04, PM4 type 0 = zeroed command buffers, heap corruption); 1 turns it on.
-export BB_UFFD=${BB_UFFD:-0}
 # The command buffers of each submission are copied when the game submits them and decoded from
 # the copy: while an area loads the game reused that memory before the GPU thread got to it
 # ("Unimplemented PM4 type 0" a few seconds after loading a save). 0 decodes guest memory.
@@ -234,18 +254,15 @@ else
     bash build.sh
     probe=${BB_PROBE:-out/bb-probe}  # BB_PROBE: a wrapper (gdb) around it
 fi
-# Online play (BB_ONLINE=1, launcher: Online; the online module gpu/bbnet): the game's own server
+# Online play (BB_ONLINE=1, launcher: Online; the online module gpu/bbnet20): the game's own server
 # goes to the community server, summon signs to the shadNet WebAPI (scripts/online.py).
 if [[ ${BB_ONLINE:-0} == 1 && -f scripts/online.py ]]; then
     # The shadPS4 0.20 module (gpu/bbnet20) answers both pools: Seamless Hunt (shadNet with BBSC) and
-    # The Hunter's Dream (BB_NET_BACKEND=thd, without BBSC). BB_NET_GEN=19: the older shadp2p module
-    # (gpu/bbnet) with BBSC, kept as a fallback.
-    export BB_NET_GEN=${BB_NET_GEN:-20}
+    # The Hunter's Dream (BB_NET_BACKEND=thd, without BBSC).
     if [[ ${BB_NET_BACKEND:-} == thd ]]; then
-        BB_NET_GEN=20
         unset BB_BBSC
     fi
-    if [[ $BB_NET_GEN == 20 && -z ${BB_NET_MODULE:-} ]]; then
+    if [[ -z ${BB_NET_MODULE:-} ]]; then
         if [[ -n ${BB_PREBUILT:-} ]]; then BB_NET_MODULE=$PWD/bin/gpu/libbbnet20.so; else BB_NET_MODULE=$PWD/out/gpu/libbbnet20.so; fi
         export BB_NET_MODULE
     fi
@@ -297,6 +314,25 @@ if [[ ${BB_ONLINE:-0} == 1 && -f scripts/online.py ]]; then
         SHADPS4_HTTP_HOST_OVERRIDES_JSON=$("$PYTHON" scripts/online.py overrides --user "$user_data") || true
         export SHADPS4_HTTP_HOST_OVERRIDES_JSON
     fi
+fi
+# Shader recipes (gpu/render/shader_rebuild.h): the shaders of the recorded game, translated for
+# this GPU by a background process at start, the code read from the game's own files.
+if [[ -z ${BB_SHADER_RECIPES+set} && -f shader_recipes.bin ]]; then
+    export BB_SHADER_RECIPES=$PWD/shader_recipes.bin
+fi
+# Image shapes (gpu/textures/image_spares.h): the textures the game makes, so spares are made
+# ahead from the first session on.
+if [[ -z ${BB_IMAGE_SHAPES+set} && -f image_shapes.txt ]]; then
+    export BB_IMAGE_SHAPES=$PWD/image_shapes.txt
+fi
+export BB_SHADER_GAME_DIR=${BB_SHADER_GAME_DIR:-$(realpath "$original_game")}
+# Steam overlay (#77, #217: Shift+Tab, Remote Play, the controller's Steam Input layout): the
+# packaged entry (packaging/bbport-entry.c) keeps Steam's preload out of the launcher and names it
+# in BB_STEAM_OVERLAY; the game alone loads it, with its Vulkan layer. BB_STEAM_OVERLAY=0: off.
+if [[ -n ${BB_STEAM_OVERLAY:-} && $BB_STEAM_OVERLAY != 0 && -f $BB_STEAM_OVERLAY ]]; then
+    export LD_PRELOAD=$BB_STEAM_OVERLAY ENABLE_VK_LAYER_VALVE_steam_overlay_1=1
+    unset DISABLE_VK_LAYER_VALVE_steam_overlay_1
+    echo "Steam overlay: $BB_STEAM_OVERLAY"
 fi
 probe_args=("$out/boot-linked.bin" --content-profile "$out/content.bin" --patches "$out/patches.bin" --app0 "$game" --user "${BB_USER_DIR:-$data/user}" --timeout "${BB_TIMEOUT:-0}" "$@")
 if [[ -n ${mod_game:-} ]]; then

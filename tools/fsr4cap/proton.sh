@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Sourced by capture_all.sh and verify.sh: the Proton builds a capture may use, the vkd3d-proton
 # settings, and fsr4cap_run, which starts fsr4cap.exe under a Proton build (PROTONPATH).
 #

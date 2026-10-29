@@ -1,9 +1,10 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport render: Rasterizer, DMA (fills, copies, GDS reads) and the guest memory events the
 // caches follow: CPU writes, write faults, readbacks, GPU mappings.
 //
 // DMA into memory the GPU uses in place, or whose newest data is in a VRAM copy, is done by the
-// GPU in stream order (BB_GUEST_IN_PLACE): on the CPU now it would land before earlier draws read
+// GPU in stream order: on the CPU now it would land before earlier draws read
 // the old data. Elsewhere (unbound memory: shader code, descriptors the command processor reads)
 // the CPU does it in decode order.
 
@@ -27,15 +28,19 @@ void Rasterizer::FillBuffer(VAddr address, u32 num_bytes, u32 value, bool is_gds
     ASSERT_MSG(address % 4 == 0 && num_bytes % 4 == 0,
                "FillBuffer address and size must be a multiple of 4 bytes");
     if (!is_gds) {
-        texture_cache.ClearMeta(address);
+        const bool meta = texture_cache.ClearMeta(address);
+        if (FrameCapture::Active()) {
+            char note[128];
+            std::snprintf(note, sizeof(note), "\n  fill %#llx size %u value %#x meta %u",
+                          (unsigned long long)address, num_bytes, value, u32(meta));
+            FrameCapture::Note(note);
+        }
         if (!GpuHolds(buffer_cache, address, num_bytes)) {
             BbFreeCheck::Check(address, num_bytes, &value, BbFreeCheck::DmaFill);
             u32* words = std::bit_cast<u32*>(address);
             std::fill(words, words + num_bytes / sizeof(u32), value);
             BbWriteLog::Note(address, words, num_bytes, BbWriteLog::Dma);
-            if (!VideoCore::WriteTracking()) {
-                NoteAssetWrite(address, num_bytes);
-            }
+            NoteAssetWrite(address, num_bytes);
             return;
         }
     }
@@ -45,8 +50,8 @@ void Rasterizer::FillBuffer(VAddr address, u32 num_bytes, u32 value, bool is_gds
 }
 
 bool Rasterizer::DmaMayWriteOnCpu(VAddr dst, u32 num_bytes) {
-    // FillBuffer's and CopyBuffer's test (without the new memory model DMA is always the CPU's).
-    return !VideoCore::GuestInPlace() || !GpuHolds(buffer_cache, dst, num_bytes);
+    // FillBuffer's and CopyBuffer's test.
+    return !GpuHolds(buffer_cache, dst, num_bytes);
 }
 
 void Rasterizer::CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, bool src_gds) {
@@ -60,9 +65,7 @@ void Rasterizer::CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, b
         BbFreeCheck::Check(dst, num_bytes, std::bit_cast<const void*>(src), BbFreeCheck::DmaCopy);
         std::memcpy(std::bit_cast<void*>(dst), std::bit_cast<void*>(src), num_bytes);
         BbWriteLog::Note(dst, std::bit_cast<const void*>(dst), num_bytes, BbWriteLog::Dma);
-        if (!VideoCore::WriteTracking()) {
-            NoteAssetWrite(dst, num_bytes);
-        }
+        NoteAssetWrite(dst, num_bytes);
         return;
     }
     texture_cache.InvalidateMemoryFromGPU(dst, num_bytes);
@@ -73,14 +76,6 @@ void Rasterizer::CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, b
         dst_gds ? BufferSlice{gds, dst} : buffer_cache.ObtainBuffer(dst, num_bytes, true, true);
     const vk::BufferCopy copy{.srcOffset = src_offset, .dstOffset = dst_offset, .size = num_bytes};
     runtime.CopyBuffer(src_buffer, dst_buffer, std::span{&copy, 1});
-}
-
-u32 Rasterizer::ReadDataFromGds(u32 gds_offset) {
-    DrainDrawPipe();
-    u32 value;
-    std::memcpy(&value, buffer_cache.GetGdsBuffer()->mapped_data.data() + gds_offset,
-                sizeof(value));
-    return value;
 }
 
 bool Rasterizer::InvalidateMemory(VAddr addr, u64 size, bool assume_locks) {
@@ -99,7 +94,7 @@ void Rasterizer::NoteAssetWrite(VAddr addr, u64 size) {
 }
 
 void Rasterizer::InvalidateAfterWrite(VAddr addr, u64 size) {
-    if (VideoCore::WriteTracking() || !buffer_cache.IsRegionGpuModified(addr, size)) {
+    if (!buffer_cache.IsRegionGpuModified(addr, size)) {
         InvalidateMemory(addr, size);
         return;
     }
@@ -112,8 +107,8 @@ void Rasterizer::InvalidateAfterWrite(VAddr addr, u64 size) {
 }
 
 void Rasterizer::NoteCommandWrite(VAddr addr, const void* data, u64 size, bool recording_thread) {
-    if (VideoCore::WriteTracking() || !IsMapped(addr, size)) {
-        return; // tracking catches it, or the GPU does not use it
+    if (!IsMapped(addr, size)) {
+        return; // the GPU does not use it
     }
     if (!recording_thread) {
         DrainDrawPipe();
@@ -173,15 +168,9 @@ void Rasterizer::MapMemory(VAddr addr, u64 size) {
         std::scoped_lock lock{mapped_ranges_mutex};
         mapped_ranges += decltype(mapped_ranges)::interval_type::right_open(addr, addr + size);
     }
-    buffer_cache.NotePreuploadMapping(addr, size, true);
-}
-
-void Rasterizer::RegisterMemory(VAddr addr, u64 size) {
-    page_watch.OnGpuMap(addr, size);
 }
 
 void Rasterizer::UnmapMemory(VAddr addr, u64 size) {
-    buffer_cache.NotePreuploadMapping(addr, size, false);
     buffer_cache.UnmapInPlace(addr, size);
     buffer_cache.DropTwins(addr, size);
     DrainDrawPipe();

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport shader translator: what the host device supports and needs, as the translator and
 // backend see it (filled from the Vulkan instance).
@@ -6,6 +7,13 @@
 #include "common/types.h"
 
 namespace Shader {
+
+/// bbport: the BDA page table covers guest addresses [PageTableBase, PageTableBase + PageTableSpan):
+/// the low region (image, stacks) and the game's mappings, which the runtime places from 0x1000000000
+/// up (about 5 GiB). All of the 40-bit space took 256 MiB of VRAM (two tables), 13 % of a 2 GB card;
+/// this window 16 MiB. Addresses outside it read as unmapped.
+inline constexpr u64 PageTableBase = 0x800000000ull;
+inline constexpr u64 PageTableSpan = u64{1} << 36;
 
 struct Profile {
     u32 max_viewport_width{};

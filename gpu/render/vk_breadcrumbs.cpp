@@ -1,6 +1,8 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include "shim/bb_env.h"
 #include <array>
 #include <atomic>
 #include <cstdio>
@@ -8,6 +10,7 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <vector>
 #include <sys/stat.h>
 #include <unistd.h>
 #include "render/vk_breadcrumbs.h"
@@ -55,17 +58,21 @@ struct ArgsNote {
 };
 std::array<ArgsNote, ArgSlots> args_notes{};
 
+const Instance* fault_instance = nullptr;
+
 void Init(const Instance& instance) {
-    const char* env = std::getenv("BB_BREADCRUMBS");
+    if (instance.IsDeviceFaultSupported()) {
+        fault_instance = &instance;
+    }
 #ifdef __APPLE__
     // bbport (macOS): off unless BB_BREADCRUMBS=1. KosmicKrisp writes each marker with a
     // compute dispatch of its own (hundreds of thousands a minute), queued to the end of every
     // render pass.
-    if (!env || env[0] != '1') {
+    if (!bb_env_on("BB_BREADCRUMBS")) {
         return;
     }
 #endif
-    if (env && env[0] == '0') {
+    if (bb_env_off("BB_BREADCRUMBS")) {
         return;
     }
     if (!instance.IsBufferMarkerSupported()) {
@@ -299,12 +306,69 @@ void CopyArgs(vk::CommandBuffer cmdbuf, vk::Buffer source, u64 offset, u32 slot)
 
 namespace {
 void Report(const char* title, const char* where);
+
+/// VK_EXT_device_fault: the driver's own account of the fault (NVIDIA: the faulting address and
+/// a description), once per device lost.
+void PrintDeviceFault() {
+    if (!fault_instance) {
+        return;
+    }
+    const VkDevice device = fault_instance->GetDevice();
+    const auto get = reinterpret_cast<PFN_vkGetDeviceFaultInfoEXT>(
+        VULKAN_HPP_DEFAULT_DISPATCHER.vkGetDeviceProcAddr(device, "vkGetDeviceFaultInfoEXT"));
+    if (!get) {
+        return;
+    }
+    VkDeviceFaultCountsEXT counts{.sType = VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_EXT};
+    const VkResult counted = get(device, &counts, nullptr);
+    std::vector<VkDeviceFaultAddressInfoEXT> addresses(counts.addressInfoCount);
+    std::vector<VkDeviceFaultVendorInfoEXT> vendor(counts.vendorInfoCount);
+    counts.vendorBinarySize = 0;
+    VkDeviceFaultInfoEXT info{.sType = VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_EXT,
+                              .pAddressInfos = addresses.data(),
+                              .pVendorInfos = vendor.data()};
+    const VkResult result = get(device, &counts, &info);
+    std::printf("GPU fault info (%d/%d): %s\n", int(counted), int(result), info.description);
+    static constexpr const char* kinds[] = {"none",
+                                            "read invalid",
+                                            "write invalid",
+                                            "execute invalid",
+                                            "instruction pointer unknown",
+                                            "instruction pointer invalid",
+                                            "instruction pointer fault"};
+    for (u32 i = 0; i < counts.addressInfoCount; ++i) {
+        const auto& a = addresses[i];
+        const u32 kind = u32(a.addressType);
+        std::printf("  address %s: 0x%llx (+-0x%llx)\n", kind < 7 ? kinds[kind] : "?",
+                    (unsigned long long)a.reportedAddress, (unsigned long long)a.addressPrecision);
+    }
+    for (u32 i = 0; i < counts.vendorInfoCount; ++i) {
+        const auto& v = vendor[i];
+        std::printf("  vendor: %s (code 0x%llx, data 0x%llx)\n", v.description,
+                    (unsigned long long)v.vendorFaultCode, (unsigned long long)v.vendorFaultData);
+    }
+    std::fflush(stdout);
 }
+} // namespace
 
 void ReportDeviceLost(const char* where) {
     static std::atomic_flag reported = ATOMIC_FLAG_INIT;
-    if (enabled && !reported.test_and_set()) {
-        Report("at device lost", where);
+    static std::atomic<bool> done{false};
+    if (!enabled && !fault_instance) {
+        return;
+    }
+    if (!reported.test_and_set()) {
+        PrintDeviceFault();
+        if (enabled) {
+            Report("at device lost", where);
+        }
+        done.store(true);
+        return;
+    }
+    // Another thread is printing the report: wait for it (up to 3 s), as the caller stops the
+    // game next and the report was cut off (laptop, TEX FORMAT device losts).
+    for (int i = 0; i < 300 && !done.load(); ++i) {
+        usleep(10000);
     }
 }
 

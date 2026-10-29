@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // SMRD: scalar loads through a 64-bit pointer (ReadConst) or a V# (ReadConstBuffer), and the
 // clock.

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 # tools/stop_own.sh: closes the game tools/restart.sh started (out/tools_game.pid), never another
 # one: a game the user started (or is playing) is left alone.
 cd -- "$(dirname -- "$0")/.."

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: no ImGui overlay in the port; hooks used by the renderer are no-ops.
 #pragma once
 #include "vulkan/vk_common.h"

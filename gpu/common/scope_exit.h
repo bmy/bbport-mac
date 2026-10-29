@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: code that runs when the enclosing scope ends.
 //   SCOPE_EXIT { close(fd); };

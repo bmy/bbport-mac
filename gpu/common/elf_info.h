@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: what the GPU library knows about the running game, set once at start (BbGpuConfig):
 // its serial (the pipeline cache's name), title, SDK version and param.sfo attributes.

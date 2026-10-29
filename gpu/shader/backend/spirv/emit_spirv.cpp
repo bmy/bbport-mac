@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // The SPIR-V backend's driver: each IR instruction goes to its Emit<Opcode> function (operands
 // converted by the function's parameter types), the abstract syntax list becomes structured

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Structurization: the CFG becomes a statement tree with gotos (each block a labelled statement,
 // branches gotos to labels), the gotos are eliminated by the transformations of Erosa and

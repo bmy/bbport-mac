@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Prologue and epilogue code (per-vertex attributes, workgroup index, buffer properties; the
 // depth range and clip space conversions, object motion vectors, the UI edge stretch), discard,
@@ -17,6 +18,7 @@ void EmitPrologue(EmitContext& ctx) {
         ctx.DefineWorkgroupIndex();
     }
     ctx.DefineBufferProperties();
+    ctx.DefinePagedRecords();
 }
 
 namespace {
@@ -179,10 +181,18 @@ void EmitFragmentMotion(EmitContext& ctx) {
     // written. Preserve depth so the compose pass can reject an occluded vector.
     const Id depth = ctx.OpCompositeExtract(f32_type,
                                             ctx.OpLoad(ctx.F32[4], ctx.frag_coord), 2u);
+    // R32G32_UINT (8 bytes a pixel, not 16): the vector as two halves; the depth, full
+    // precision, with the sign bit set where a vector was written (a cleared target has none).
+    const Id vector = ctx.OpCompositeConstruct(ctx.F32[2], ctx.OpSelect(f32_type, front, dx, zero),
+                                               ctx.OpSelect(f32_type, front, dy, zero));
+    const Id u32_type = ctx.U32[1];
+    const Id written = ctx.OpFOrdGreaterThan(ctx.U1[1], valid, ctx.Constant(f32_type, 0.99f));
+    const Id depth_bits = ctx.OpBitwiseOr(
+        u32_type, ctx.OpBitwiseAnd(u32_type, ctx.OpBitcast(u32_type, depth), ctx.ConstU32(0x7fffffffu)),
+        ctx.OpSelect(u32_type, written, ctx.ConstU32(0x80000000u), ctx.ConstU32(0u)));
     ctx.OpStore(ctx.motion_frag_out,
-                ctx.OpCompositeConstruct(ctx.F32[4], std::array<Id, 4>{
-                    ctx.OpSelect(f32_type, front, dx, zero),
-                    ctx.OpSelect(f32_type, front, dy, zero), valid, depth}));
+                ctx.OpCompositeConstruct(ctx.U32[2], ctx.OpPackHalf2x16(u32_type, vector),
+                                         depth_bits));
 }
 
 // The game's UI on an output of another aspect ratio (UiComposition::EdgeParam): with

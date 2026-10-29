@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport shader translator: the copy shader (the hardware VS run after a geometry shader) reads
 // the GS output from the GS-VS ring and exports it. Parsing it gives the ring layout: which

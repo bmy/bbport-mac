@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport gcn isa: GCN3 shader instructions as the translator sees them. The encodings, the
 // unified opcode (one enum over all encodings; VOP3 forms of VOPC/VOP2/VOP1 instructions share

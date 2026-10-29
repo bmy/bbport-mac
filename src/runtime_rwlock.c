@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* Linux rwlocks behind PS4 pointer-to-handle ABI. The registry protects
    lifetime, static initialization and ownership; waiting happens outside it. */
 #define _GNU_SOURCE

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport shader translator: what a compiled shader depends on beyond its program and runtime
 // info: the bound resources' types and formats, vertex input types and divisors. The key of
@@ -101,60 +102,25 @@ struct StageSpecialization {
             // Vertex input number types (Vulkan requires matching shader types).
             ForEachSharp(vs_attribs, fetch_shader_data->attributes,
                          [this](auto& spec, const auto& desc, ::Gcn::Buffer sharp) {
-                             using InstanceIdType = Shader::Gcn::VertexAttribute::InstanceIdType;
-                             if (const auto step_rate = desc.GetStepRate();
-                                 step_rate != InstanceIdType::None) {
-                                 spec.divisor = step_rate == InstanceIdType::OverStepRate0
-                                                    ? runtime_info.sw.vs.step_rate_0
-                                                    : (step_rate == InstanceIdType::OverStepRate1
-                                                           ? runtime_info.sw.vs.step_rate_1
-                                                           : 1);
-                             }
-                             spec.num_class = ::Gcn::GetNumberClass(sharp.GetNumberFmt());
-                             spec.dst_select = sharp.DstSelect();
+                             FillVsAttrib(spec, desc, sharp, runtime_info);
                          });
         }
         u32 binding{};
         ForEachSharp(binding, buffers, info->buffers,
-                     [&profile_](auto& spec, const auto& desc, ::Gcn::Buffer sharp) {
-                         spec.stride = sharp.GetStride();
-                         spec.paged = IsPagedBuffer(profile_.paged_buffers, sharp);
-                         spec.is_formatted = desc.is_formatted;
-                         spec.swizzle_enable = sharp.swizzle_enable;
-                         if (spec.is_formatted) {
-                             spec.data_format = static_cast<u32>(sharp.GetDataFmt());
-                             spec.num_format = static_cast<u32>(sharp.GetNumberFmt());
-                             spec.dst_select = sharp.DstSelect();
-                             spec.num_conversion = sharp.GetNumberConversion();
-                         }
-                         if (spec.swizzle_enable) {
-                             spec.index_stride = sharp.index_stride;
-                             spec.element_size = sharp.element_size;
-                         }
+                     [&profile_, this](auto& spec, const auto& desc, ::Gcn::Buffer sharp) {
+                         FillBuffer(spec, desc, sharp, profile_, info->pgm_hash);
                      });
         ForEachSharp(binding, images, info->images,
                      [&](auto& spec, const auto& desc, ::Gcn::Image sharp) {
-                         spec.type = sharp.GetViewType(desc.is_array);
-                         spec.is_integer = ::Gcn::IsInteger(sharp.GetNumberFmt());
-                         spec.is_storage = desc.is_written;
-                         spec.is_cube = sharp.IsCube();
-                         if (spec.is_storage) {
-                             spec.dst_select = sharp.DstSelect();
-                         } else {
-                             spec.is_srgb = sharp.GetNumberFmt() == ::Gcn::NumberFormat::Srgb;
-                         }
-                         spec.num_conversion = sharp.GetNumberConversion();
-                         spec.num_bindings = desc.NumBindings(*info);
+                         FillImage(spec, desc, sharp, *info);
                      });
         ForEachSharp(binding, fmasks, info->fmasks,
                      [](auto& spec, const auto& desc, ::Gcn::Image sharp) {
-                         spec.width = sharp.width;
-                         spec.height = sharp.height;
+                         FillFmask(spec, sharp);
                      });
         ForEachSharp(samplers, info->samplers,
                      [](auto& spec, const auto& desc, ::Gcn::Sampler sharp) {
-                         spec.force_unnormalized = sharp.force_unnormalized;
-                         spec.force_degamma = sharp.force_degamma;
+                         FillSampler(spec, sharp);
                      });
 
         // Runtime info found by the tessellation passes.
@@ -164,6 +130,154 @@ struct StageSpecialization {
             info->ReadTessConstantBuffer(tess_constants);
             runtime_info.InitFromTessConstants(tess_constants);
         }
+    }
+
+    // bbport: each resource's part of the specialization (the constructor and Matches).
+    static void FillVsAttrib(VsAttribSpecialization& spec, const auto& desc, ::Gcn::Buffer sharp,
+                             const RuntimeInfo& rt) {
+        using InstanceIdType = Shader::Gcn::VertexAttribute::InstanceIdType;
+        if (const auto step_rate = desc.GetStepRate(); step_rate != InstanceIdType::None) {
+            spec.divisor = step_rate == InstanceIdType::OverStepRate0
+                               ? rt.sw.vs.step_rate_0
+                               : (step_rate == InstanceIdType::OverStepRate1 ? rt.sw.vs.step_rate_1
+                                                                              : 1);
+        }
+        spec.num_class = ::Gcn::GetNumberClass(sharp.GetNumberFmt());
+        spec.dst_select = sharp.DstSelect();
+    }
+    static void FillBuffer(BufferSpecialization& spec, const auto& desc, ::Gcn::Buffer sharp,
+                           const Profile& profile, u64 pgm_hash) {
+        spec.stride = sharp.GetStride();
+        spec.paged = IsPagedBuffer(profile.paged_buffers, sharp, desc.is_formatted, pgm_hash);
+        spec.is_formatted = desc.is_formatted;
+        spec.swizzle_enable = sharp.swizzle_enable;
+        if (spec.is_formatted) {
+            spec.data_format = static_cast<u32>(sharp.GetDataFmt());
+            spec.num_format = static_cast<u32>(sharp.GetNumberFmt());
+            spec.dst_select = sharp.DstSelect();
+            spec.num_conversion = sharp.GetNumberConversion();
+        }
+        if (spec.swizzle_enable) {
+            spec.index_stride = sharp.index_stride;
+            spec.element_size = sharp.element_size;
+        }
+    }
+    static void FillImage(ImageSpecialization& spec, const auto& desc, ::Gcn::Image sharp,
+                          const Info& info_) {
+        spec.type = sharp.GetViewType(desc.is_array);
+        spec.is_integer = ::Gcn::IsInteger(sharp.GetNumberFmt());
+        spec.is_storage = desc.is_written;
+        spec.is_cube = sharp.IsCube();
+        if (spec.is_storage) {
+            spec.dst_select = sharp.DstSelect();
+        } else {
+            spec.is_srgb = sharp.GetNumberFmt() == ::Gcn::NumberFormat::Srgb;
+        }
+        spec.num_conversion = sharp.GetNumberConversion();
+        spec.num_bindings = desc.NumBindings(info_);
+    }
+    static void FillFmask(FMaskSpecialization& spec, ::Gcn::Image sharp) {
+        spec.width = sharp.width;
+        spec.height = sharp.height;
+    }
+    static void FillSampler(SamplerSpecialization& spec, ::Gcn::Sampler sharp) {
+        spec.force_unnormalized = sharp.force_unnormalized;
+        spec.force_degamma = sharp.force_degamma;
+    }
+
+    /// bbport: whether `*this == StageSpecialization(info_, rt, profile_, start_)`, without
+    /// building the right side (no copies; the first difference ends it): building and comparing
+    /// it was ~11 % of the GPU command thread on the Steam Deck. `fetch`: the info's parsed fetch
+    /// shader (Gcn::ParseFetchShaderRef), null without one. Not for tessellation stages (their
+    /// runtime info comes from a constant buffer).
+    [[nodiscard]] bool Matches(const Info& info_, const RuntimeInfo& rt, const Profile& profile_,
+                               Backend::Bindings start_, const Gcn::FetchShaderData* fetch) const {
+        if (!Valid()) {
+            return false;
+        }
+        size_t attribs = 0;
+        if (info_.sw_stage == SwStage::Vertex && fetch) {
+            for (const auto& desc : fetch->attributes) {
+                VsAttribSpecialization spec{};
+                if (const auto sharp = desc.GetSharp(info_)) {
+                    FillVsAttrib(spec, desc, sharp, rt);
+                }
+                if (attribs >= vs_attribs.size() || !(vs_attribs[attribs] == spec)) {
+                    return false;
+                }
+                ++attribs;
+            }
+        }
+        if (attribs != vs_attribs.size() || runtime_info != rt ||
+            fetch_shader_data.has_value() != (fetch != nullptr) ||
+            (fetch && !(*fetch_shader_data == *fetch))) {
+            return false;
+        }
+        if (fmasks.size() != info_.fmasks.size() || buffers.size() != info_.buffers.size() ||
+            images.size() != info_.images.size() || samplers.size() != info_.samplers.size()) {
+            return false;
+        }
+        bool any_bound = false; // the other side's bitset is not empty
+        for (size_t i = 0; i < fmasks.size(); ++i) {
+            FMaskSpecialization spec{};
+            if (const auto sharp = info_.fmasks[i].GetSharp(info_)) {
+                FillFmask(spec, sharp);
+                any_bound = true;
+            }
+            if (!(fmasks[i] == spec)) {
+                return false;
+            }
+        }
+        if (bitset.none() && !any_bound) {
+            bool none = true;
+            for (const auto& desc : info_.buffers) {
+                if (desc.GetSharp(info_)) {
+                    none = false;
+                    break;
+                }
+            }
+            for (size_t i = 0; none && i < info_.images.size(); ++i) {
+                if (info_.images[i].GetSharp(info_)) {
+                    none = false;
+                }
+            }
+            if (none) {
+                return true;
+            }
+        }
+        if (start != start_) {
+            return false;
+        }
+        for (size_t i = 0; i < buffers.size(); ++i) {
+            const auto& desc = info_.buffers[i];
+            if (const auto sharp = desc.GetSharp(info_)) {
+                BufferSpecialization spec{};
+                FillBuffer(spec, desc, sharp, profile_, info_.pgm_hash);
+                if (buffers[i] != spec) {
+                    return false;
+                }
+            }
+        }
+        for (size_t i = 0; i < images.size(); ++i) {
+            const auto& desc = info_.images[i];
+            if (const auto sharp = desc.GetSharp(info_)) {
+                ImageSpecialization spec{};
+                FillImage(spec, desc, sharp, info_);
+                if (images[i] != spec) {
+                    return false;
+                }
+            }
+        }
+        for (size_t i = 0; i < samplers.size(); ++i) {
+            SamplerSpecialization spec{};
+            if (const auto sharp = info_.samplers[i].GetSharp(info_)) {
+                FillSampler(spec, sharp);
+            }
+            if (samplers[i] != spec) {
+                return false;
+            }
+        }
+        return true;
     }
 
     void ForEachSharp(auto& spec_list, auto& desc_list, auto&& func) {

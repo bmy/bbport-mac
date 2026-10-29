@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport vulkan: the Vulkan instance (with validation and crash diagnostic layers on request),
 // window surfaces (X11 and Wayland), debug names of objects, and checked results.

@@ -1,5 +1,7 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "bbport_copy.h"
+#include "shim/bb_env.h"
 #include "bbport_threads.h"
 
 #include <algorithm>
@@ -27,7 +29,7 @@ public:
         // Copies are on the critical path (fences wait for them): normal priority, a quarter
         // of the hardware threads available to the process (Steam Deck 2).
         unsigned count = std::clamp(BbThreads::Available() / 4, 1u, 4u);
-        if (const char* env = std::getenv("BB_COPY_THREADS")) {
+        if (const char* env = bb_env("BB_COPY_THREADS")) {
             count = static_cast<unsigned>(std::clamp(std::atoi(env), 0, 16));
         }
         epochs.emplace_back();
@@ -59,19 +61,6 @@ public:
             async_tasks.push_back({std::move(task), epoch});
         }
         cv.notify_one();
-    }
-
-    void AfterCopies(std::function<void()> callback) {
-        {
-            std::unique_lock lk{mutex};
-            if (epochs.size() > 1 || epochs.back().pending != 0 || draining) {
-                // Runs once every copy issued so far is done, in order with earlier ones.
-                epochs.back().callbacks.push_back(std::move(callback));
-                epochs.emplace_back();
-                return;
-            }
-        }
-        callback();
     }
 
     void WaitAll() {
@@ -123,7 +112,7 @@ private:
         std::function<void()> run;
         u64 epoch{};
     };
-    /// Copies issued between two AfterCopies() calls, and the callbacks waiting for them.
+    /// Copies issued in one epoch, and the callbacks waiting for them.
     struct Epoch {
         std::size_t pending = 0;
         std::vector<std::function<void()>> callbacks;
@@ -279,11 +268,6 @@ void QueueCopy(const Item& item) {
     if (batch.bytes >= 512 * 1024 || batch.items.size() >= 256) {
         FlushBatch();
     }
-}
-
-void AfterCopies(std::function<void()> callback) {
-    FlushBatch();
-    GetPool().AfterCopies(std::move(callback));
 }
 
 void WaitAsync() {

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: the Gnm driver's submission side: graphics submissions and flips, the end-of-frame pacing
 // the game relies on, compute queues (DingDong), end-of-pipe events, and the library's table.
@@ -13,6 +14,7 @@
 //   ahead: sceGnmSubmitDone(F) waits for frame F-1 only (an experiment).
 
 #include <algorithm>
+#include "shim/bb_env.h"
 #include <array>
 #include <atomic>
 #include <bit>
@@ -132,7 +134,7 @@ enum class LockMode { Decode, Gpu, Ahead };
 
 LockMode SubmitLock() {
     static const LockMode mode = [] {
-        const char* env = std::getenv("BB_SUBMIT_LOCK");
+        const char* env = bb_env("BB_SUBMIT_LOCK");
         const std::string_view value = env ? env : "";
         return value == "gpu" ? LockMode::Gpu : value == "ahead" ? LockMode::Ahead : LockMode::Decode;
     }();
@@ -141,7 +143,7 @@ LockMode SubmitLock() {
 
 u32 SubmitsAheadOption() {
     static const u32 ahead = [] {
-        const char* env = std::getenv("BB_SUBMIT_AHEAD");
+        const char* env = bb_env("BB_SUBMIT_AHEAD");
         return env ? u32(std::max(0, std::atoi(env))) : 2u;
     }();
     return ahead;
@@ -366,7 +368,7 @@ u32 SdkVersion() {
 bool SubmitLockOnDecode() {
     // Only with honest labels: without them the GPU idle interrupt comes at decode anyway, and
     // the idle check keeps waiting for deferred fences (BB_WORK_RETIRED, Steam Deck crashes).
-    return SubmitLock() != LockMode::Gpu && Vulkan::Rasterizer::HonestLabels();
+    return SubmitLock() != LockMode::Gpu;
 }
 
 void ReleaseSubmissionLock() {

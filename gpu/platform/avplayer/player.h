@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: a player (sceAvPlayerInit's handle): its state machine and the controller thread that
 // tells the game what happens (ready, playing, buffering, stopped) through its event callback.

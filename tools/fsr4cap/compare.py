@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 # bbport: compares fsr4cap captures (capture_<render>_<output> dirs): weights, scratch size and the
 # shader/groups of each dispatch of frame 1.
 import glob, os, re, sys

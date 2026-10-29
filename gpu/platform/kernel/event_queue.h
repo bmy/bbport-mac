@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: kernel event queues (kqueue/kevent and the sceKernel*Equeue calls). Games wait on them
 // for GPU end-of-pipe events (Gnm), flips and vblanks (VideoOut), their own user events and

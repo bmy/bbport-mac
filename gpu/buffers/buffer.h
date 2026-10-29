@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport buffers: Vulkan buffers with their memory: VMA allocations (device local, upload,
 // readback, stream), sparse arenas (blocks bound on demand), and buffers over guest memory chunks
@@ -64,6 +65,17 @@ struct BufferAllocation {
     VmaAllocation allocation{};
 };
 
+/// While it lives, DeviceLocal buffers made on this thread are device-local memory or none: a failed
+/// allocation leaves the Buffer !Valid() instead of falling back to system memory (mirrors that
+/// landed in system memory when VRAM was full: copies over the bus for nothing, 2026-10-26).
+struct VramOnlyScope {
+    VramOnlyScope();
+    ~VramOnlyScope();
+    VramOnlyScope(const VramOnlyScope&) = delete;
+    VramOnlyScope& operator=(const VramOnlyScope&) = delete;
+    bool previous;
+};
+
 struct Buffer {
     Buffer(const Vulkan::Instance& instance, VAddr cpu_addr, u64 size_bytes, MemoryType type,
            std::string_view debug_name = "");
@@ -79,6 +91,10 @@ struct Buffer {
 
     [[nodiscard]] bool IsInBounds(VAddr addr, u64 size) const noexcept {
         return addr >= cpu_addr && addr + size <= cpu_addr + size_bytes;
+    }
+    /// False when made in a VramOnlyScope without room in VRAM (no handle, no memory).
+    [[nodiscard]] bool Valid() const noexcept {
+        return buffer.buffer != VK_NULL_HANDLE;
     }
     [[nodiscard]] VAddr CpuAddr() const noexcept {
         return cpu_addr;
@@ -107,6 +123,8 @@ struct Buffer {
     std::span<u8> mapped_data{};
     bool is_coherent{};
     MemoryType mem_type{MemoryType::DeviceLocal};
+    /// Bytes the allocation holds when more than size_bytes (a pooled mirror, BufferCache::LayerNewMirror).
+    u64 alloc_bytes = 0;
     BufferAllocation buffer;
 };
 

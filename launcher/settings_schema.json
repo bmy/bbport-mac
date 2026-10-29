@@ -1,0 +1,3123 @@
+{
+ "comment": "The launchers' settings, shared by the Linux (GTK) and Windows (WPF) launchers: sections in order, each item's storage (ini: bbport.ini next to the game's data, which the game's menu edits too; settings: the launcher's settings.json), type, choices, default and texts. type 'special' items are drawn by the launcher's own code (folders, lists, devices). platforms: where an item appears (both when absent).",
+ "version": 1,
+ "sections": [
+  {
+   "id": "game",
+   "icon": "game",
+   "title": {
+    "ru": "Игра",
+    "en": "Game",
+    "pt_BR": "Jogo",
+    "zh_CN": "游戏",
+    "fr_FR": "Jeu"
+   },
+   "description": {
+    "ru": "Где лежит игра и сохранения, языки.",
+    "en": "Where the game and the saves are, languages.",
+    "pt_BR": "Onde estão o jogo e os saves, idiomas.",
+    "zh_CN": "游戏和存档的位置、语言。",
+    "fr_FR": "Emplacement du jeu et des sauvegardes, langues."
+   },
+   "items": [
+    {
+     "key": "ui_language",
+     "type": "special",
+     "store": "settings",
+     "default": "",
+     "title": {
+      "ru": "Язык лаунчера",
+      "en": "Launcher language",
+      "pt_BR": "Idioma do launcher",
+      "zh_CN": "启动器语言",
+      "fr_FR": "Langue du lanceur"
+     },
+     "description": {
+      "ru": "Язык этого окна и меню порта в игре.",
+      "en": "The language of this window and of the port's in-game menu.",
+      "pt_BR": "O idioma desta janela e do menu do port dentro do jogo.",
+      "zh_CN": "本窗口及游戏内移植菜单的语言。",
+      "fr_FR": "La langue de cette fenêtre et du menu du portage dans le jeu."
+     },
+     "group": {
+      "ru": "Лаунчер",
+      "en": "Launcher",
+      "pt_BR": "Launcher",
+      "zh_CN": "启动器",
+      "fr_FR": "Lanceur"
+     }
+    },
+    {
+     "key": "game_dir",
+     "type": "special",
+     "store": "settings",
+     "title": {
+      "ru": "Папка игры (CUSA03173)",
+      "en": "Game folder (CUSA03173)",
+      "pt_BR": "Pasta do jogo (CUSA03173)",
+      "zh_CN": "游戏文件夹（CUSA03173）",
+      "fr_FR": "Dossier du jeu (CUSA03173)"
+     },
+     "description": {
+      "ru": "Распакованная игра с обновлением 1.09: папка, в которой лежат eboot.bin и dvdroot_ps4.",
+      "en": "The unpacked game with the 1.09 update: the folder holding eboot.bin and dvdroot_ps4.",
+      "pt_BR": "O jogo extraído com a atualização 1.09: a pasta que contém eboot.bin e dvdroot_ps4.",
+      "zh_CN": "带 1.09 更新的已解包游戏：包含 eboot.bin 和 dvdroot_ps4 的文件夹。",
+      "fr_FR": "Le jeu décompressé avec la mise à jour 1.09 : le dossier contenant eboot.bin et dvdroot_ps4."
+     },
+     "group": {
+      "ru": "Папки",
+      "en": "Folders",
+      "pt_BR": "Pastas",
+      "zh_CN": "文件夹",
+      "fr_FR": "Dossiers"
+     }
+    },
+    {
+     "key": "user_dir",
+     "type": "special",
+     "store": "settings",
+     "title": {
+      "ru": "Папка сохранений",
+      "en": "Saves folder",
+      "pt_BR": "Pasta de salvamentos",
+      "zh_CN": "存档文件夹",
+      "fr_FR": "Dossier des sauvegardes"
+     },
+     "description": {
+      "ru": "Сохранения и кэш шейдеров. По умолчанию — папка user в каталоге данных порта.",
+      "en": "Saves and the shader cache. By default the user folder in the port's data directory.",
+      "pt_BR": "Saves e o cache de shaders. Por padrão, a pasta user no diretório de dados do port.",
+      "zh_CN": "存档和着色器缓存。默认是移植数据目录中的 user 文件夹。",
+      "fr_FR": "Sauvegardes et cache de shaders. Par défaut, le dossier user dans le répertoire de données du portage."
+     },
+     "group": {
+      "ru": "Папки",
+      "en": "Folders",
+      "pt_BR": "Pastas",
+      "zh_CN": "文件夹",
+      "fr_FR": "Dossiers"
+     }
+    },
+    {
+     "key": "language",
+     "type": "choice",
+     "store": "settings",
+     "default": "1",
+     "choices_ref": "LANGUAGES",
+     "title": {
+      "ru": "Язык системы",
+      "en": "System language",
+      "pt_BR": "Idioma do sistema",
+      "zh_CN": "系统语言",
+      "fr_FR": "Langue du système"
+     },
+     "description": {
+      "ru": "Язык «приставки», который видит игра: от него зависят язык меню и раскладка кнопок подтверждения.",
+      "en": "The console language the game sees: it decides the menu language and the confirm button.",
+      "pt_BR": "O idioma do console que o jogo vê: define o idioma do menu e o botão de confirmação.",
+      "zh_CN": "游戏看到的主机语言：决定菜单语言和确认键。",
+      "fr_FR": "La langue de console vue par le jeu : elle décide de la langue des menus et du bouton de validation."
+     },
+     "group": {
+      "ru": "Язык",
+      "en": "Language",
+      "pt_BR": "Idioma",
+      "zh_CN": "语言",
+      "fr_FR": "Langue"
+     }
+    },
+    {
+     "key": "game_text_language",
+     "type": "choice",
+     "store": "ini",
+     "default": "auto",
+     "choices_ref": "GAME_TEXT_LANGUAGES",
+     "title": {
+      "ru": "Язык текста игры",
+      "en": "Game text language",
+      "pt_BR": "Idioma do texto do jogo",
+      "zh_CN": "游戏文本语言",
+      "fr_FR": "Langue des textes du jeu"
+     },
+     "description": {
+      "ru": "Любой язык из файлов игры, независимо от региона копии и сохранения.",
+      "en": "Any language the game's files have, whatever the copy's region and the save.",
+      "pt_BR": "Qualquer idioma que os arquivos do jogo tenham, seja qual for a região da cópia e o save.",
+      "zh_CN": "游戏文件中的任何语言，与副本区域和存档无关。",
+      "fr_FR": "Toute langue présente dans les fichiers du jeu, quelle que soit la région de la copie et la sauvegarde."
+     },
+     "group": {
+      "ru": "Язык",
+      "en": "Language",
+      "pt_BR": "Idioma",
+      "zh_CN": "语言",
+      "fr_FR": "Langue"
+     }
+    },
+    {
+     "key": "game_voice_language",
+     "type": "choice",
+     "store": "ini",
+     "default": "auto",
+     "choices_ref": "GAME_VOICE_LANGUAGES",
+     "title": {
+      "ru": "Язык озвучки",
+      "en": "Voice language",
+      "pt_BR": "Idioma das vozes",
+      "zh_CN": "配音语言",
+      "fr_FR": "Langue des voix"
+     },
+     "description": {
+      "ru": "Озвучка из файлов игры (если в копии есть этот язык).",
+      "en": "The voices from the game's files (when the copy has that language).",
+      "pt_BR": "As vozes dos arquivos do jogo (quando a cópia tem esse idioma).",
+      "zh_CN": "游戏文件中的配音（当副本包含该语言时）。",
+      "fr_FR": "Les voix tirées des fichiers du jeu (si la copie possède cette langue)."
+     },
+     "group": {
+      "ru": "Язык",
+      "en": "Language",
+      "pt_BR": "Idioma",
+      "zh_CN": "语言",
+      "fr_FR": "Langue"
+     }
+    },
+    {
+     "key": "skip_network_choice",
+     "type": "bool",
+     "store": "settings",
+     "default": true,
+     "title": {
+      "ru": "Пропускать выбор «по сети / вне сети»",
+      "en": "Skip the online / offline choice",
+      "pt_BR": "Pular a escolha online / offline",
+      "zh_CN": "跳过「在线 / 离线」选择",
+      "fr_FR": "Passer le choix « en ligne / hors ligne »"
+     },
+     "description": {
+      "ru": "Игра сразу открывает главное меню в режиме вне сети. Для онлайна выключите.",
+      "en": "The game opens its main menu offline at once. Turn off for online play.",
+      "pt_BR": "O jogo abre o menu principal offline de imediato. Desative para jogar online.",
+      "zh_CN": "游戏直接以离线方式打开主菜单。联机游玩时请关闭。",
+      "fr_FR": "Le jeu ouvre directement son menu principal hors ligne. Désactivez pour jouer en ligne."
+     },
+     "group": {
+      "ru": "Запуск",
+      "en": "Start",
+      "pt_BR": "Início",
+      "zh_CN": "启动",
+      "fr_FR": "Démarrage"
+     }
+    },
+    {
+     "key": "shortcut",
+     "type": "special",
+     "platforms": [
+      "linux"
+     ],
+     "title": {
+      "ru": "Ярлык на рабочем столе",
+      "en": "Desktop shortcut",
+      "pt_BR": "Atalho na área de trabalho",
+      "zh_CN": "桌面快捷方式",
+      "fr_FR": "Raccourci sur le bureau"
+     },
+     "description": {
+      "ru": "Запускает игру сразу, с сохранёнными настройками, патчами и модами.",
+      "en": "Starts the game at once, with the saved settings, patches and mods.",
+      "pt_BR": "Inicia o jogo de imediato, com as configurações, patches e mods salvos.",
+      "zh_CN": "立即以已保存的设置、补丁和模组启动游戏。",
+      "fr_FR": "Lance directement le jeu avec les paramètres, correctifs et mods enregistrés."
+     },
+     "group": {
+      "ru": "Запуск",
+      "en": "Start",
+      "pt_BR": "Início",
+      "zh_CN": "启动",
+      "fr_FR": "Démarrage"
+     }
+    }
+   ]
+  },
+  {
+   "id": "display",
+   "icon": "display",
+   "title": {
+    "ru": "Экран",
+    "en": "Display",
+    "pt_BR": "Tela",
+    "zh_CN": "显示",
+    "fr_FR": "Affichage"
+   },
+   "description": {
+    "ru": "Окно, разрешение и вывод кадров.",
+    "en": "Window, resolution and frame presentation.",
+    "pt_BR": "Janela, resolução e apresentação de quadros.",
+    "zh_CN": "窗口、分辨率和画面呈现。",
+    "fr_FR": "Fenêtre, résolution et présentation des images."
+   },
+   "items": [
+    {
+     "key": "display",
+     "type": "special",
+     "store": "settings",
+     "title": {
+      "ru": "Монитор",
+      "en": "Monitor",
+      "pt_BR": "Monitor",
+      "zh_CN": "显示器",
+      "fr_FR": "Moniteur"
+     },
+     "description": {
+      "ru": "На каком мониторе открывается окно и полноэкранный режим.",
+      "en": "The monitor the window and fullscreen open on.",
+      "pt_BR": "O monitor em que a janela e a tela cheia abrem.",
+      "zh_CN": "窗口和全屏所在的显示器。",
+      "fr_FR": "L'écran sur lequel s'ouvrent la fenêtre et le plein écran."
+     },
+     "group": {
+      "ru": "Окно",
+      "en": "Window",
+      "pt_BR": "Janela",
+      "zh_CN": "窗口",
+      "fr_FR": "Fenêtre"
+     }
+    },
+    {
+     "key": "fullscreen",
+     "type": "bool",
+     "store": "settings",
+     "default": false,
+     "title": {
+      "ru": "Полноэкранный режим",
+      "en": "Fullscreen",
+      "pt_BR": "Tela cheia",
+      "zh_CN": "全屏模式",
+      "fr_FR": "Plein écran"
+     },
+     "description": {
+      "ru": "Окно без рамок на весь монитор.",
+      "en": "A borderless window over the whole monitor.",
+      "pt_BR": "Uma janela sem bordas sobre o monitor inteiro.",
+      "zh_CN": "覆盖整个显示器的无边框窗口。",
+      "fr_FR": "Une fenêtre sans bordure sur tout l'écran."
+     },
+     "group": {
+      "ru": "Окно",
+      "en": "Window",
+      "pt_BR": "Janela",
+      "zh_CN": "窗口",
+      "fr_FR": "Fenêtre"
+     }
+    },
+    {
+     "key": "present_mode",
+     "type": "choice",
+     "store": "settings",
+     "default": "Mailbox",
+     "choices_ref": "PRESENT_MODES",
+     "title": {
+      "ru": "Режим показа кадров",
+      "en": "Present mode",
+      "pt_BR": "Modo de apresentação",
+      "zh_CN": "呈现模式",
+      "fr_FR": "Mode de présentation des images"
+     },
+     "description": {
+      "ru": "Mailbox — без разрывов и с малой задержкой; FIFO — вертикальная синхронизация; Immediate — без синхронизации (разрывы, наименьшая задержка).",
+      "en": "Mailbox: no tearing, low latency; FIFO: vertical sync; Immediate: no sync (tearing, the lowest latency).",
+      "pt_BR": "Mailbox: sem tearing, baixa latência; FIFO: sincronização vertical; Immediate: sem sincronização (tearing, a menor latência).",
+      "zh_CN": "Mailbox：无撕裂、低延迟；FIFO：垂直同步；Immediate：不同步（有撕裂，延迟最低）。",
+      "fr_FR": "Mailbox : sans déchirure, faible latence ; FIFO : synchronisation verticale ; Immediate : sans synchronisation (déchirures, latence minimale)."
+     },
+     "group": {
+      "ru": "Окно",
+      "en": "Window",
+      "pt_BR": "Janela",
+      "zh_CN": "窗口",
+      "fr_FR": "Fenêtre"
+     }
+    },
+    {
+     "key": "hdr",
+     "type": "bool",
+     "store": "settings",
+     "default": false,
+     "title": {
+      "ru": "Разрешить HDR",
+      "en": "Allow HDR",
+      "pt_BR": "Permitir HDR",
+      "zh_CN": "允许 HDR",
+      "fr_FR": "Autoriser le HDR"
+     },
+     "description": {
+      "ru": "Вывод в HDR, если монитор и система его поддерживают.",
+      "en": "HDR output where the monitor and the system support it.",
+      "pt_BR": "Saída HDR onde o monitor e o sistema suportam.",
+      "zh_CN": "在显示器和系统支持时输出 HDR。",
+      "fr_FR": "Sortie HDR lorsque l'écran et le système la prennent en charge."
+     },
+     "platforms": [
+      "linux"
+     ],
+     "group": {
+      "ru": "Окно",
+      "en": "Window",
+      "pt_BR": "Janela",
+      "zh_CN": "窗口",
+      "fr_FR": "Fenêtre"
+     }
+    },
+    {
+     "key": "aspect_ratio",
+     "type": "special",
+     "store": "ini",
+     "default": "auto",
+     "title": {
+      "ru": "Соотношение сторон",
+      "en": "Aspect ratio",
+      "pt_BR": "Proporção da tela",
+      "zh_CN": "宽高比",
+      "fr_FR": "Format d'image"
+     },
+     "description": {
+      "ru": "Шире 16:9 — больше обзор по бокам, выше — сверху и снизу; интерфейс держится у краёв экрана.",
+      "en": "Wider than 16:9 shows more at the sides, taller more above and below; the UI keeps to the screen edges.",
+      "pt_BR": "Mais largo que 16:9 mostra mais nas laterais, mais alto mostra mais acima e abaixo; a interface fica nas bordas da tela.",
+      "zh_CN": "比 16:9 更宽会显示更多两侧内容，更高会显示更多上下内容；界面保持在屏幕边缘。",
+      "fr_FR": "Plus large que 16:9 montre davantage sur les côtés, plus haut davantage en haut et en bas ; l'interface reste aux bords de l'écran."
+     },
+     "group": {
+      "ru": "Разрешение",
+      "en": "Resolution",
+      "pt_BR": "Resolução",
+      "zh_CN": "分辨率",
+      "fr_FR": "Résolution"
+     }
+    },
+    {
+     "key": "output_res",
+     "type": "special",
+     "store": "ini",
+     "default": "auto",
+     "title": {
+      "ru": "Разрешение вывода",
+      "en": "Output resolution",
+      "pt_BR": "Resolução de saída",
+      "zh_CN": "输出分辨率",
+      "fr_FR": "Résolution de sortie"
+     },
+     "description": {
+      "ru": "Размер готового кадра. Сцена рисуется меньше, если выбран апскейлер. Steam Deck — 1280×800.",
+      "en": "The size of the finished frame. The scene is drawn smaller with an upscaler. Steam Deck: 1280×800.",
+      "pt_BR": "O tamanho do quadro final. Com um upscaler, a cena é desenhada menor. Steam Deck: 1280×800.",
+      "zh_CN": "最终画面的尺寸。使用超分时场景以更小尺寸绘制。Steam Deck：1280×800。",
+      "fr_FR": "La taille de l'image finale. Avec un upscaler, la scène est dessinée plus petite. Steam Deck : 1280×800."
+     },
+     "group": {
+      "ru": "Разрешение",
+      "en": "Resolution",
+      "pt_BR": "Resolução",
+      "zh_CN": "分辨率",
+      "fr_FR": "Résolution"
+     }
+    }
+   ]
+  },
+  {
+   "id": "graphics",
+   "icon": "graphics",
+   "title": {
+    "ru": "Графика",
+    "en": "Graphics",
+    "pt_BR": "Gráficos",
+    "zh_CN": "图形",
+    "fr_FR": "Graphismes"
+   },
+   "description": {
+    "ru": "Апскейлер, сглаживание, качество. Всё это меняется и в меню игры (Insert или L3+R3).",
+    "en": "Upscaler, anti-aliasing, quality. All of it can be changed in the game's menu too (Insert or L3+R3).",
+    "pt_BR": "Upscaler, anti-aliasing, qualidade. Tudo isso também pode ser alterado no menu do jogo (Insert ou L3+R3).",
+    "zh_CN": "超分、抗锯齿、画质。这些都可以在游戏菜单中更改（Insert 或 L3+R3）。",
+    "fr_FR": "Upscaler, anticrénelage, qualité. Tout cela se règle aussi dans le menu du jeu (Insert ou L3+R3)."
+   },
+   "items": [
+    {
+     "key": "upscaler",
+     "type": "choice",
+     "store": "ini",
+     "default": "fsr4",
+     "choices": [
+      {
+       "value": "fsr4",
+       "ru": "FSR 4",
+       "en": "FSR 4",
+       "description": {
+        "ru": "Лучшее качество на AMD RDNA 3/4; на других видеокартах медленнее.",
+        "en": "The best quality on AMD RDNA 3/4; slower on other GPUs.",
+        "pt_BR": "A melhor qualidade em AMD RDNA 3/4; mais lento em outras GPUs.",
+        "zh_CN": "在 AMD RDNA 3/4 上画质最佳；其他显卡上较慢。",
+        "fr_FR": "La meilleure qualité sur AMD RDNA 3/4 ; plus lent sur les autres GPU."
+       },
+       "pt_BR": "FSR 4",
+       "zh_CN": "FSR 4",
+       "fr_FR": "FSR 4"
+      },
+      {
+       "value": "fsr411",
+       "ru": "FSR 4.1.1",
+       "en": "FSR 4.1.1",
+       "description": {
+        "ru": "Новая модель AMD (нужна своя DLL AMD, см. ниже).",
+        "en": "AMD's newer model (needs your own AMD DLL, see below).",
+        "pt_BR": "O modelo mais novo da AMD (precisa da sua própria DLL da AMD, veja abaixo).",
+        "zh_CN": "AMD 的较新模型（需要你自己的 AMD DLL，见下文）。",
+        "fr_FR": "Le modèle plus récent d'AMD (nécessite votre propre DLL AMD, voir plus bas)."
+       },
+       "pt_BR": "FSR 4.1.1",
+       "zh_CN": "FSR 4.1.1",
+       "fr_FR": "FSR 4.1.1"
+      },
+      {
+       "value": "fsr3",
+       "ru": "FSR 3.1",
+       "en": "FSR 3.1",
+       "description": {
+        "ru": "Временной апскейлер для любой видеокарты.",
+        "en": "A temporal upscaler for any GPU.",
+        "pt_BR": "Um upscaler temporal para qualquer GPU.",
+        "zh_CN": "适用于任何显卡的时间性超分。",
+        "fr_FR": "Un upscaler temporel pour tout GPU."
+       },
+       "pt_BR": "FSR 3.1",
+       "zh_CN": "FSR 3.1",
+       "fr_FR": "FSR 3.1"
+      },
+      {
+       "value": "fsr1",
+       "ru": "FSR 1 (для слабых видеокарт)",
+       "en": "FSR 1 (weak GPUs)",
+       "description": {
+        "ru": "Пространственный: дешевле всех (около 1 мс), без истории кадров; пост-обработка игры идёт в разрешении сцены. Для ноутбуков и Steam Deck.",
+        "en": "Spatial: the cheapest (about 1 ms), no frame history; the game's post runs at the scene size. For laptops and the Steam Deck.",
+        "pt_BR": "Espacial: o mais barato (cerca de 1 ms), sem histórico de quadros; o pós-processamento do jogo roda no tamanho da cena. Para notebooks e o Steam Deck.",
+        "zh_CN": "空间超分：开销最低（约 1 毫秒），无帧历史；游戏后处理以场景尺寸运行。适合笔记本和 Steam Deck。",
+        "fr_FR": "Spatial : le moins coûteux (environ 1 ms), sans historique d'images ; le post-traitement du jeu tourne à la taille de la scène. Pour les portables et le Steam Deck."
+       },
+       "pt_BR": "FSR 1 (GPUs fracas)",
+       "zh_CN": "FSR 1（低端显卡）",
+       "fr_FR": "FSR 1 (GPU modestes)"
+      },
+      {
+       "value": "dlss",
+       "ru": "DLSS (NVIDIA RTX)",
+       "en": "DLSS (NVIDIA RTX)",
+       "description": {
+        "ru": "Нужна библиотека NVIDIA (см. ниже).",
+        "en": "Needs NVIDIA's library (see below).",
+        "pt_BR": "Precisa da biblioteca da NVIDIA (veja abaixo).",
+        "zh_CN": "需要 NVIDIA 的库（见下文）。",
+        "fr_FR": "Nécessite la bibliothèque de NVIDIA (voir plus bas)."
+       },
+       "pt_BR": "DLSS (NVIDIA RTX)",
+       "zh_CN": "DLSS（NVIDIA RTX）",
+       "fr_FR": "DLSS (NVIDIA RTX)"
+      },
+      {
+       "value": "taa",
+       "ru": "TAA (нативное сглаживание)",
+       "en": "TAA (native anti-aliasing)",
+       "description": {
+        "ru": "Сглаживание без уменьшения разрешения.",
+        "en": "Anti-aliasing without a smaller resolution.",
+        "pt_BR": "Anti-aliasing sem reduzir a resolução.",
+        "zh_CN": "不降低分辨率的抗锯齿。",
+        "fr_FR": "Anticrénelage sans réduire la résolution."
+       },
+       "pt_BR": "TAA (antisserrilhamento nativo)",
+       "zh_CN": "TAA（原生抗锯齿）",
+       "fr_FR": "TAA (anticrénelage natif)"
+      },
+      {
+       "value": "off",
+       "ru": "Выключен",
+       "en": "Off",
+       "description": {
+        "ru": "Сцена в разрешении вывода.",
+        "en": "The scene at the output resolution.",
+        "pt_BR": "A cena na resolução de saída.",
+        "zh_CN": "场景以输出分辨率渲染。",
+        "fr_FR": "La scène à la résolution de sortie."
+       },
+       "pt_BR": "Desativado",
+       "zh_CN": "关闭",
+       "fr_FR": "Désactivé"
+      }
+     ],
+     "title": {
+      "ru": "Апскейлер",
+      "en": "Upscaler",
+      "pt_BR": "Upscaler",
+      "zh_CN": "超分辨率",
+      "fr_FR": "Upscaler"
+     },
+     "description": {
+      "ru": "Рисует сцену в меньшем разрешении и восстанавливает до разрешения вывода.",
+      "en": "Draws the scene smaller and reconstructs it at the output resolution.",
+      "pt_BR": "Desenha a cena menor e a reconstrói na resolução de saída.",
+      "zh_CN": "以更小尺寸绘制场景，再重建到输出分辨率。",
+      "fr_FR": "Dessine la scène plus petite et la reconstruit à la résolution de sortie."
+     },
+     "group": {
+      "ru": "Апскейлер",
+      "en": "Upscaler",
+      "pt_BR": "Upscaler",
+      "zh_CN": "超分辨率",
+      "fr_FR": "Upscaler"
+     }
+    },
+    {
+     "key": "preset",
+     "type": "choice",
+     "store": "ini",
+     "default": "4",
+     "choices": [
+      {
+       "value": "0",
+       "ru": "Native AA",
+       "en": "Native AA",
+       "pt_BR": "AA nativo",
+       "zh_CN": "原生抗锯齿",
+       "fr_FR": "AA native"
+      },
+      {
+       "value": "1",
+       "ru": "Quality (×1,5)",
+       "en": "Quality (×1.5)",
+       "pt_BR": "Qualidade (×1,5)",
+       "zh_CN": "质量（×1.5）",
+       "fr_FR": "Qualité (×1,5)"
+      },
+      {
+       "value": "2",
+       "ru": "Balanced (×1,7)",
+       "en": "Balanced (×1.7)",
+       "pt_BR": "Equilibrado (×1,7)",
+       "zh_CN": "平衡（×1.7）",
+       "fr_FR": "Équilibré (×1,7)"
+      },
+      {
+       "value": "3",
+       "ru": "Performance (×2)",
+       "en": "Performance (×2)",
+       "pt_BR": "Desempenho (×2)",
+       "zh_CN": "性能（×2）",
+       "fr_FR": "Performance (×2)"
+      },
+      {
+       "value": "4",
+       "ru": "Ultra Performance (×3)",
+       "en": "Ultra Performance (×3)",
+       "pt_BR": "Ultra Desempenho (×3)",
+       "zh_CN": "超级性能（×3）",
+       "fr_FR": "Ultra performance (×3)"
+      }
+     ],
+     "title": {
+      "ru": "Пресет",
+      "en": "Preset",
+      "pt_BR": "Predefinição",
+      "zh_CN": "预设",
+      "fr_FR": "Préréglage"
+     },
+     "description": {
+      "ru": "Во сколько раз сцена меньше вывода по каждой стороне. Чем меньше сцена, тем выше FPS и мягче картинка.",
+      "en": "How much smaller the scene is than the output per side. A smaller scene: more FPS, a softer picture.",
+      "pt_BR": "Quanto a cena é menor que a saída em cada lado. Cena menor: mais FPS, imagem mais suave.",
+      "zh_CN": "场景每边比输出小多少。场景越小：帧率越高，画面越柔和。",
+      "fr_FR": "De combien la scène est plus petite que la sortie, par côté. Scène plus petite : plus d'images/s, image plus douce."
+     },
+     "group": {
+      "ru": "Апскейлер",
+      "en": "Upscaler",
+      "pt_BR": "Upscaler",
+      "zh_CN": "超分辨率",
+      "fr_FR": "Upscaler"
+     }
+    },
+    {
+     "key": "frame_generation",
+     "type": "special",
+     "store": "ini",
+     "default": "off",
+     "title": {
+      "ru": "Генерация кадров",
+      "en": "Frame generation",
+      "pt_BR": "Geração de quadros",
+      "zh_CN": "帧生成",
+      "fr_FR": "Génération d'images"
+     },
+     "description": {
+      "ru": "Дорисовывает кадры между кадрами игры. FSR 3.1 — на любой видеокарте (экспериментально); DLSS — GeForce RTX 40 и новее.",
+      "en": "Adds frames between the game's. FSR 3.1 on any GPU (experimental); DLSS on GeForce RTX 40 and newer.",
+      "pt_BR": "Adiciona quadros entre os do jogo. FSR 3.1 em qualquer GPU (experimental); DLSS em GeForce RTX 40 ou mais nova.",
+      "zh_CN": "在游戏帧之间插入额外帧。FSR 3.1 适用于任何显卡（实验性）；DLSS 需要 GeForce RTX 40 及更新。",
+      "fr_FR": "Ajoute des images entre celles du jeu. FSR 3.1 sur tout GPU (expérimental) ; DLSS sur GeForce RTX 40 et plus récentes."
+     },
+     "group": {
+      "ru": "Апскейлер",
+      "en": "Upscaler",
+      "pt_BR": "Upscaler",
+      "zh_CN": "超分辨率",
+      "fr_FR": "Upscaler"
+     }
+    },
+    {
+     "key": "upscaler_files",
+     "type": "special",
+     "store": "settings",
+     "title": {
+      "ru": "Файлы апскейлера",
+      "en": "Upscaler files",
+      "pt_BR": "Arquivos do upscaler",
+      "zh_CN": "超分文件",
+      "fr_FR": "Fichiers de l'upscaler"
+     },
+     "description": {
+      "ru": "Что нужно выбранному апскейлеру: библиотеки NVIDIA для DLSS, модель FSR 4, набор FSR 4.1.1 из своей DLL AMD.",
+      "en": "What the chosen upscaler needs: NVIDIA's libraries for DLSS, the FSR 4 model, the FSR 4.1.1 set from your AMD DLL.",
+      "pt_BR": "O que o upscaler escolhido precisa: as bibliotecas da NVIDIA para o DLSS, o modelo do FSR 4, o conjunto do FSR 4.1.1 a partir da sua DLL da AMD.",
+      "zh_CN": "所选超分需要的文件：DLSS 需要 NVIDIA 库，FSR 4 需要模型，FSR 4.1.1 需要由你的 AMD DLL 生成的文件集。",
+      "fr_FR": "Ce dont l'upscaler choisi a besoin : les bibliothèques NVIDIA pour DLSS, le modèle FSR 4, l'ensemble FSR 4.1.1 tiré de votre DLL AMD."
+     },
+     "platforms": [
+      "windows"
+     ],
+     "group": {
+      "ru": "Апскейлер",
+      "en": "Upscaler",
+      "pt_BR": "Upscaler",
+      "zh_CN": "超分辨率",
+      "fr_FR": "Upscaler"
+     }
+    },
+    {
+     "key": "sharpen",
+     "type": "bool",
+     "store": "ini",
+     "default": true,
+     "title": {
+      "ru": "Резкость (RCAS)",
+      "en": "Sharpening (RCAS)",
+      "pt_BR": "Nitidez (RCAS)",
+      "zh_CN": "锐化（RCAS）",
+      "fr_FR": "Netteté (RCAS)"
+     },
+     "description": {
+      "ru": "Повышает резкость после апскейлера; без него — поверх сглаживания игры или FXAA. Почти ничего не стоит.",
+      "en": "Sharpens after the upscaler; without one, over the game's AA or FXAA. Nearly free.",
+      "pt_BR": "Nitidez após o upscaler; sem ele, sobre o AA do jogo ou o FXAA. Praticamente sem custo.",
+      "zh_CN": "在超分之后锐化；没有超分时作用于游戏自带抗锯齿或 FXAA。几乎没有开销。",
+      "fr_FR": "Netteté après l'upscaler ; sans lui, par-dessus l'AA du jeu ou le FXAA. Quasiment gratuit."
+     },
+     "group": {
+      "ru": "Апскейлер",
+      "en": "Upscaler",
+      "pt_BR": "Upscaler",
+      "zh_CN": "超分辨率",
+      "fr_FR": "Upscaler"
+     }
+    },
+    {
+     "key": "sharpness",
+     "type": "float",
+     "store": "ini",
+     "default": 0.5,
+     "min": 0.0,
+     "max": 2.0,
+     "step": 0.05,
+     "enabled_by": "sharpen",
+     "title": {
+      "ru": "Сила резкости",
+      "en": "Sharpness",
+      "pt_BR": "Intensidade da nitidez",
+      "zh_CN": "锐化强度",
+      "fr_FR": "Intensité de la netteté"
+     },
+     "description": {
+      "ru": "0 — без изменений, 1 — максимум AMD, выше — сильнее.",
+      "en": "0: unchanged, 1: AMD's maximum, above: stronger.",
+      "pt_BR": "0: inalterado, 1: o máximo da AMD, acima: mais forte.",
+      "zh_CN": "0：不变，1：AMD 的最大值，更高：更强。",
+      "fr_FR": "0 : inchangé, 1 : le maximum d'AMD, au-delà : plus fort."
+     },
+     "group": {
+      "ru": "Апскейлер",
+      "en": "Upscaler",
+      "pt_BR": "Upscaler",
+      "zh_CN": "超分辨率",
+      "fr_FR": "Upscaler"
+     }
+    },
+    {
+     "key": "anti_aliasing",
+     "type": "choice",
+     "store": "ini",
+     "default": "auto",
+     "choices": [
+      {
+       "value": "auto",
+       "ru": "Авто",
+       "en": "Auto",
+       "description": {
+        "ru": "Сглаживание игры без апскейлера; с апскейлером оно выключено (только мылит его вход).",
+        "en": "The game's AA without an upscaler; off with one (it only blurs its input).",
+        "pt_BR": "O AA do jogo sem upscaler; desligado com um (só borra a entrada dele).",
+        "zh_CN": "无超分时使用游戏自带抗锯齿；有超分时关闭（它只会让超分的输入变模糊）。",
+        "fr_FR": "L'AA du jeu sans upscaler ; désactivé avec un upscaler (il ne fait que flouter son entrée)."
+       },
+       "pt_BR": "Auto",
+       "zh_CN": "自动",
+       "fr_FR": "Auto"
+      },
+      {
+       "value": "game",
+       "ru": "Собственное игры",
+       "en": "The game's own",
+       "pt_BR": "O do próprio jogo",
+       "zh_CN": "游戏自带",
+       "fr_FR": "Celui du jeu"
+      },
+      {
+       "value": "fxaa",
+       "ru": "FXAA2_GS",
+       "en": "FXAA2_GS",
+       "description": {
+        "ru": "Шаг сглаживания игры с FXAA2_GS; применяется сразу.",
+        "en": "The game's AA step running FXAA2_GS; applied at once.",
+        "pt_BR": "A etapa de AA do jogo rodando FXAA2_GS; aplicado na hora.",
+        "zh_CN": "游戏的抗锯齿步骤改用 FXAA2_GS；立即生效。",
+        "fr_FR": "L'étape d'AA du jeu exécute FXAA2_GS ; appliqué immédiatement."
+       },
+       "pt_BR": "FXAA2_GS",
+       "zh_CN": "FXAA2_GS",
+       "fr_FR": "FXAA2_GS"
+      },
+      {
+       "value": "smaa",
+       "ru": "SMAA (без апскейлера)",
+       "en": "SMAA (no upscaler)",
+       "description": {
+        "ru": "SMAA 1x на готовой сцене; с апскейлером не работает.",
+        "en": "SMAA 1x on the finished scene; not with an upscaler.",
+        "pt_BR": "SMAA 1x na cena final; não com um upscaler.",
+        "zh_CN": "对最终场景使用 SMAA 1x；不能与超分同时使用。",
+        "fr_FR": "SMAA 1x sur la scène finale ; pas avec un upscaler."
+       },
+       "pt_BR": "SMAA (sem upscaler)",
+       "zh_CN": "SMAA（无超分）",
+       "fr_FR": "SMAA (sans upscaler)"
+      },
+      {
+       "value": "off",
+       "ru": "Выкл",
+       "en": "Off",
+       "pt_BR": "Desligado",
+       "zh_CN": "关闭",
+       "fr_FR": "Désactivé"
+      }
+     ],
+     "title": {
+      "ru": "Сглаживание",
+      "en": "Anti-aliasing",
+      "pt_BR": "Anti-aliasing",
+      "zh_CN": "抗锯齿",
+      "fr_FR": "Anticrénelage"
+     },
+     "description": {
+      "ru": "Сглаживание лесенок по краям.",
+      "en": "Smoothing of jagged edges.",
+      "pt_BR": "Suavização de bordas serrilhadas.",
+      "zh_CN": "平滑锯齿边缘。",
+      "fr_FR": "Lissage des bords crénelés."
+     },
+     "group": {
+      "ru": "Качество изображения",
+      "en": "Image quality",
+      "pt_BR": "Qualidade de imagem",
+      "zh_CN": "画质",
+      "fr_FR": "Qualité d'image"
+     }
+    },
+    {
+     "key": "texture_quality",
+     "type": "choice",
+     "store": "ini",
+     "default": "auto",
+     "choices": [
+      {
+       "value": "auto",
+       "ru": "Авто",
+       "en": "Auto",
+       "description": {
+        "ru": "Половина при 3 ГБ видеопамяти и меньше, иначе полное.",
+        "en": "Half with 3 GB of VRAM or less, else full.",
+        "pt_BR": "Metade com 3 GB de VRAM ou menos; senão, completa.",
+        "zh_CN": "显存 3 GB 及以下时为一半，否则为完整。",
+        "fr_FR": "La moitié avec 3 Go de VRAM ou moins, sinon pleine."
+       },
+       "pt_BR": "Auto",
+       "zh_CN": "自动",
+       "fr_FR": "Auto"
+      },
+      {
+       "value": "full",
+       "ru": "Полное",
+       "en": "Full",
+       "pt_BR": "Completa",
+       "zh_CN": "完整",
+       "fr_FR": "Pleine"
+      },
+      {
+       "value": "half",
+       "ru": "Половина",
+       "en": "Half",
+       "description": {
+        "ru": "Крупные текстуры вдвое меньше по каждой стороне: −25–35 % памяти под изображения.",
+        "en": "Large textures half as big per side: 25–35 % less image memory.",
+        "pt_BR": "Texturas grandes com metade do tamanho por lado: 25–35 % menos memória de imagens.",
+        "zh_CN": "大纹理每边缩小一半：图像内存减少 25–35%。",
+        "fr_FR": "Les grandes textures deux fois plus petites par côté : 25 à 35 % de mémoire d'images en moins."
+       },
+       "pt_BR": "Metade",
+       "zh_CN": "一半",
+       "fr_FR": "Moitié"
+      },
+      {
+       "value": "quarter",
+       "ru": "Четверть",
+       "en": "Quarter",
+       "description": {
+        "ru": "Вчетверо меньше по каждой стороне: ещё меньше памяти, заметно мыльнее вблизи.",
+        "en": "A quarter per side: even less memory, visibly blurrier up close.",
+        "pt_BR": "Um quarto por lado: ainda menos memória, visivelmente mais borrado de perto.",
+        "zh_CN": "每边缩小到四分之一：内存更少，近看明显更模糊。",
+        "fr_FR": "Un quart par côté : encore moins de mémoire, nettement plus flou de près."
+       },
+       "pt_BR": "Um quarto",
+       "zh_CN": "四分之一",
+       "fr_FR": "Quart"
+      }
+     ],
+     "title": {
+      "ru": "Качество текстур",
+      "en": "Texture quality",
+      "pt_BR": "Qualidade das texturas",
+      "zh_CN": "纹理质量",
+      "fr_FR": "Qualité des textures"
+     },
+     "description": {
+      "ru": "Размер крупных текстур в видеопамяти (со следующей локации). Для видеокарт с 2–4 ГБ.",
+      "en": "The size of large textures in VRAM (from the next area). For GPUs with 2–4 GB.",
+      "pt_BR": "O tamanho das texturas grandes na VRAM (a partir da próxima área). Para GPUs com 2–4 GB.",
+      "zh_CN": "大纹理在显存中的尺寸（从下一个区域开始生效）。适合 2–4 GB 显存的显卡。",
+      "fr_FR": "La taille des grandes textures en VRAM (dès la zone suivante). Pour les GPU de 2 à 4 Go."
+     },
+     "group": {
+      "ru": "Качество изображения",
+      "en": "Image quality",
+      "pt_BR": "Qualidade de imagem",
+      "zh_CN": "画质",
+      "fr_FR": "Qualité d'image"
+     }
+    },
+    {
+     "key": "model_lod",
+     "type": "choice",
+     "store": "ini",
+     "default": "0",
+     "choices": [
+      {
+       "value": "0",
+       "ru": "Как в игре",
+       "en": "The game's",
+       "pt_BR": "Como no jogo",
+       "zh_CN": "游戏默认",
+       "fr_FR": "Comme dans le jeu"
+      },
+      {
+       "value": "-2",
+       "ru": "Максимальная",
+       "en": "Highest",
+       "pt_BR": "Máximo",
+       "zh_CN": "最高",
+       "fr_FR": "Maximum"
+      },
+      {
+       "value": "1",
+       "ru": "Ниже",
+       "en": "Lower",
+       "pt_BR": "Menor",
+       "zh_CN": "较低",
+       "fr_FR": "Plus bas"
+      },
+      {
+       "value": "2",
+       "ru": "Минимальная",
+       "en": "Lowest",
+       "pt_BR": "Mínimo",
+       "zh_CN": "最低",
+       "fr_FR": "Minimum"
+      }
+     ],
+     "title": {
+      "ru": "Детализация моделей",
+      "en": "Model detail",
+      "pt_BR": "Detalhe dos modelos",
+      "zh_CN": "模型细节",
+      "fr_FR": "Niveau de détail des modèles"
+     },
+     "description": {
+      "ru": "Уровень детализации моделей вдали (после перезапуска).",
+      "en": "The level of detail of distant models (after a restart).",
+      "pt_BR": "O nível de detalhe dos modelos distantes (após reiniciar).",
+      "zh_CN": "远处模型的细节等级（重启后生效）。",
+      "fr_FR": "Le niveau de détail des modèles éloignés (après redémarrage)."
+     },
+     "group": {
+      "ru": "Качество изображения",
+      "en": "Image quality",
+      "pt_BR": "Qualidade de imagem",
+      "zh_CN": "画质",
+      "fr_FR": "Qualité d'image"
+     }
+    },
+    {
+     "key": "object_motion",
+     "type": "bool",
+     "store": "ini",
+     "default": true,
+     "title": {
+      "ru": "Векторы движения объектов",
+      "en": "Object motion vectors",
+      "pt_BR": "Vetores de movimento dos objetos",
+      "zh_CN": "物体运动矢量",
+      "fr_FR": "Vecteurs de mouvement des objets"
+     },
+     "description": {
+      "ru": "Меньше шлейфов за персонажами у временных апскейлеров. Стоит около 6 % FPS; FSR 1 их не использует.",
+      "en": "Less ghosting behind characters with temporal upscalers. Costs about 6 % FPS; FSR 1 does not use them.",
+      "pt_BR": "Menos fantasmas atrás dos personagens com upscalers temporais. Custa cerca de 6 % de FPS; o FSR 1 não os usa.",
+      "zh_CN": "使用时间性超分时减少角色身后的拖影。约降低 6% 帧率；FSR 1 不使用。",
+      "fr_FR": "Moins d'images fantômes derrière les personnages avec les upscalers temporels. Coûte environ 6 % d'images/s ; FSR 1 ne s'en sert pas."
+     },
+     "group": {
+      "ru": "Качество изображения",
+      "en": "Image quality",
+      "pt_BR": "Qualidade de imagem",
+      "zh_CN": "画质",
+      "fr_FR": "Qualité d'image"
+     }
+    },
+    {
+     "key": "vbao",
+     "type": "bool",
+     "store": "ini",
+     "default": false,
+     "title": {
+      "ru": "Затенение GT-VBAO",
+      "en": "GT-VBAO occlusion",
+      "pt_BR": "Oclusão ambiente GT-VBAO",
+      "zh_CN": "GT-VBAO 环境光遮蔽",
+      "fr_FR": "Occlusion GT-VBAO"
+     },
+     "description": {
+      "ru": "Более точное затенение вместо SSAO игры (нужно включённое SSAO).",
+      "en": "A more accurate ambient occlusion in place of the game's SSAO (needs SSAO on).",
+      "pt_BR": "Uma oclusão de ambiente mais precisa no lugar do SSAO do jogo (precisa do SSAO ligado).",
+      "zh_CN": "用更精确的环境光遮蔽替代游戏的 SSAO（需要开启 SSAO）。",
+      "fr_FR": "Une occlusion ambiante plus précise à la place du SSAO du jeu (nécessite le SSAO activé)."
+     },
+     "group": {
+      "ru": "Качество изображения",
+      "en": "Image quality",
+      "pt_BR": "Qualidade de imagem",
+      "zh_CN": "画质",
+      "fr_FR": "Qualité d'image"
+     }
+    },
+    {
+     "key": "show_fps",
+     "type": "bool",
+     "store": "ini",
+     "default": true,
+     "title": {
+      "ru": "Показывать FPS",
+      "en": "Show FPS",
+      "pt_BR": "Mostrar FPS",
+      "zh_CN": "显示帧率",
+      "fr_FR": "Afficher les FPS"
+     },
+     "description": {
+      "ru": "Счётчик кадров в углу экрана.",
+      "en": "A frame counter in the corner of the screen.",
+      "pt_BR": "Um contador de quadros no canto da tela.",
+      "zh_CN": "屏幕角落的帧率计数器。",
+      "fr_FR": "Un compteur d'images dans le coin de l'écran."
+     },
+     "group": {
+      "ru": "Качество изображения",
+      "en": "Image quality",
+      "pt_BR": "Qualidade de imagem",
+      "zh_CN": "画质",
+      "fr_FR": "Qualité d'image"
+     }
+    },
+    {
+     "key": "fsr_libraries",
+     "type": "special",
+     "title": {
+      "ru": "Библиотеки FSR 4.1 и DLSS",
+      "en": "FSR 4.1 and DLSS libraries",
+      "pt_BR": "Bibliotecas do FSR 4.1 e do DLSS",
+      "zh_CN": "FSR 4.1 与 DLSS 库",
+      "fr_FR": "Bibliothèques FSR 4.1 et DLSS"
+     },
+     "description": {
+      "ru": "Свои файлы AMD и NVIDIA: порт их не распространяет.",
+      "en": "Your own AMD and NVIDIA files: the port does not ship them.",
+      "pt_BR": "Seus próprios arquivos da AMD e da NVIDIA: o port não os distribui.",
+      "zh_CN": "你自己的 AMD 和 NVIDIA 文件：本移植不分发它们。",
+      "fr_FR": "Vos propres fichiers AMD et NVIDIA : le portage ne les distribue pas."
+     },
+     "platforms": [
+      "linux"
+     ],
+     "group": {
+      "ru": "Библиотеки AMD и NVIDIA",
+      "en": "AMD and NVIDIA libraries",
+      "pt_BR": "Bibliotecas da AMD e da NVIDIA",
+      "zh_CN": "AMD 与 NVIDIA 库",
+      "fr_FR": "Bibliothèques AMD et NVIDIA"
+     }
+    }
+   ]
+  },
+  {
+   "id": "effects",
+   "icon": "effects",
+   "title": {
+    "ru": "Эффекты",
+    "en": "Effects",
+    "pt_BR": "Efeitos",
+    "zh_CN": "效果",
+    "fr_FR": "Effets"
+   },
+   "description": {
+    "ru": "Эффекты и патчи игры. Применяются при запуске (аберрация и DoF — и в игре сразу).",
+    "en": "The game's effects and patches. Applied at start (aberration and DoF also live in the game).",
+    "pt_BR": "Os efeitos e patches do jogo. Aplicados ao iniciar (aberração e DoF também durante o jogo).",
+    "zh_CN": "游戏的效果和补丁。启动时应用（色差和景深也可在游戏中实时更改）。",
+    "fr_FR": "Les effets et correctifs du jeu. Appliqués au démarrage (aberration et profondeur de champ aussi en jeu)."
+   },
+   "items": [
+    {
+     "key": "effect_chromatic_aberration",
+     "type": "bool",
+     "store": "ini",
+     "default": true,
+     "title": {
+      "ru": "Хроматическая аберрация",
+      "en": "Chromatic aberration",
+      "pt_BR": "Aberração cromática",
+      "zh_CN": "色差",
+      "fr_FR": "Aberration chromatique"
+     },
+     "description": {
+      "ru": "Цветные каймы по краям кадра.",
+      "en": "Colour fringes at the frame's edges.",
+      "pt_BR": "Franjas de cor nas bordas do quadro.",
+      "zh_CN": "画面边缘的色彩条纹。",
+      "fr_FR": "Franges colorées aux bords de l'image."
+     },
+     "group": {
+      "ru": "Пост-обработка",
+      "en": "Post-processing",
+      "pt_BR": "Pós-processamento",
+      "zh_CN": "后处理",
+      "fr_FR": "Post-traitement"
+     }
+    },
+    {
+     "key": "effect_dof",
+     "type": "bool",
+     "store": "ini",
+     "default": true,
+     "title": {
+      "ru": "Глубина резкости (DoF)",
+      "en": "Depth of field (DoF)",
+      "pt_BR": "Profundidade de campo (DoF)",
+      "zh_CN": "景深（DoF）",
+      "fr_FR": "Profondeur de champ (DoF)"
+     },
+     "description": {
+      "ru": "Размытие дальних и близких объектов.",
+      "en": "Blur of distant and near objects.",
+      "pt_BR": "Desfoque de objetos distantes e próximos.",
+      "zh_CN": "远处和近处物体的模糊。",
+      "fr_FR": "Flou des objets lointains et proches."
+     },
+     "group": {
+      "ru": "Пост-обработка",
+      "en": "Post-processing",
+      "pt_BR": "Pós-processamento",
+      "zh_CN": "后处理",
+      "fr_FR": "Post-traitement"
+     }
+    },
+    {
+     "key": "effect_motion_blur",
+     "type": "bool",
+     "store": "ini",
+     "default": true,
+     "title": {
+      "ru": "Размытие в движении",
+      "en": "Motion blur",
+      "pt_BR": "Desfoque de movimento",
+      "zh_CN": "动态模糊",
+      "fr_FR": "Flou de mouvement"
+     },
+     "description": {
+      "ru": "Размытие при быстром повороте камеры.",
+      "en": "Blur when the camera turns fast.",
+      "pt_BR": "Desfoque quando a câmera gira rápido.",
+      "zh_CN": "镜头快速转动时的模糊。",
+      "fr_FR": "Flou quand la caméra tourne vite."
+     },
+     "group": {
+      "ru": "Пост-обработка",
+      "en": "Post-processing",
+      "pt_BR": "Pós-processamento",
+      "zh_CN": "后处理",
+      "fr_FR": "Post-traitement"
+     }
+    },
+    {
+     "key": "effect_bloom",
+     "type": "bool",
+     "store": "ini",
+     "default": true,
+     "title": {
+      "ru": "Свечение (Bloom)",
+      "en": "Bloom",
+      "pt_BR": "Bloom (brilho)",
+      "zh_CN": "泛光",
+      "fr_FR": "Bloom"
+     },
+     "description": {
+      "ru": "Ореол вокруг ярких источников.",
+      "en": "A glow around bright lights.",
+      "pt_BR": "Um brilho em volta de luzes fortes.",
+      "zh_CN": "明亮光源周围的光晕。",
+      "fr_FR": "Un halo autour des lumières vives."
+     },
+     "group": {
+      "ru": "Пост-обработка",
+      "en": "Post-processing",
+      "pt_BR": "Pós-processamento",
+      "zh_CN": "后处理",
+      "fr_FR": "Post-traitement"
+     }
+    },
+    {
+     "key": "effect_ssao",
+     "type": "bool",
+     "store": "ini",
+     "default": true,
+     "title": {
+      "ru": "Затенение SSAO",
+      "en": "SSAO",
+      "pt_BR": "SSAO",
+      "zh_CN": "SSAO 环境光遮蔽",
+      "fr_FR": "SSAO"
+     },
+     "description": {
+      "ru": "Затенение в углах и складках.",
+      "en": "Shading in corners and creases.",
+      "pt_BR": "Sombreamento em cantos e dobras.",
+      "zh_CN": "角落和缝隙处的阴影。",
+      "fr_FR": "Ombrage dans les coins et les recoins."
+     },
+     "group": {
+      "ru": "Освещение",
+      "en": "Lighting",
+      "pt_BR": "Iluminação",
+      "zh_CN": "光照",
+      "fr_FR": "Éclairage"
+     }
+    },
+    {
+     "key": "effect_dynamic_shadows",
+     "type": "bool",
+     "store": "ini",
+     "default": true,
+     "title": {
+      "ru": "Тени от динамических источников",
+      "en": "Dynamic light shadows",
+      "pt_BR": "Sombras de luzes dinâmicas",
+      "zh_CN": "动态光源阴影",
+      "fr_FR": "Ombres des sources de lumière dynamiques"
+     },
+     "description": {
+      "ru": "Тени от факелов и фонарей. Выключение заметно разгружает слабые видеокарты.",
+      "en": "Shadows of torches and lanterns. Turning them off helps weak GPUs noticeably.",
+      "pt_BR": "Sombras de tochas e lanternas. Desligá-las ajuda bastante GPUs fracas.",
+      "zh_CN": "火把和提灯的阴影。关闭后对低端显卡帮助明显。",
+      "fr_FR": "Ombres des torches et lanternes. Les désactiver aide nettement les GPU modestes."
+     },
+     "group": {
+      "ru": "Освещение",
+      "en": "Lighting",
+      "pt_BR": "Iluminação",
+      "zh_CN": "光照",
+      "fr_FR": "Éclairage"
+     }
+    },
+    {
+     "key": "effect_ssr",
+     "type": "bool",
+     "store": "ini",
+     "default": false,
+     "title": {
+      "ru": "Отражения SSR",
+      "en": "SSR reflections",
+      "pt_BR": "Reflexos SSR",
+      "zh_CN": "SSR 反射",
+      "fr_FR": "Réflexions SSR"
+     },
+     "description": {
+      "ru": "Отражения в экранном пространстве (в оригинале не было).",
+      "en": "Screen-space reflections (not in the original).",
+      "pt_BR": "Reflexos em espaço de tela (não existem no original).",
+      "zh_CN": "屏幕空间反射（原版没有）。",
+      "fr_FR": "Réflexions en espace écran (absentes de l'original)."
+     },
+     "group": {
+      "ru": "Освещение",
+      "en": "Lighting",
+      "pt_BR": "Iluminação",
+      "zh_CN": "光照",
+      "fr_FR": "Éclairage"
+     }
+    },
+    {
+     "key": "skip_intro",
+     "type": "bool",
+     "store": "ini",
+     "default": false,
+     "title": {
+      "ru": "Пропуск заставок при запуске",
+      "en": "Skip the intro videos",
+      "pt_BR": "Pular vídeos de introdução",
+      "zh_CN": "跳过开场动画",
+      "fr_FR": "Passer les vidéos d'intro"
+     },
+     "description": {
+      "ru": "Сразу к главному меню.",
+      "en": "Straight to the main menu.",
+      "pt_BR": "Direto para o menu principal.",
+      "zh_CN": "直接进入主菜单。",
+      "fr_FR": "Directement au menu principal."
+     },
+     "group": {
+      "ru": "Прочее",
+      "en": "Other",
+      "pt_BR": "Outros",
+      "zh_CN": "其他",
+      "fr_FR": "Autres"
+     }
+    },
+    {
+     "key": "debug_camera",
+     "type": "bool",
+     "store": "ini",
+     "default": false,
+     "title": {
+      "ru": "Свободная камера",
+      "en": "Free camera",
+      "pt_BR": "Câmera livre",
+      "zh_CN": "自由镜头",
+      "fr_FR": "Caméra libre"
+     },
+     "description": {
+      "ru": "Крестик + L3 (F + Ctrl на клавиатуре).",
+      "en": "Cross + L3 (F + Ctrl on the keyboard).",
+      "pt_BR": "Xis + L3 (F + Ctrl no teclado).",
+      "zh_CN": "叉键 + L3（键盘上为 F + Ctrl）。",
+      "fr_FR": "Croix + L3 (Ctrl + F au clavier)."
+     },
+     "group": {
+      "ru": "Прочее",
+      "en": "Other",
+      "pt_BR": "Outros",
+      "zh_CN": "其他",
+      "fr_FR": "Autres"
+     }
+    },
+    {
+     "key": "debug_menu",
+     "type": "bool",
+     "store": "ini",
+     "default": false,
+     "title": {
+      "ru": "Debug menu",
+      "en": "Debug menu",
+      "pt_BR": "Menu de depuração",
+      "zh_CN": "调试菜单",
+      "fr_FR": "Menu de débogage"
+     },
+     "description": {
+      "ru": "Меню разработчиков (левый тачпад / Tab). Нужна папка adhoc со шрифтами из мода Nexus #253.",
+      "en": "The developers' menu (left touchpad / Tab). Needs the adhoc font folder from Nexus mod #253.",
+      "pt_BR": "O menu dos desenvolvedores (touchpad esquerdo / Tab). Precisa da pasta de fontes adhoc do mod #253 do Nexus.",
+      "zh_CN": "开发者菜单（触摸板左侧 / Tab）。需要 Nexus 模组 #253 中的 adhoc 字体文件夹。",
+      "fr_FR": "Le menu des développeurs (pavé tactile gauche / Tab). Nécessite le dossier de polices adhoc du mod Nexus n° 253."
+     },
+     "group": {
+      "ru": "Прочее",
+      "en": "Other",
+      "pt_BR": "Outros",
+      "zh_CN": "其他",
+      "fr_FR": "Autres"
+     }
+    }
+   ]
+  },
+  {
+   "id": "performance",
+   "icon": "performance",
+   "title": {
+    "ru": "Производительность",
+    "en": "Performance",
+    "pt_BR": "Desempenho",
+    "zh_CN": "性能",
+    "fr_FR": "Performances"
+   },
+   "description": {
+    "ru": "Частота кадров, задержка, видеокарта.",
+    "en": "Frame rate, latency, GPU.",
+    "pt_BR": "Taxa de quadros, latência, GPU.",
+    "zh_CN": "帧率、延迟、显卡。",
+    "fr_FR": "Fréquence d'images, latence, GPU."
+   },
+   "items": [
+    {
+     "key": "fps_mode",
+     "type": "choice",
+     "store": "settings",
+     "default": "uncap",
+     "choices": [
+      {
+       "value": "uncap",
+       "ru": "Без ограничения",
+       "en": "Uncapped",
+       "pt_BR": "Sem limite",
+       "zh_CN": "不限制",
+       "fr_FR": "Sans limite"
+      },
+      {
+       "value": "60",
+       "ru": "60",
+       "en": "60",
+       "pt_BR": "60",
+       "zh_CN": "60",
+       "fr_FR": "60"
+      },
+      {
+       "value": "90",
+       "ru": "90",
+       "en": "90",
+       "pt_BR": "90",
+       "zh_CN": "90",
+       "fr_FR": "90"
+      },
+      {
+       "value": "30",
+       "ru": "30 (как на PS4)",
+       "en": "30 (as on the PS4)",
+       "pt_BR": "30 (como no PS4)",
+       "zh_CN": "30（与 PS4 一致）",
+       "fr_FR": "30 (comme sur PS4)"
+      }
+     ],
+     "title": {
+      "ru": "Режим частоты кадров",
+      "en": "Frame rate mode",
+      "pt_BR": "Modo de taxa de quadros",
+      "zh_CN": "帧率模式",
+      "fr_FR": "Mode de fréquence d'images"
+     },
+     "description": {
+      "ru": "Какой патч частоты кадров применить к игре (физика и анимации остаются правильными).",
+      "en": "Which frame rate patch the game gets (physics and animations stay right).",
+      "pt_BR": "Qual patch de taxa de quadros o jogo recebe (física e animações continuam corretas).",
+      "zh_CN": "游戏使用哪个帧率补丁（物理和动画保持正确）。",
+      "fr_FR": "Quel correctif de fréquence d'images le jeu reçoit (physique et animations restent correctes)."
+     },
+     "group": {
+      "ru": "Частота кадров",
+      "en": "Frame rate",
+      "pt_BR": "Taxa de quadros",
+      "zh_CN": "帧率",
+      "fr_FR": "Fréquence d'images"
+     }
+    },
+    {
+     "key": "fps_limit",
+     "type": "int",
+     "store": "settings",
+     "default": 0,
+     "min": 0,
+     "max": 480,
+     "step": 1,
+     "title": {
+      "ru": "Ограничение FPS",
+      "en": "FPS limit",
+      "pt_BR": "Limite de FPS",
+      "zh_CN": "帧率上限",
+      "fr_FR": "Limite de FPS"
+     },
+     "description": {
+      "ru": "0 — без ограничения. Ровное ограничение чуть ниже возможного даёт самую плавную картинку.",
+      "en": "0: none. A cap a little under what the PC reaches gives the smoothest picture.",
+      "pt_BR": "0: nenhum. Um limite um pouco abaixo do que o PC alcança dá a imagem mais suave.",
+      "zh_CN": "0：不限制。略低于电脑可达到的帧率上限时画面最流畅。",
+      "fr_FR": "0 : aucune. Une limite un peu sous ce que le PC atteint donne l'image la plus fluide."
+     },
+     "group": {
+      "ru": "Частота кадров",
+      "en": "Frame rate",
+      "pt_BR": "Taxa de quadros",
+      "zh_CN": "帧率",
+      "fr_FR": "Fréquence d'images"
+     }
+    },
+    {
+     "key": "low_latency",
+     "type": "choice",
+     "store": "ini",
+     "default": "on",
+     "choices": [
+      {
+       "value": "on",
+       "ru": "Включена",
+       "en": "On",
+       "pt_BR": "Ativado",
+       "zh_CN": "开启",
+       "fr_FR": "Activé"
+      },
+      {
+       "value": "boost",
+       "ru": "Включена + Boost",
+       "en": "On + Boost",
+       "pt_BR": "Ligada + Boost",
+       "zh_CN": "开启 + Boost",
+       "fr_FR": "Activée + Boost"
+      },
+      {
+       "value": "off",
+       "ru": "Выключена",
+       "en": "Off",
+       "pt_BR": "Desligada",
+       "zh_CN": "关闭",
+       "fr_FR": "Désactivée"
+      }
+     ],
+     "title": {
+      "ru": "Низкая задержка",
+      "en": "Low latency",
+      "pt_BR": "Baixa latência",
+      "zh_CN": "低延迟",
+      "fr_FR": "Faible latence"
+     },
+     "description": {
+      "ru": "NVIDIA Reflex (драйвер 550+) или AMD Anti-Lag 2: кадры не копятся перед видеокартой, меньше задержка ввода.",
+      "en": "NVIDIA Reflex (driver 550+) or AMD Anti-Lag 2: frames do not queue before the GPU, less input lag.",
+      "pt_BR": "NVIDIA Reflex (driver 550+) ou AMD Anti-Lag 2: os quadros não fazem fila antes da GPU, menos atraso de entrada.",
+      "zh_CN": "NVIDIA Reflex（驱动 550+）或 AMD Anti-Lag 2：帧不会在显卡前排队，输入延迟更低。",
+      "fr_FR": "NVIDIA Reflex (pilote 550+) ou AMD Anti-Lag 2 : les images ne s'accumulent pas avant le GPU, moins de latence d'entrée."
+     },
+     "group": {
+      "ru": "Задержка и конвейер",
+      "en": "Latency and pipeline",
+      "pt_BR": "Latência e pipeline",
+      "zh_CN": "延迟与流水线",
+      "fr_FR": "Latence et pipeline"
+     }
+    },
+    {
+     "key": "draw_pipe",
+     "type": "choice",
+     "store": "settings",
+     "default": "",
+     "platforms": [
+      "linux"
+     ],
+     "choices": [
+      {
+       "value": "",
+       "ru": "Авто",
+       "en": "Auto",
+       "description": {
+        "ru": "Включён при 8 и более потоках процессора.",
+        "en": "On with 8 CPU threads or more.",
+        "pt_BR": "Ligado com 8 threads de CPU ou mais.",
+        "zh_CN": "CPU 线程数为 8 或以上时开启。",
+        "fr_FR": "Activé avec 8 threads processeur ou plus."
+       },
+       "pt_BR": "Auto",
+       "zh_CN": "自动",
+       "fr_FR": "Auto"
+      },
+      {
+       "value": "1",
+       "ru": "Включён",
+       "en": "On",
+       "pt_BR": "Ativado",
+       "zh_CN": "开启",
+       "fr_FR": "Activé"
+      },
+      {
+       "value": "0",
+       "ru": "Выключен",
+       "en": "Off",
+       "description": {
+        "ru": "Стабильнее, но медленнее.",
+        "en": "More stable, but slower.",
+        "pt_BR": "Mais estável, porém mais lento.",
+        "zh_CN": "更稳定，但更慢。",
+        "fr_FR": "Plus stable, mais plus lent."
+       },
+       "pt_BR": "Desativado",
+       "zh_CN": "关闭",
+       "fr_FR": "Désactivé"
+      }
+     ],
+     "title": {
+      "ru": "Двухстадийный конвейер GPU",
+      "en": "Two-stage GPU pipeline",
+      "pt_BR": "Pipeline de GPU em dois estágios",
+      "zh_CN": "双阶段 GPU 管线",
+      "fr_FR": "Pipeline GPU à deux étages"
+     },
+     "description": {
+      "ru": "Разбор команд и запись отрисовок на разных потоках: быстрее на 20–30 %.",
+      "en": "Command decoding and draw recording on separate threads: 20–30 % faster.",
+      "pt_BR": "Decodificação de comandos e gravação de desenhos em threads separadas: 20–30 % mais rápido.",
+      "zh_CN": "命令解码和绘制录制在不同线程上：快 20–30%。",
+      "fr_FR": "Décodage des commandes et enregistrement des dessins sur des threads séparés : 20 à 30 % plus rapide."
+     },
+     "group": {
+      "ru": "Задержка и конвейер",
+      "en": "Latency and pipeline",
+      "pt_BR": "Latência e pipeline",
+      "zh_CN": "延迟与流水线",
+      "fr_FR": "Latence et pipeline"
+     }
+    },
+    {
+     "key": "gpu",
+     "type": "special",
+     "store": "settings",
+     "title": {
+      "ru": "Видеокарта",
+      "en": "GPU",
+      "pt_BR": "Placa de vídeo",
+      "zh_CN": "显卡",
+      "fr_FR": "Carte graphique"
+     },
+     "description": {
+      "ru": "На какой видеокарте идёт игра (ноутбуки с двумя видеокартами). Авто — дискретная.",
+      "en": "The GPU the game runs on (laptops with two GPUs). Auto: the discrete one.",
+      "pt_BR": "A GPU em que o jogo roda (notebooks com duas GPUs). Automático: a dedicada.",
+      "zh_CN": "游戏运行所用的显卡（双显卡笔记本）。自动：独立显卡。",
+      "fr_FR": "Le GPU utilisé par le jeu (portables à deux GPU). Auto : le dédié."
+     },
+     "group": {
+      "ru": "Видеокарта",
+      "en": "GPU",
+      "pt_BR": "Placa de vídeo",
+      "zh_CN": "显卡",
+      "fr_FR": "Carte graphique"
+     }
+    }
+   ]
+  },
+  {
+   "id": "controls",
+   "icon": "controls",
+   "title": {
+    "ru": "Управление",
+    "en": "Controls",
+    "pt_BR": "Controles",
+    "zh_CN": "操作设置",
+    "fr_FR": "Commandes"
+   },
+   "description": {
+    "ru": "Контроллер, клавиатура и мышь.",
+    "en": "Controller, keyboard and mouse.",
+    "pt_BR": "Controle, teclado e mouse.",
+    "zh_CN": "手柄、键盘和鼠标。",
+    "fr_FR": "Manette, clavier et souris."
+   },
+   "items": [
+    {
+     "key": "gamepad",
+     "type": "special",
+     "store": "settings",
+     "title": {
+      "ru": "Контроллер",
+      "en": "Controller",
+      "pt_BR": "Controle",
+      "zh_CN": "控制器",
+      "fr_FR": "Manette"
+     },
+     "description": {
+      "ru": "Какой геймпад использовать, если подключено несколько (рули и прочее не берутся).",
+      "en": "Which gamepad to use when several are connected.",
+      "pt_BR": "Qual gamepad usar quando vários estão conectados.",
+      "zh_CN": "连接多个手柄时使用哪一个。",
+      "fr_FR": "Quelle manette utiliser quand plusieurs sont connectées."
+     },
+     "group": {
+      "ru": "Устройства",
+      "en": "Devices",
+      "pt_BR": "Dispositivos",
+      "zh_CN": "设备",
+      "fr_FR": "Périphériques"
+     }
+    },
+    {
+     "key": "controls",
+     "type": "special",
+     "platforms": [
+      "linux"
+     ],
+     "title": {
+      "ru": "Назначение кнопок",
+      "en": "Button bindings",
+      "pt_BR": "Mapeamento de botões",
+      "zh_CN": "按键绑定",
+      "fr_FR": "Affectation des touches"
+     },
+     "description": {
+      "ru": "Клавиатура, мышь и геймпад; применяется при запуске игры.",
+      "en": "Keyboard, mouse and gamepad; applied when the game starts.",
+      "pt_BR": "Teclado, mouse e gamepad; aplicado quando o jogo inicia.",
+      "zh_CN": "键盘、鼠标和手柄；游戏启动时生效。",
+      "fr_FR": "Clavier, souris et manette ; appliqué au lancement du jeu."
+     },
+     "group": {
+      "ru": "Устройства",
+      "en": "Devices",
+      "pt_BR": "Dispositivos",
+      "zh_CN": "设备",
+      "fr_FR": "Périphériques"
+     }
+    },
+    {
+     "key": "button_prompts",
+     "type": "choice",
+     "store": "ini",
+     "default": "auto",
+     "choices": [
+      {
+       "value": "auto",
+       "ru": "Авто (последнее устройство)",
+       "en": "Auto (the last device used)",
+       "pt_BR": "Automático (último dispositivo)",
+       "zh_CN": "自动（最后使用的设备）",
+       "fr_FR": "Auto (le dernier périphérique utilisé)"
+      },
+      {
+       "value": "playstation",
+       "ru": "PlayStation",
+       "en": "PlayStation",
+       "pt_BR": "PlayStation",
+       "zh_CN": "PlayStation",
+       "fr_FR": "PlayStation"
+      },
+      {
+       "value": "xbox",
+       "ru": "Xbox",
+       "en": "Xbox",
+       "pt_BR": "Xbox",
+       "zh_CN": "Xbox",
+       "fr_FR": "Xbox"
+      },
+      {
+       "value": "keyboard",
+       "ru": "Клавиатура и мышь",
+       "en": "Keyboard and mouse",
+       "pt_BR": "Teclado e mouse",
+       "zh_CN": "键盘和鼠标",
+       "fr_FR": "Clavier et souris"
+      }
+     ],
+     "title": {
+      "ru": "Значки кнопок",
+      "en": "Button prompts",
+      "pt_BR": "Ícones dos botões",
+      "zh_CN": "按键图标",
+      "fr_FR": "Icônes des boutons"
+     },
+     "description": {
+      "ru": "Какие значки кнопок показывает игра.",
+      "en": "Which button icons the game shows.",
+      "pt_BR": "Quais ícones de botões o jogo mostra.",
+      "zh_CN": "游戏显示哪种按键图标。",
+      "fr_FR": "Quelles icônes de boutons le jeu affiche."
+     },
+     "group": {
+      "ru": "Устройства",
+      "en": "Devices",
+      "pt_BR": "Dispositivos",
+      "zh_CN": "设备",
+      "fr_FR": "Périphériques"
+     }
+    },
+    {
+     "key": "mouse_look",
+     "type": "bool",
+     "store": "ini",
+     "default": true,
+     "title": {
+      "ru": "Камера мышью",
+      "en": "Mouse camera",
+      "pt_BR": "Câmera com o mouse",
+      "zh_CN": "鼠标控制视角",
+      "fr_FR": "Caméra à la souris"
+     },
+     "description": {
+      "ru": "Щелчок в окне игры захватывает мышь, F1 — отпускает.",
+      "en": "A click in the game's window takes the mouse, F1 lets it go.",
+      "pt_BR": "Um clique na janela do jogo captura o mouse, F1 o libera.",
+      "zh_CN": "在游戏窗口中单击即捕获鼠标，按 F1 释放。",
+      "fr_FR": "Un clic dans la fenêtre du jeu capture la souris, F1 la libère."
+     },
+     "group": {
+      "ru": "Мышь",
+      "en": "Mouse",
+      "pt_BR": "Mouse",
+      "zh_CN": "鼠标",
+      "fr_FR": "Souris"
+     }
+    },
+    {
+     "key": "mouse_sensitivity",
+     "type": "float",
+     "store": "ini",
+     "default": 1.0,
+     "min": 0.1,
+     "max": 10.0,
+     "step": 0.05,
+     "enabled_by": "mouse_look",
+     "title": {
+      "ru": "Чувствительность мыши",
+      "en": "Mouse sensitivity",
+      "pt_BR": "Sensibilidade do mouse",
+      "zh_CN": "鼠标灵敏度",
+      "fr_FR": "Sensibilité de la souris"
+     },
+     "description": {
+      "ru": "Скорость поворота камеры мышью.",
+      "en": "How fast the mouse turns the camera.",
+      "pt_BR": "Quão rápido o mouse gira a câmera.",
+      "zh_CN": "鼠标转动镜头的速度。",
+      "fr_FR": "La vitesse à laquelle la souris tourne la caméra."
+     },
+     "group": {
+      "ru": "Мышь",
+      "en": "Mouse",
+      "pt_BR": "Mouse",
+      "zh_CN": "鼠标",
+      "fr_FR": "Souris"
+     }
+    },
+    {
+     "key": "mouse_invert_y",
+     "type": "bool",
+     "store": "ini",
+     "default": false,
+     "enabled_by": "mouse_look",
+     "title": {
+      "ru": "Инвертировать мышь по вертикали",
+      "en": "Invert mouse vertically",
+      "pt_BR": "Inverter o mouse na vertical",
+      "zh_CN": "反转鼠标纵轴",
+      "fr_FR": "Inverser l'axe Y de la souris"
+     },
+     "description": {
+      "ru": "Мышь вверх — камера вниз.",
+      "en": "Mouse up turns the camera down.",
+      "pt_BR": "Mouse para cima gira a câmera para baixo.",
+      "zh_CN": "鼠标向上时镜头向下。",
+      "fr_FR": "Souris vers le haut : la caméra tourne vers le bas."
+     },
+     "group": {
+      "ru": "Мышь",
+      "en": "Mouse",
+      "pt_BR": "Mouse",
+      "zh_CN": "鼠标",
+      "fr_FR": "Souris"
+     }
+    },
+    {
+     "key": "mouse_invert_x",
+     "type": "bool",
+     "store": "ini",
+     "default": false,
+     "enabled_by": "mouse_look",
+     "title": {
+      "ru": "Инвертировать мышь по горизонтали",
+      "en": "Invert mouse horizontally",
+      "pt_BR": "Inverter o mouse na horizontal",
+      "zh_CN": "反转鼠标横轴",
+      "fr_FR": "Inverser la souris horizontalement"
+     },
+     "description": {
+      "ru": "Мышь вправо — камера влево.",
+      "en": "Mouse right turns the camera left.",
+      "pt_BR": "Mouse para a direita gira a câmera para a esquerda.",
+      "zh_CN": "鼠标向右时镜头向左。",
+      "fr_FR": "Souris vers la droite : la caméra tourne vers la gauche."
+     },
+     "group": {
+      "ru": "Мышь",
+      "en": "Mouse",
+      "pt_BR": "Mouse",
+      "zh_CN": "鼠标",
+      "fr_FR": "Souris"
+     }
+    },
+    {
+     "key": "camera_speed_x",
+     "type": "float",
+     "store": "ini",
+     "default": 1.0,
+     "min": 0.25,
+     "max": 2.0,
+     "step": 0.05,
+     "title": {
+      "ru": "Скорость камеры (стик) по горизонтали",
+      "en": "Stick camera speed, horizontal",
+      "pt_BR": "Velocidade da câmera (analógico), horizontal",
+      "zh_CN": "镜头速度（摇杆）水平",
+      "fr_FR": "Vitesse de caméra au stick, horizontale"
+     },
+     "description": {
+      "ru": "Множитель скорости поворота правым стиком.",
+      "en": "A multiplier of the right stick's turn speed.",
+      "pt_BR": "Um multiplicador da velocidade de giro do analógico direito.",
+      "zh_CN": "右摇杆转动速度的倍数。",
+      "fr_FR": "Un multiplicateur de la vitesse de rotation du stick droit."
+     },
+     "group": {
+      "ru": "Камера",
+      "en": "Camera",
+      "pt_BR": "Câmera",
+      "zh_CN": "镜头",
+      "fr_FR": "Caméra"
+     }
+    },
+    {
+     "key": "camera_speed_y",
+     "type": "float",
+     "store": "ini",
+     "default": 1.0,
+     "min": 0.25,
+     "max": 2.0,
+     "step": 0.05,
+     "title": {
+      "ru": "Скорость камеры (стик) по вертикали",
+      "en": "Stick camera speed, vertical",
+      "pt_BR": "Velocidade da câmera (analógico), vertical",
+      "zh_CN": "镜头速度（摇杆）垂直",
+      "fr_FR": "Vitesse de caméra au stick, verticale"
+     },
+     "description": {
+      "ru": "Игра поворачивает по вертикали так же быстро, как по горизонтали, и это кажется быстрее: здесь можно замедлить.",
+      "en": "The game turns vertically as fast as horizontally, which feels faster: slow it down here.",
+      "pt_BR": "O jogo gira na vertical tão rápido quanto na horizontal, o que parece mais rápido: diminua aqui.",
+      "zh_CN": "游戏垂直转动速度与水平相同，感觉更快：可在此调慢。",
+      "fr_FR": "Le jeu tourne verticalement aussi vite qu'horizontalement, ce qui paraît plus rapide : ralentissez ici."
+     },
+     "group": {
+      "ru": "Камера",
+      "en": "Camera",
+      "pt_BR": "Câmera",
+      "zh_CN": "镜头",
+      "fr_FR": "Caméra"
+     }
+    }
+   ]
+  },
+  {
+   "id": "mods",
+   "icon": "mods",
+   "title": {
+    "ru": "Моды и патчи",
+    "en": "Mods and patches",
+    "pt_BR": "Mods e patches",
+    "zh_CN": "模组与补丁",
+    "fr_FR": "Mods et correctifs"
+   },
+   "description": {
+    "ru": "Подмена файлов игры и XML-патчи shadPS4. Применяются при запуске.",
+    "en": "Replacement game files and shadPS4 XML patches. Applied at start.",
+    "pt_BR": "Arquivos de substituição do jogo e patches XML do shadPS4. Aplicados ao iniciar.",
+    "zh_CN": "替换的游戏文件和 shadPS4 XML 补丁。启动时应用。",
+    "fr_FR": "Fichiers de remplacement du jeu et correctifs XML shadPS4. Appliqués au démarrage."
+   },
+   "items": [
+    {
+     "key": "mods_enabled",
+     "type": "bool",
+     "store": "settings",
+     "default": true,
+     "title": {
+      "ru": "Загружать моды",
+      "en": "Load mods",
+      "pt_BR": "Carregar mods",
+      "zh_CN": "加载模组",
+      "fr_FR": "Charger les mods"
+     },
+     "description": {
+      "ru": "Каждый мод — в своей папке (с dvdroot_ps4 или сразу с chr/, parts/ и т. п.). При совпадении файлов побеждает мод ниже в списке.",
+      "en": "Each mod in a folder of its own (with dvdroot_ps4, or chr/, parts/ and so on). Where files clash, the mod lower in the list wins.",
+      "pt_BR": "Cada mod em uma pasta própria (com dvdroot_ps4, ou chr/, parts/ e assim por diante). Onde arquivos conflitam, vence o mod mais abaixo na lista.",
+      "zh_CN": "每个模组放在单独的文件夹中（包含 dvdroot_ps4，或 chr/、parts/ 等）。文件冲突时，列表中靠下的模组优先。",
+      "fr_FR": "Chaque mod dans son propre dossier (avec dvdroot_ps4, ou chr/, parts/, etc.). En cas de conflit de fichiers, le mod le plus bas dans la liste l'emporte."
+     },
+     "group": {
+      "ru": "Моды",
+      "en": "Mods",
+      "pt_BR": "Mods",
+      "zh_CN": "模组",
+      "fr_FR": "Mods"
+     }
+    },
+    {
+     "key": "mods",
+     "type": "special",
+     "store": "settings",
+     "title": {
+      "ru": "Папка и список модов",
+      "en": "Mods folder and list",
+      "pt_BR": "Pasta e lista de mods",
+      "zh_CN": "模组文件夹与列表",
+      "fr_FR": "Dossier et liste des mods"
+     },
+     "description": {
+      "ru": "Порядок и включение модов.",
+      "en": "The mods' order and which are on.",
+      "pt_BR": "A ordem dos mods e quais estão ativados.",
+      "zh_CN": "模组的顺序以及启用了哪些。",
+      "fr_FR": "L'ordre des mods et lesquels sont activés."
+     },
+     "group": {
+      "ru": "Моды",
+      "en": "Mods",
+      "pt_BR": "Mods",
+      "zh_CN": "模组",
+      "fr_FR": "Mods"
+     },
+     "enabled_by": "mods_enabled"
+    },
+    {
+     "key": "patches",
+     "type": "special",
+     "store": "settings",
+     "title": {
+      "ru": "Сторонние патчи",
+      "en": "Third-party patches",
+      "pt_BR": "Patches de terceiros",
+      "zh_CN": "第三方补丁",
+      "fr_FR": "Patchs tiers"
+     },
+     "description": {
+      "ru": "XML-патчи в формате shadPS4 для версии 01.09.",
+      "en": "shadPS4-format XML patches for version 01.09.",
+      "pt_BR": "Patches XML no formato do shadPS4 para a versão 01.09.",
+      "zh_CN": "适用于 01.09 版本的 shadPS4 格式 XML 补丁。",
+      "fr_FR": "Correctifs XML au format shadPS4 pour la version 01.09."
+     },
+     "group": {
+      "ru": "Патчи",
+      "en": "Patches",
+      "pt_BR": "Patches",
+      "zh_CN": "补丁",
+      "fr_FR": "Correctifs"
+     }
+    }
+   ]
+  },
+  {
+   "id": "online",
+   "icon": "online",
+   "title": {
+    "ru": "Онлайн",
+    "en": "Online"
+   },
+   "description": {
+    "ru": "Кооператив и онлайн-функции игры (модуль online\\bbnet20.dll).",
+    "en": "Co-op and the game's online features (the module online\\bbnet20.dll)."
+   },
+   "items": [
+    {
+     "key": "online",
+     "type": "bool",
+     "store": "settings",
+     "default": false,
+     "platforms": [
+      "windows"
+     ],
+     "group": {
+      "ru": "Игра по сети",
+      "en": "Online play"
+     },
+     "title": {
+      "ru": "Играть онлайн",
+      "en": "Play online"
+     },
+     "description": {
+      "ru": "Сообщения, пятна крови и призраки приходят с игрового сервера; колокола и призывы идут через сервер кооператива. Выключено: игра остаётся офлайн. Включено: в игре показывается выбор «онлайн/офлайн». Совместимо с версией для Linux: нужны версия игры 1.09 и тот же сервер.",
+      "en": "Messages, bloodstains and ghosts come from the game server; bells and summons go through the co-op server. Off: the game stays offline. On: the game's online / offline choice is shown. Works with the Linux version: game version 1.09 and the same server are needed."
+     }
+    },
+    {
+     "key": "online_pool",
+     "type": "choice",
+     "store": "settings",
+     "default": "seamless",
+     "platforms": [
+      "windows"
+     ],
+     "group": {
+      "ru": "Игра по сети",
+      "en": "Online play"
+     },
+     "title": {
+      "ru": "Пул",
+      "en": "Pool"
+     },
+     "description": {
+      "ru": "С кем играть: у всех в сессии должен быть один пул.",
+      "en": "Whom to play with: everyone in a session needs the same pool."
+     },
+     "enabled_by": "online",
+     "choices": [
+      {
+       "value": "seamless",
+       "ru": "Seamless Hunt (seamlesshunt.com)",
+       "en": "Seamless Hunt (seamlesshunt.com)",
+       "description": {
+        "ru": "Сервер BBSC: бесшовный кооператив, колокола и призывы; аккаунт создаётся на сайте.",
+        "en": "BBSC's server: seamless co-op, bells and summons; the account is made on the website."
+       }
+      },
+      {
+       "value": "huntersdream",
+       "ru": "The Hunter's Dream (thehuntersdream.com)",
+       "en": "The Hunter's Dream (thehuntersdream.com)",
+       "description": {
+        "ru": "Кооператив с игроками bbhost через The Hunter's Dream; вход через Discord.",
+        "en": "Co-op with bbhost players through The Hunter's Dream; sign-in with Discord."
+       }
+      }
+     ]
+    },
+    {
+     "key": "online_community",
+     "type": "text",
+     "store": "settings",
+     "default": "http://play.seamlesshunt.com",
+     "platforms": [
+      "windows"
+     ],
+     "group": {
+      "ru": "Игровой сервер (сообщения, пятна крови, призраки)",
+      "en": "Game server (messages, bloodstains, ghosts)"
+     },
+     "title": {
+      "ru": "Игровой сервер",
+      "en": "Game server"
+     },
+     "description": {
+      "ru": "Пусто: сервер Seamless Hunt.",
+      "en": "Empty: Seamless Hunt's server."
+     },
+     "enabled_by": "online",
+     "visible_when": {
+      "key": "online_pool",
+      "value": "seamless"
+     }
+    },
+    {
+     "key": "online_server",
+     "type": "text",
+     "store": "settings",
+     "default": "play.seamlesshunt.com:31313",
+     "platforms": [
+      "windows"
+     ],
+     "group": {
+      "ru": "Сервер кооператива (колокола и призывы)",
+      "en": "Co-op server (bells and summons)"
+     },
+     "title": {
+      "ru": "Адрес сервера",
+      "en": "Server address"
+     },
+     "description": {
+      "ru": "play.seamlesshunt.com:31313 — сервер Seamless Hunt (BBSC). Публичный сервер shadPS4 принимает только сборки shadPS4. Для частного сервера укажите host:port от его владельца.",
+      "en": "play.seamlesshunt.com:31313 is Seamless Hunt's server (BBSC). shadPS4's public server accepts only shadPS4's builds. For a private server enter the host:port its owner gives."
+     },
+     "enabled_by": "online",
+     "visible_when": {
+      "key": "online_pool",
+      "value": "seamless"
+     }
+    },
+    {
+     "key": "online_webapi",
+     "type": "text",
+     "store": "settings",
+     "default": "http://play.seamlesshunt.com:31315",
+     "platforms": [
+      "windows"
+     ],
+     "group": {
+      "ru": "Сервер кооператива (колокола и призывы)",
+      "en": "Co-op server (bells and summons)"
+     },
+     "title": {
+      "ru": "Адрес WebAPI",
+      "en": "WebAPI address"
+     },
+     "description": {
+      "ru": "Пусто: адрес сервера с портом 31315.",
+      "en": "Empty: the server's address with port 31315."
+     },
+     "enabled_by": "online",
+     "visible_when": {
+      "key": "online_pool",
+      "value": "seamless"
+     }
+    },
+    {
+     "key": "online_bbsc",
+     "type": "bool",
+     "store": "settings",
+     "default": true,
+     "platforms": [
+      "windows"
+     ],
+     "group": {
+      "ru": "Сервер кооператива (колокола и призывы)",
+      "en": "Co-op server (bells and summons)"
+     },
+     "title": {
+      "ru": "Бесшовный кооператив (BBSC)",
+      "en": "Seamless co-op (BBSC)"
+     },
+     "description": {
+      "ru": "Сессия переживает смерти, лампы, смену локаций и боссов; до 5 охотников. Нужен сервер с игровым сервером BBSC, у всех игроков включено. Пока включено, колокола игры заменены колоколами BBSC; после выключения прежние вернутся при следующей загрузке персонажа (сохранение копируется в save-backups).",
+      "en": "The session survives deaths, lamps, area changes and bosses; up to 5 hunters. Needs a server with BBSC's game server, on for every player. While on, the game's bells are replaced by BBSC's; after turning it off the old ones come back at the next character load (the save is copied to save-backups)."
+     },
+     "enabled_by": "online",
+     "visible_when": {
+      "key": "online_pool",
+      "value": "seamless"
+     }
+    },
+    {
+     "key": "online_npid",
+     "type": "text",
+     "store": "settings",
+     "default": "",
+     "platforms": [
+      "windows"
+     ],
+     "group": {
+      "ru": "Учётная запись",
+      "en": "Account"
+     },
+     "title": {
+      "ru": "Online ID (NPID)",
+      "en": "Online ID (NPID)"
+     },
+     "description": {
+      "ru": "Имя учётной записи shadNet, не email. Зарегистрируйтесь на seamlesshunt.com или спросите владельца частного сервера.",
+      "en": "The shadNet account name, not an email. Register on seamlesshunt.com or ask the private server's owner."
+     },
+     "enabled_by": "online",
+     "visible_when": {
+      "key": "online_pool",
+      "value": "seamless"
+     }
+    },
+    {
+     "key": "online_password",
+     "type": "password",
+     "store": "settings",
+     "default": "",
+     "platforms": [
+      "windows"
+     ],
+     "group": {
+      "ru": "Учётная запись",
+      "en": "Account"
+     },
+     "title": {
+      "ru": "Пароль",
+      "en": "Password"
+     },
+     "description": {
+      "ru": "Хранится на этом компьютере вместе с настройками лаунчера.",
+      "en": "Kept on this computer with the launcher's settings."
+     },
+     "enabled_by": "online",
+     "visible_when": {
+      "key": "online_pool",
+      "value": "seamless"
+     }
+    },
+    {
+     "key": "thd_server",
+     "type": "text",
+     "store": "settings",
+     "default": "",
+     "platforms": [
+      "windows"
+     ],
+     "group": {
+      "ru": "The Hunter's Dream",
+      "en": "The Hunter's Dream"
+     },
+     "title": {
+      "ru": "Адрес сервера",
+      "en": "Server address"
+     },
+     "description": {
+      "ru": "Пусто: https://thehuntersdream.com.",
+      "en": "Empty: https://thehuntersdream.com."
+     },
+     "enabled_by": "online",
+     "visible_when": {
+      "key": "online_pool",
+      "value": "huntersdream"
+     }
+    },
+    {
+     "key": "thd_account",
+     "type": "special",
+     "store": "settings",
+     "default": "",
+     "platforms": [
+      "windows"
+     ],
+     "group": {
+      "ru": "The Hunter's Dream",
+      "en": "The Hunter's Dream"
+     },
+     "title": {
+      "ru": "Учётная запись",
+      "en": "Account"
+     },
+     "description": {
+      "ru": "Вход через Discord, как в bbhost: на сайте нужно подтвердить код. Пароль не нужен, токен хранится на этом компьютере вместе с настройками лаунчера. BBSC в этом пуле нет.",
+      "en": "Sign-in with Discord as in bbhost: a code is approved on the website. No password; the token is kept on this computer with the launcher's settings. No BBSC in this pool."
+     },
+     "enabled_by": "online",
+     "visible_when": {
+      "key": "online_pool",
+      "value": "huntersdream"
+     }
+    },
+    {
+     "key": "online_upnp",
+     "type": "bool",
+     "store": "settings",
+     "default": true,
+     "platforms": [
+      "windows"
+     ],
+     "group": {
+      "ru": "Соединение",
+      "en": "Connection"
+     },
+     "title": {
+      "ru": "UPnP (открыть порт на роутере автоматически)",
+      "en": "UPnP (open the port on the router automatically)"
+     },
+     "description": {
+      "ru": "Выключите при Tailscale или другом VPN.",
+      "en": "Turn off with Tailscale or another VPN."
+     },
+     "enabled_by": "online"
+    },
+    {
+     "key": "online_test",
+     "type": "special",
+     "store": "settings",
+     "default": "",
+     "platforms": [
+      "windows"
+     ],
+     "group": {
+      "ru": "Соединение",
+      "en": "Connection"
+     },
+     "title": {
+      "ru": "Проверить соединение",
+      "en": "Check the connection"
+     },
+     "description": {
+      "ru": "У всех в сессии должны быть одна версия игры (1.09) и один сервер. Читы меняют игру и для других игроков: выключайте их при совместной игре.",
+      "en": "Everyone in a session needs the same game version (1.09) and the same server. Cheats change the game for the other players too: turn them off in co-op."
+     }
+    }
+   ]
+  },
+  {
+   "id": "developer",
+   "icon": "developer",
+   "title": {
+    "ru": "Для разработчика",
+    "en": "Developer",
+    "pt_BR": "Desenvolvedor",
+    "zh_CN": "开发者选项",
+    "fr_FR": "Développeur"
+   },
+   "description": {
+    "ru": "Журналы и диагностика: для разбора рывков и вылетов.",
+    "en": "Logs and diagnostics: for stutters and crashes.",
+    "pt_BR": "Logs e diagnóstico: para travadas e crashes.",
+    "zh_CN": "日志与诊断：用于排查卡顿和崩溃。",
+    "fr_FR": "Journaux et diagnostics : pour les saccades et les plantages."
+   },
+   "items": [
+    {
+     "key": "save_log",
+     "type": "bool",
+     "store": "settings",
+     "default": false,
+     "title": {
+      "ru": "Сохранять журнал и статистику в файл",
+      "en": "Save the log and statistics to a file",
+      "pt_BR": "Salvar o log e as estatísticas em um arquivo",
+      "zh_CN": "将日志和统计信息保存到文件",
+      "fr_FR": "Enregistrer le journal et les statistiques dans un fichier"
+     },
+     "description": {
+      "ru": "В папку logs в каталоге данных.",
+      "en": "Into the logs folder in the data directory.",
+      "pt_BR": "Na pasta logs do diretório de dados.",
+      "zh_CN": "保存到数据目录中的 logs 文件夹。",
+      "fr_FR": "Dans le dossier logs du répertoire de données."
+     },
+     "group": {
+      "ru": "Журналы",
+      "en": "Logs",
+      "pt_BR": "Logs",
+      "zh_CN": "日志",
+      "fr_FR": "Journaux"
+     }
+    },
+    {
+     "key": "frame_stats",
+     "type": "bool",
+     "store": "settings",
+     "default": false,
+     "title": {
+      "ru": "Статистика кадров в журнале",
+      "en": "Frame statistics in the log",
+      "pt_BR": "Estatísticas de quadros no log",
+      "zh_CN": "在日志中记录帧统计",
+      "fr_FR": "Statistiques d'images dans le journal"
+     },
+     "description": {
+      "ru": "Каждые несколько секунд: FPS, худший кадр, загрузка потоков, память.",
+      "en": "Every few seconds: FPS, the worst frame, thread load, memory.",
+      "pt_BR": "A cada poucos segundos: FPS, o pior quadro, carga das threads, memória.",
+      "zh_CN": "每隔几秒：帧率、最差帧、线程负载、内存。",
+      "fr_FR": "Toutes les quelques secondes : images/s, la pire image, charge des threads, mémoire."
+     },
+     "group": {
+      "ru": "Журналы",
+      "en": "Logs",
+      "pt_BR": "Logs",
+      "zh_CN": "日志",
+      "fr_FR": "Journaux"
+     }
+    },
+    {
+     "key": "gpu_profile",
+     "type": "bool",
+     "store": "settings",
+     "default": false,
+     "title": {
+      "ru": "Профиль GPU в журнале",
+      "en": "GPU profile in the log",
+      "pt_BR": "Perfil da GPU no log",
+      "zh_CN": "在日志中记录 GPU 性能剖析",
+      "fr_FR": "Profil du GPU dans le journal"
+     },
+     "description": {
+      "ru": "Время каждого прохода на видеокарте. Сам заметно замедляет видеокарту.",
+      "en": "The GPU time of each pass. Slows the GPU down noticeably itself.",
+      "pt_BR": "O tempo de GPU de cada passe. Por si só deixa a GPU visivelmente mais lenta.",
+      "zh_CN": "每个渲染通道的显卡耗时。本身会明显拖慢显卡。",
+      "fr_FR": "Le temps GPU de chaque passe. Ralentit lui-même nettement le GPU."
+     },
+     "group": {
+      "ru": "Журналы",
+      "en": "Logs",
+      "pt_BR": "Logs",
+      "zh_CN": "日志",
+      "fr_FR": "Journaux"
+     }
+    },
+    {
+     "key": "crash_diag",
+     "type": "bool",
+     "store": "settings",
+     "default": false,
+     "title": {
+      "ru": "Диагностика вылетов",
+      "en": "Crash diagnostics",
+      "pt_BR": "Diagnóstico de crashes",
+      "zh_CN": "崩溃诊断",
+      "fr_FR": "Diagnostic des plantages"
+     },
+     "description": {
+      "ru": "Проверяет кучу игры и записи в её память; немного медленнее.",
+      "en": "Checks the game's heap and the writes into its memory; a little slower.",
+      "pt_BR": "Verifica o heap do jogo e as escritas na memória dele; um pouco mais lento.",
+      "zh_CN": "检查游戏的堆和对其内存的写入；稍慢。",
+      "fr_FR": "Vérifie le tas du jeu et les écritures dans sa mémoire ; un peu plus lent."
+     },
+     "group": {
+      "ru": "Диагностика",
+      "en": "Diagnostics",
+      "pt_BR": "Diagnóstico",
+      "zh_CN": "诊断",
+      "fr_FR": "Diagnostics"
+     }
+    },
+    {
+     "key": "vk_validation",
+     "type": "bool",
+     "store": "settings",
+     "default": false,
+     "title": {
+      "ru": "Слои валидации Vulkan",
+      "en": "Vulkan validation layers",
+      "pt_BR": "Camadas de validação do Vulkan",
+      "zh_CN": "Vulkan 验证层",
+      "fr_FR": "Couches de validation Vulkan"
+     },
+     "description": {
+      "ru": "Проверка вызовов Vulkan. Сильно замедляет.",
+      "en": "Checks of the Vulkan calls. Very slow.",
+      "pt_BR": "Verificações das chamadas Vulkan. Muito lento.",
+      "zh_CN": "检查 Vulkan 调用。非常慢。",
+      "fr_FR": "Vérifications des appels Vulkan. Très lent."
+     },
+     "group": {
+      "ru": "Диагностика",
+      "en": "Diagnostics",
+      "pt_BR": "Diagnóstico",
+      "zh_CN": "诊断",
+      "fr_FR": "Diagnostics"
+     }
+    },
+    {
+     "key": "mangohud",
+     "type": "bool",
+     "store": "settings",
+     "default": false,
+     "platforms": [
+      "linux"
+     ],
+     "title": {
+      "ru": "MangoHud",
+      "en": "MangoHud",
+      "pt_BR": "MangoHud",
+      "zh_CN": "MangoHud",
+      "fr_FR": "MangoHud"
+     },
+     "description": {
+      "ru": "Оверлей MangoHud (если установлен).",
+      "en": "The MangoHud overlay (when installed).",
+      "pt_BR": "A sobreposição do MangoHud (quando instalado).",
+      "zh_CN": "MangoHud 叠加层（已安装时）。",
+      "fr_FR": "La surcouche MangoHud (si installée)."
+     },
+     "group": {
+      "ru": "Диагностика",
+      "en": "Diagnostics",
+      "pt_BR": "Diagnóstico",
+      "zh_CN": "诊断",
+      "fr_FR": "Diagnostics"
+     }
+    },
+    {
+     "key": "extra_env",
+     "type": "text",
+     "store": "settings",
+     "default": "",
+     "title": {
+      "ru": "Дополнительные переменные окружения",
+      "en": "Extra environment variables",
+      "pt_BR": "Variáveis de ambiente extras",
+      "zh_CN": "额外环境变量",
+      "fr_FR": "Variables d'environnement supplémentaires"
+     },
+     "description": {
+      "ru": "ИМЯ=значение через пробел, для экспериментов.",
+      "en": "NAME=value separated by spaces, for experiments.",
+      "pt_BR": "NOME=valor separados por espaços, para experimentos.",
+      "zh_CN": "以空格分隔的 NAME=value，用于试验。",
+      "fr_FR": "NOM=valeur séparés par des espaces, pour les essais."
+     },
+     "group": {
+      "ru": "Диагностика",
+      "en": "Diagnostics",
+      "pt_BR": "Diagnóstico",
+      "zh_CN": "诊断",
+      "fr_FR": "Diagnostics"
+     }
+    }
+   ]
+  }
+ ],
+ "lists": {
+  "PRESENT_MODES": [
+   {
+    "value": "Mailbox",
+    "ru": "Mailbox",
+    "en": "Mailbox",
+    "pt_BR": "Mailbox",
+    "zh_CN": "Mailbox",
+    "fr_FR": "Mailbox"
+   },
+   {
+    "value": "Fifo",
+    "ru": "FIFO (VSync)",
+    "en": "FIFO (VSync)",
+    "pt_BR": "FIFO (VSync)",
+    "zh_CN": "FIFO（垂直同步）",
+    "fr_FR": "FIFO (VSync)"
+   },
+   {
+    "value": "FifoRelaxed",
+    "ru": "FIFO Relaxed",
+    "en": "FIFO Relaxed",
+    "pt_BR": "FIFO Relaxed",
+    "zh_CN": "FIFO Relaxed",
+    "fr_FR": "FIFO Relaxed"
+   },
+   {
+    "value": "Immediate",
+    "ru": "Immediate",
+    "en": "Immediate",
+    "pt_BR": "Immediate",
+    "zh_CN": "Immediate",
+    "fr_FR": "Immediate"
+   }
+  ],
+  "LANGUAGES": [
+   {
+    "value": "1",
+    "ru": "Английский",
+    "en": "English",
+    "pt_BR": "Inglês",
+    "zh_CN": "英语",
+    "fr_FR": "Anglais"
+   },
+   {
+    "value": "18",
+    "ru": "Английский (Великобритания)",
+    "en": "English (UK)",
+    "pt_BR": "Inglês (Reino Unido)",
+    "zh_CN": "英语（英国）",
+    "fr_FR": "Anglais (Royaume-Uni)"
+   },
+   {
+    "value": "8",
+    "ru": "Русский",
+    "en": "Russian",
+    "pt_BR": "Russo",
+    "zh_CN": "俄语",
+    "fr_FR": "Russe"
+   },
+   {
+    "value": "0",
+    "ru": "Японский",
+    "en": "Japanese",
+    "pt_BR": "Japonês",
+    "zh_CN": "日语",
+    "fr_FR": "Japonais"
+   },
+   {
+    "value": "2",
+    "ru": "Французский",
+    "en": "French",
+    "pt_BR": "Francês",
+    "zh_CN": "法语",
+    "fr_FR": "Français"
+   },
+   {
+    "value": "3",
+    "ru": "Испанский",
+    "en": "Spanish",
+    "pt_BR": "Espanhol",
+    "zh_CN": "西班牙语",
+    "fr_FR": "Espagnol"
+   },
+   {
+    "value": "20",
+    "ru": "Испанский (Латинская Америка)",
+    "en": "Spanish (Latin America)",
+    "pt_BR": "Espanhol (América Latina)",
+    "zh_CN": "西班牙语（拉丁美洲）",
+    "fr_FR": "Espagnol (Amérique latine)"
+   },
+   {
+    "value": "4",
+    "ru": "Немецкий",
+    "en": "German",
+    "pt_BR": "Alemão",
+    "zh_CN": "德语",
+    "fr_FR": "Allemand"
+   },
+   {
+    "value": "5",
+    "ru": "Итальянский",
+    "en": "Italian",
+    "pt_BR": "Italiano",
+    "zh_CN": "意大利语",
+    "fr_FR": "Italien"
+   },
+   {
+    "value": "6",
+    "ru": "Нидерландский",
+    "en": "Dutch",
+    "pt_BR": "Holandês",
+    "zh_CN": "荷兰语",
+    "fr_FR": "Néerlandais"
+   },
+   {
+    "value": "7",
+    "ru": "Португальский",
+    "en": "Portuguese",
+    "pt_BR": "Português (Portugal)",
+    "zh_CN": "葡萄牙语",
+    "fr_FR": "Portugais"
+   },
+   {
+    "value": "17",
+    "ru": "Португальский (Бразилия)",
+    "en": "Portuguese (Brazil)",
+    "pt_BR": "Português (Brasil)",
+    "zh_CN": "葡萄牙语（巴西）",
+    "fr_FR": "Portugais (Brésil)"
+   },
+   {
+    "value": "16",
+    "ru": "Польский",
+    "en": "Polish",
+    "pt_BR": "Polonês",
+    "zh_CN": "波兰语",
+    "fr_FR": "Polonais"
+   },
+   {
+    "value": "19",
+    "ru": "Турецкий",
+    "en": "Turkish",
+    "pt_BR": "Turco",
+    "zh_CN": "土耳其语",
+    "fr_FR": "Turc"
+   },
+   {
+    "value": "9",
+    "ru": "Корейский",
+    "en": "Korean",
+    "pt_BR": "Coreano",
+    "zh_CN": "韩语",
+    "fr_FR": "Coréen"
+   },
+   {
+    "value": "11",
+    "ru": "Китайский (упрощённый)",
+    "en": "Chinese (Simplified)",
+    "pt_BR": "Chinês (simplificado)",
+    "zh_CN": "简体中文",
+    "fr_FR": "Chinois (simplifié)"
+   },
+   {
+    "value": "10",
+    "ru": "Китайский (традиционный)",
+    "en": "Chinese (Traditional)",
+    "pt_BR": "Chinês (tradicional)",
+    "zh_CN": "繁体中文",
+    "fr_FR": "Chinois (traditionnel)"
+   },
+   {
+    "value": "12",
+    "ru": "Финский",
+    "en": "Finnish",
+    "pt_BR": "Finlandês",
+    "zh_CN": "芬兰语",
+    "fr_FR": "Finnois"
+   },
+   {
+    "value": "13",
+    "ru": "Шведский",
+    "en": "Swedish",
+    "pt_BR": "Sueco",
+    "zh_CN": "瑞典语",
+    "fr_FR": "Suédois"
+   },
+   {
+    "value": "14",
+    "ru": "Датский",
+    "en": "Danish",
+    "pt_BR": "Dinamarquês",
+    "zh_CN": "丹麦语",
+    "fr_FR": "Danois"
+   },
+   {
+    "value": "15",
+    "ru": "Норвежский",
+    "en": "Norwegian",
+    "pt_BR": "Norueguês",
+    "zh_CN": "挪威语",
+    "fr_FR": "Norvégien"
+   }
+  ],
+  "GAME_TEXT_LANGUAGES": [
+   {
+    "value": "auto",
+    "ru": "Как выберет игра",
+    "en": "As the game chooses",
+    "pt_BR": "Como o jogo escolher",
+    "zh_CN": "由游戏决定",
+    "fr_FR": "Comme le jeu choisit"
+   },
+   {
+    "value": "enus",
+    "ru": "English (US)",
+    "en": "English (US)",
+    "pt_BR": "English (US)",
+    "zh_CN": "English (US)",
+    "fr_FR": "English (US)"
+   },
+   {
+    "value": "engb",
+    "ru": "English (UK)",
+    "en": "English (UK)",
+    "pt_BR": "English (UK)",
+    "zh_CN": "English (UK)",
+    "fr_FR": "English (UK)"
+   },
+   {
+    "value": "ruru",
+    "ru": "Русский",
+    "en": "Russian",
+    "pt_BR": "Russo",
+    "zh_CN": "俄语",
+    "fr_FR": "Russe"
+   },
+   {
+    "value": "jajp",
+    "ru": "日本語",
+    "en": "日本語",
+    "pt_BR": "日本語",
+    "zh_CN": "日本語",
+    "fr_FR": "日本語"
+   },
+   {
+    "value": "frfr",
+    "ru": "Français",
+    "en": "Français",
+    "pt_BR": "Français",
+    "zh_CN": "Français",
+    "fr_FR": "Français"
+   },
+   {
+    "value": "itit",
+    "ru": "Italiano",
+    "en": "Italiano",
+    "pt_BR": "Italiano",
+    "zh_CN": "Italiano",
+    "fr_FR": "Italiano"
+   },
+   {
+    "value": "dede",
+    "ru": "Deutsch",
+    "en": "Deutsch",
+    "pt_BR": "Deutsch",
+    "zh_CN": "Deutsch",
+    "fr_FR": "Deutsch"
+   },
+   {
+    "value": "eses",
+    "ru": "Español",
+    "en": "Español",
+    "pt_BR": "Español",
+    "zh_CN": "Español",
+    "fr_FR": "Español"
+   },
+   {
+    "value": "esar",
+    "ru": "Español (Latinoamérica)",
+    "en": "Español (Latinoamérica)",
+    "pt_BR": "Español (Latinoamérica)",
+    "zh_CN": "Español (Latinoamérica)",
+    "fr_FR": "Español (Latinoamérica)"
+   },
+   {
+    "value": "ptbr",
+    "ru": "Português (Brasil)",
+    "en": "Português (Brasil)",
+    "pt_BR": "Português (Brasil)",
+    "zh_CN": "Português (Brasil)",
+    "fr_FR": "Português (Brasil)"
+   },
+   {
+    "value": "ptpt",
+    "ru": "Português",
+    "en": "Português",
+    "pt_BR": "Português",
+    "zh_CN": "Português",
+    "fr_FR": "Português"
+   },
+   {
+    "value": "nlnl",
+    "ru": "Nederlands",
+    "en": "Nederlands",
+    "pt_BR": "Nederlands",
+    "zh_CN": "Nederlands",
+    "fr_FR": "Nederlands"
+   },
+   {
+    "value": "plpl",
+    "ru": "Polski",
+    "en": "Polski",
+    "pt_BR": "Polski",
+    "zh_CN": "Polski",
+    "fr_FR": "Polski"
+   },
+   {
+    "value": "dadk",
+    "ru": "Dansk",
+    "en": "Dansk",
+    "pt_BR": "Dansk",
+    "zh_CN": "Dansk",
+    "fr_FR": "Dansk"
+   },
+   {
+    "value": "nono",
+    "ru": "Norsk",
+    "en": "Norsk",
+    "pt_BR": "Norsk",
+    "zh_CN": "Norsk",
+    "fr_FR": "Norsk"
+   },
+   {
+    "value": "fifi",
+    "ru": "Suomi",
+    "en": "Suomi",
+    "pt_BR": "Suomi",
+    "zh_CN": "Suomi",
+    "fr_FR": "Suomi"
+   },
+   {
+    "value": "svse",
+    "ru": "Svenska",
+    "en": "Svenska",
+    "pt_BR": "Svenska",
+    "zh_CN": "Svenska",
+    "fr_FR": "Svenska"
+   },
+   {
+    "value": "trtr",
+    "ru": "Türkçe",
+    "en": "Türkçe",
+    "pt_BR": "Türkçe",
+    "zh_CN": "Türkçe",
+    "fr_FR": "Türkçe"
+   },
+   {
+    "value": "zhcn",
+    "ru": "中文（简体）",
+    "en": "中文（简体）",
+    "pt_BR": "中文（简体）",
+    "zh_CN": "中文（简体）",
+    "fr_FR": "中文（简体）"
+   },
+   {
+    "value": "zhtw",
+    "ru": "中文（繁體）",
+    "en": "中文（繁體）",
+    "pt_BR": "中文（繁體）",
+    "zh_CN": "中文（繁體）",
+    "fr_FR": "中文（繁體）"
+   },
+   {
+    "value": "kokr",
+    "ru": "한국어",
+    "en": "한국어",
+    "pt_BR": "한국어",
+    "zh_CN": "한국어",
+    "fr_FR": "한국어"
+   }
+  ],
+  "GAME_VOICE_LANGUAGES": [
+   {
+    "value": "auto",
+    "ru": "Как выберет игра",
+    "en": "As the game chooses",
+    "pt_BR": "Como o jogo escolher",
+    "zh_CN": "由游戏决定",
+    "fr_FR": "Comme le jeu choisit"
+   },
+   {
+    "value": "engb",
+    "ru": "English",
+    "en": "English",
+    "pt_BR": "Inglês",
+    "zh_CN": "英语",
+    "fr_FR": "English"
+   },
+   {
+    "value": "jajp",
+    "ru": "日本語",
+    "en": "日本語",
+    "pt_BR": "日本語",
+    "zh_CN": "日本語",
+    "fr_FR": "日本語"
+   },
+   {
+    "value": "frfr",
+    "ru": "Français",
+    "en": "Français",
+    "pt_BR": "Français",
+    "zh_CN": "Français",
+    "fr_FR": "Français"
+   },
+   {
+    "value": "itit",
+    "ru": "Italiano",
+    "en": "Italiano",
+    "pt_BR": "Italiano",
+    "zh_CN": "Italiano",
+    "fr_FR": "Italiano"
+   },
+   {
+    "value": "dede",
+    "ru": "Deutsch",
+    "en": "Deutsch",
+    "pt_BR": "Deutsch",
+    "zh_CN": "Deutsch",
+    "fr_FR": "Deutsch"
+   },
+   {
+    "value": "eses",
+    "ru": "Español",
+    "en": "Español",
+    "pt_BR": "Español",
+    "zh_CN": "Español",
+    "fr_FR": "Español"
+   },
+   {
+    "value": "esar",
+    "ru": "Español (Latinoamérica)",
+    "en": "Español (Latinoamérica)",
+    "pt_BR": "Español (Latinoamérica)",
+    "zh_CN": "Español (Latinoamérica)",
+    "fr_FR": "Español (Latinoamérica)"
+   },
+   {
+    "value": "ptbr",
+    "ru": "Português (Brasil)",
+    "en": "Português (Brasil)",
+    "pt_BR": "Português (Brasil)",
+    "zh_CN": "Português (Brasil)",
+    "fr_FR": "Português (Brasil)"
+   }
+  ],
+  "ASPECTS": [
+   "auto",
+   "4:3",
+   "16:10",
+   "16:9",
+   "21:9",
+   "32:9"
+  ],
+  "OUTPUTS": {
+   "4:3": [
+    "640x480",
+    "800x600",
+    "1024x768",
+    "1280x960",
+    "1440x1080",
+    "1600x1200",
+    "2048x1536",
+    "2880x2160"
+   ],
+   "16:10": [
+    "640x400",
+    "960x600",
+    "1280x800",
+    "1440x900",
+    "1680x1050",
+    "1920x1200",
+    "2560x1600",
+    "3840x2400"
+   ],
+   "16:9": [
+    "640x360",
+    "854x480",
+    "960x540",
+    "1280x720",
+    "1600x900",
+    "1920x1080",
+    "2560x1440",
+    "3200x1800",
+    "3840x2160"
+   ],
+   "21:9": [
+    "860x360",
+    "1280x540",
+    "1720x720",
+    "2560x1080",
+    "3440x1440",
+    "3840x1600",
+    "5120x2160"
+   ],
+   "32:9": [
+    "1280x360",
+    "1920x540",
+    "2560x720",
+    "3840x1080",
+    "5120x1440",
+    "7680x2160"
+   ]
+  }
+ }
+}

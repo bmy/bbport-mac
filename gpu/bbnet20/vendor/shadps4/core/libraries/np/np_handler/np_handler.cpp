@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <fmt/format.h>
@@ -22,6 +23,61 @@
 #include "shadnet/server_probe.h"
 
 namespace Libraries::Np {
+
+namespace {
+// bbport: why the account could not sign in, in plain words for the player (the game itself only
+// says that it is not signed in to PlayStation Network). Each reason is told once, not on every
+// reconnect attempt.
+std::atomic<int> told_login_failure{-1};
+// bbport: that it signed in (the log's line for it is below the default level): once, and again
+// after a failure was told.
+std::atomic<bool> told_signed_in{false};
+
+std::string ServerName(const std::string& host) {
+    return host.find("seamlesshunt") != std::string::npos ? std::string("Seamless Hunt") : host;
+}
+
+void TellSignedIn(const std::string& host, const std::string& npid) {
+    if (told_signed_in.exchange(true)) {
+        return;
+    }
+    // The console and the log only (Kind::Online has no overlay line): one line a launcher
+    // can look for.
+    ImGui::ShadNetNotify::Push(ImGui::ShadNetNotify::Kind::Online,
+                               fmt::format("{}: signed in as {}. Online play is on.",
+                                           ServerName(host), npid));
+}
+
+void TellLoginFailure(ShadNet::ShadNetState state, const std::string& host) {
+    using S = ShadNet::ShadNetState;
+    if (state == S::Ok || state == S::FailureProtocol) {
+        return; // told by the protocol handler
+    }
+    if (told_login_failure.exchange(static_cast<int>(state)) == static_cast<int>(state)) {
+        return;
+    }
+    told_signed_in = false;
+    const std::string server = ServerName(host);
+    std::string reason;
+    switch (state) {
+    case S::FailureUsername:
+    case S::FailurePassword:
+    case S::FailureToken:
+    case S::FailureAuth:
+        reason = "login failed - check the username and password";
+        break;
+    case S::FailureAlreadyIn:
+        reason = "this account is logged in already (another copy of the game?) - close it, wait "
+                 "a minute and start again";
+        break;
+    default:
+        reason = "no connection to the server - check the network, or the server is down";
+        break;
+    }
+    ImGui::ShadNetNotify::Push(ImGui::ShadNetNotify::Kind::Info,
+                               fmt::format("{}: {}. Online play is off.", server, reason));
+}
+} // namespace
 
 NpHandler::NpHandler()
     : m_matching2_contexts(
@@ -309,6 +365,7 @@ bool NpHandler::ConnectUser(s32 user_id, const std::string& host, u16 port, cons
         LOG_ERROR(NpHandler, "user_id={} connection failed (state={})", user_id,
                   static_cast<int>(conn_state));
         handle_protocol_mismatch(conn_state);
+        TellLoginFailure(conn_state, host);
         client->Stop();
         return false;
     }
@@ -318,12 +375,15 @@ bool NpHandler::ConnectUser(s32 user_id, const std::string& host, u16 port, cons
         LOG_ERROR(NpHandler, "user_id={} authentication failed (state={})", user_id,
                   static_cast<int>(auth_state));
         handle_protocol_mismatch(auth_state);
+        TellLoginFailure(auth_state, host);
         client->Stop();
         return false;
     }
 
+    told_login_failure = -1;
     LOG_INFO(NpHandler, "user_id={} signed in npid='{}' accountId={}", user_id, npid,
              client->GetUserId());
+    TellSignedIn(host, npid);
 
     Net::UPnPClient::Instance().SetP2PFeaturesEnabled(client->IsMatching2Enabled());
     if (client->IsMatching2Enabled() && EmulatorSettings.IsUPnPEnabled()) {

@@ -1,6 +1,8 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: see log.h.
 #include <cstdio>
+#include "shim/bb_env.h"
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -14,7 +16,7 @@ constexpr const char* LevelNames[] = {"trace", "debug", "info", "warning", "erro
 
 Level Threshold() {
     static const Level threshold = [] {
-        const char* env = std::getenv("BB_GPU_LOG");
+        const char* env = bb_env("BB_GPU_LOG");
         if (env) {
             for (int i = 0; i < 6; ++i) {
                 if (std::strcmp(env, LevelNames[i]) == 0) {

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: objects addressed by small integer ids (images, views, queues). Storage grows in fixed
 // blocks, so an object never moves: references to it stay valid while other objects come and go

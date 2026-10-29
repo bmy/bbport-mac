@@ -1,7 +1,14 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "gcn/regs.h"
+#include "shim/bb_env.h"
 
+#include <atomic>
 #include <bit>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <mutex>
 
 namespace Gcn {
 
@@ -164,5 +171,53 @@ static_assert(sizeof(Regs) == Regs::NumRegs * sizeof(u32));
 static_assert(sizeof(ShaderProgram) == 20 * sizeof(u32));
 static_assert(sizeof(ComputeProgram) == 80 * sizeof(u32));
 static_assert(sizeof(ColorBuffer) == 15 * sizeof(u32));
+
+} // namespace Gcn
+
+namespace Gcn {
+
+namespace {
+/// The register file after CLEAR_STATE (built once).
+const Regs& DefaultRegs() {
+    static Regs defaults;
+    static std::once_flag once;
+    std::call_once(once, [] { defaults.SetDefaults(); });
+    return defaults;
+}
+} // namespace
+
+void ResetRegs(Regs& regs, RegTouched& touched) {
+    static const bool full = bb_env("BB_REGS_FULL_RESET") != nullptr;
+    static const bool check = bb_env("BB_REGS_CHECK") != nullptr;
+    const Regs& defaults = DefaultRegs();
+    if (touched.all || full) {
+        regs.reg_array = defaults.reg_array;
+    } else {
+        touched.marks.ForEachBlock([&](size_t block) {
+            const size_t at = block * RegDirty::BlockWords;
+            std::memcpy(regs.reg_array.data() + at, defaults.reg_array.data() + at,
+                        RegDirty::BlockWords * sizeof(u32));
+        });
+    }
+    touched.marks.Clear();
+    touched.all = false;
+    if (check) {
+        u32 left = 0, first = ~0u;
+        for (u32 block = 0; block < RegDirty::NumBlocks; ++block) {
+            const size_t at = block * RegDirty::BlockWords;
+            if (std::memcmp(regs.reg_array.data() + at, defaults.reg_array.data() + at,
+                            RegDirty::BlockWords * sizeof(u32)) != 0) {
+                ++left;
+                first = std::min(first, block);
+            }
+        }
+        static std::atomic<u32> reports{0};
+        if (left && reports.fetch_add(1) < 16) {
+            std::printf("Regs: %u blocks not back to their defaults after a reset (first at word "
+                        "%#x): a write was not marked\n",
+                        left, first * RegDirty::BlockWords);
+        }
+    }
+}
 
 } // namespace Gcn

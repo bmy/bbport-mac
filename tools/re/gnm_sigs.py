@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Per-function PM4 signatures in an objdump -M intel listing (the eboot's libGnm region).
 
 Usage: gnm_sigs.py region.asm callgraph.txt > sigs.txt

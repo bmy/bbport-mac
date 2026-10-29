@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // VOP1/VOP2/VOP3/VOPC/VOP3P dispatch. Plain arithmetic is written here as the operation on
 // its sources (read in operand order) through the Vop* templates; instructions with more to

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* Check whether native-size depth/stencil images can be blitted to reduced
  * renderer targets. The renderer needs both directions for live presets.
  * --gamepads: the connected gamepads, "GUID<tab>name" per line (the launcher's controller list,

@@ -46,6 +46,8 @@ public:
     void SetLocalId(std::string_view online_id);
     /// A peer and the endpoint signaling uses for it.
     void RememberPeer(std::string_view online_id, u32 addr_nbo, u16 port_nbo);
+    /// Lookup or allocate pseudo-endpoint routed through the relay.
+    bool LookupOrAllocatePeer(std::string_view online_id, u32* out_addr, u16* out_port);
 
     // ---- the transport ----------------------------------------------------------------------
     using SendRaw = std::function<void(std::span<const u8>, const Endpoint&)>;

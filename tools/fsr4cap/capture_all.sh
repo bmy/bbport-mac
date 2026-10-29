@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 # tools/fsr4cap/capture_all.sh <dir with fsr4cap.exe and the upscaler DLL>
 # Records FSR 4 (the DLL's 4.1.x version; FSR4CAP_VERSION, a substring of the version name) for
 # output 1080p/1440p/2160p with the five quality ratios, plus other output sizes (Steam Deck,

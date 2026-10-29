@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 # tools/fsr4_verify.sh [frames]: runs the FSR 4 benchmark (out/gpu/fsr4-bench, pseudo-random
 # inputs) for every preset and output size with the original passes and with fsr4_shaders/opt
 # (tools/fsr4_optimize.sh) and prints the post pass times.

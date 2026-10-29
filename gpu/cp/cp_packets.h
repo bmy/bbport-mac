@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport cp: the fields of the PM4 packets the command processor acts on, read from their body
 // (the dwords after the header). Views are trivially copyable copies of the body, so a packet can
@@ -5,6 +6,8 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
+#include <cstdio>
 #include <chrono>
 #include <cstring>
 
@@ -424,6 +427,21 @@ inline constexpr u32 ColorMarkerPush = 0x6875000Eu;
 inline constexpr u32 PatchedFlip = 0x68750776u;
 } // namespace NopPayload
 
+/// When the last corrupt end-of-pipe packet was skipped (steady clock ms; 0: never): a wait for the
+/// label it should have written gives up (WaitRegMemGraphics).
+inline std::atomic<long long> g_bad_eop_at_ms{0};
+inline void ReportBadEop(const char* what, u32 select) {
+    g_bad_eop_at_ms.store(std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now().time_since_epoch())
+                              .count() + 1,
+                          std::memory_order_relaxed);
+    static std::atomic<u32> reported{0};
+    if (reported.fetch_add(1, std::memory_order_relaxed) < 16) {
+        std::fprintf(stderr, "Bad PM4: end-of-pipe %s select %u skipped (corrupt packet)\n", what,
+                     select);
+    }
+}
+
 template <typename Write, typename Irq>
 void EventWriteEop::Signal(Write&& write, Irq&& irq) const {
     auto* address = reinterpret_cast<void*>(Address());
@@ -443,7 +461,10 @@ void EventWriteEop::Signal(Write&& write, Irq&& irq) const {
         write(address, GpuPerfCounter(), 8u);
         break;
     default:
-        UNREACHABLE_MSG("end-of-pipe data select {}", u32(Data()));
+        // A corrupt packet (the game's command buffers at a character spawn on Windows, after
+        // PM4 repair, 2026-10-25): no write, reported, instead of stopping the game.
+        ReportBadEop("data", u32(Data()));
+        return;
     }
     switch (Int()) {
     case IntSel::None:
@@ -453,7 +474,8 @@ void EventWriteEop::Signal(Write&& write, Irq&& irq) const {
         irq();
         break;
     default:
-        UNREACHABLE_MSG("end-of-pipe interrupt select {}", u32(Int()));
+        ReportBadEop("interrupt", u32(Int()));
+        break;
     }
 }
 

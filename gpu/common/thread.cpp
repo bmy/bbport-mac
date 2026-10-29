@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include <cerrno>
 #include <cstring>
@@ -12,6 +13,9 @@
 
 #include "common/logging/log.h"
 #include "common/thread.h"
+#ifdef _WIN32
+extern "C" void bb_win32_set_thread_name(const char* name); // posix_win32.cpp
+#endif
 
 namespace Common {
 
@@ -47,6 +51,9 @@ void SetCurrentThreadName(const char* name) {
     pthread_setname_np(name);
     MaybeInteractive(name);
 #else
+#ifdef _WIN32
+    bb_win32_set_thread_name(name);
+#endif
     SetThreadName(reinterpret_cast<void*>(pthread_self()), name);
 #endif
 }
@@ -91,15 +98,29 @@ bool AccurateSleep(std::chrono::nanoseconds duration, std::chrono::nanoseconds* 
                      .tv_nsec = long(duration.count() % 1'000'000'000)};
     timespec left{};
     int result;
+#ifdef _WIN32
+    // MinGW's nanosleep is Sleep(whole ms): Sleep(0), a spin, under one (bbport_win32.h has the
+    // high-resolution clock_nanosleep).
+    (void)interruptible;
+    result = clock_nanosleep(CLOCK_MONOTONIC, 0, &request, &left);
+#else
     while ((result = nanosleep(&request, &left)) != 0 && errno == EINTR && !interruptible) {
         request = left;
     }
+#endif
     if (remaining) {
         *remaining = result == 0 ? std::chrono::nanoseconds{0}
                                  : std::chrono::seconds{left.tv_sec} +
                                        std::chrono::nanoseconds{left.tv_nsec};
     }
     return result == 0;
+}
+
+void SleepUntil(std::chrono::steady_clock::time_point deadline) {
+    const auto left = deadline - std::chrono::steady_clock::now();
+    if (left.count() > 0) {
+        AccurateSleep(std::chrono::duration_cast<std::chrono::nanoseconds>(left), nullptr, false);
+    }
 }
 
 AccurateTimer::AccurateTimer(std::chrono::nanoseconds period_) : period{period_} {}
@@ -110,6 +131,11 @@ void AccurateTimer::Start() {
         deadline = now;
     }
     if (deadline > now) {
+#ifdef _WIN32
+        // steady_clock and CLOCK_MONOTONIC need not share an epoch here: a relative sleep.
+        SleepUntil(deadline);
+        return;
+#endif
         const auto since_epoch = deadline.time_since_epoch();
         const timespec at{
             .tv_sec = time_t(std::chrono::duration_cast<std::chrono::seconds>(since_epoch).count()),

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport Windows: MinGW's setjmp.h (re)defines setjmp/longjmp on every inclusion (outside its
 // guard), with a longjmp that unwinds through SEH and stops at the game's frames. In C they are

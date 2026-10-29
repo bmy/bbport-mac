@@ -16,13 +16,13 @@ let
     ++ lib.optional fsr411 "fsr4_411";
   # Only what the package needs (the tree also holds builds, profiles and captures).
   wanted = [
-    "run.sh" "out" "out/bb-probe" "out/bb-gpu-capabilities" "out/gpu" "out/gpu/libbbgpu.so" "tools"
+    "run.sh" "VERSION" "LICENSE" "NOTICE" "shader_recipes.bin" "image_shapes.txt" "out" "out/bb-probe" "out/bb-gpu-capabilities" "out/gpu" "out/gpu/libbbgpu.so" "tools"
   ] ++ assetDirs;
   # DLSS (a build with DLSS_SDK_ROOT): the bridge, NVIDIA's runtime library and its license, as
   # NVIDIA's RTX SDK license allows in an application. Without them the launcher lets the player
   # choose NVIDIA's library (the bridge is still needed).
-  dlssFiles = [ "out/libbbport_dlss.so" "out/NVIDIA-DLSS-LICENSE.txt" "out/gpu/libbbnet.so" "out/gpu/libbbnet20.so" ];
-  isNgx = rel: lib.hasPrefix "out/libnvidia-ngx-dlss.so." rel;
+  dlssFiles = [ "out/libbbport_dlss.so" "out/NVIDIA-DLSS-LICENSE.txt" "out/gpu/libbbnet20.so" ];
+  isNgx = rel: lib.hasPrefix "out/libnvidia-ngx-dlss.so." rel || lib.hasPrefix "out/libnvidia-ngx-dlssg.so." rel;
   src = builtins.path {
     name = "bbport-src";
     path = root;
@@ -81,6 +81,15 @@ let
       jq ".ICD.library_path = \"$out/lib/libvulkan_$name.so\"" \
         ${mesaVulkan}/share/vulkan/icd.d/''${name}_icd.x86_64.json > $out/share/vulkan/icd.d/''${name}_icd.x86_64.json
     done
+    # Mesa's anti-lag layer (VK_AMD_anti_lag: AMD Anti-Lag 2 on any Mesa driver). The game finds
+    # it through BB_BUNDLED_VK_LAYER_PATH and switches it on itself (vulkan/platform.cpp).
+    mkdir -p $out/share/vulkan/implicit_layer.d
+    cp ${mesaVulkan}/lib/libVkLayer_MESA_anti_lag.so $out/lib/
+    chmod u+w $out/lib/libVkLayer_MESA_anti_lag.so
+    remove-references-to -t ${mesaVulkan} $out/lib/libVkLayer_MESA_anti_lag.so
+    jq ".layer.library_path = \"$out/lib/libVkLayer_MESA_anti_lag.so\"" \
+      ${mesaVulkan}/share/vulkan/implicit_layer.d/VkLayer_MESA_anti_lag.json \
+      > $out/share/vulkan/implicit_layer.d/VkLayer_MESA_anti_lag.json
   '';
   icds = lib.concatMapStringsSep ":" (name: "${vulkanDrivers}/share/vulkan/icd.d/${name}")
     [ "radeon_icd.x86_64.json" "intel_icd.x86_64.json" ];
@@ -104,6 +113,11 @@ let
   gtk4 = (pkgs.gtk4.override { cupsSupport = false; trackerSupport = false; }).overrideAttrs (old: {
     buildInputs = lib.filter (p: !(lib.hasPrefix "gst-" (p.pname or ""))) old.buildInputs;
     mesonFlags = old.mesonFlags ++ [ "-Dmedia-gstreamer=disabled" ];
+    # GTK's demo apps' menu entries and AppStream data: AppImage managers showed the port as
+    # "GTK Demo" (org.gtk.Demo4.appdata.xml in the closure).
+    postInstall = (old.postInstall or "") + ''
+      rm -f $out/share/applications/org.gtk.*.desktop $out/share/metainfo/org.gtk.*.xml
+    '';
   });
   libadwaita = pkgs.libadwaita.override { inherit gtk4; };
   # Fonts: bundled DejaVu and Adwaita plus the host's usual font directories, but not the host's
@@ -155,11 +169,15 @@ pkgs.stdenv.mkDerivation {
     runHook preInstall
     d=$out/share/bbport
     mkdir -p $d/bin $out/bin
-    cp run.sh $d/
+    cp run.sh VERSION LICENSE NOTICE $d/
+    # The recorded game's shader recipes (gpu/render/shader_rebuild.h; no game code in them).
+    if [ -f shader_recipes.bin ]; then cp shader_recipes.bin $d/; fi
+    if [ -f image_shapes.txt ]; then cp image_shapes.txt $d/; fi
     cp -r scripts patches fsr4_shaders launcher $d/
     mkdir -p $d/tools
     cp -r tools/fsr4cap $d/tools/
     rm -rf $d/tools/fsr4cap/__pycache__
+    find $d -name __pycache__ -type d -prune -exec rm -rf {} +
     mkdir -p $d/tools/fsr4cap/bin
     ln -s ${dxilSpirv}/bin/dxil-spirv $d/tools/fsr4cap/bin/dxil-spirv
     install -m644 ${fsr4capExe} $d/tools/fsr4cap/bin/fsr4cap.exe
@@ -179,23 +197,56 @@ pkgs.stdenv.mkDerivation {
     PY
       cp -r fsr4_411 $d/
     fi
+    # A menu entry and an icon (#132, #133, #287): nix-appimage puts them at the AppImage's root
+    # (.desktop, .DirIcon) for AppImage managers (Gear Lever, AppManager). The icon is the port's
+    # own, not the game's art.
+    install -Dm644 ${./bbport.png} $out/share/icons/hicolor/256x256/apps/bbport.png
+    mkdir -p $out/share/applications
+    cat > $out/share/applications/bbport.desktop <<'DESKTOP'
+    [Desktop Entry]
+    Type=Application
+    Name=Bloodborne (bbport)
+    Comment=Native PC port launcher for your own copy of Bloodborne
+    Exec=bbport
+    Icon=bbport
+    Terminal=false
+    Categories=Game;
+    StartupWMClass=bbport
+    DESKTOP
+    sed -i 's/^    //' $out/share/applications/bbport.desktop
+    # AppStream data for software centres and AppImage managers (name, summary, licence).
+    mkdir -p $out/share/metainfo
+    cat > $out/share/metainfo/bbport.appdata.xml <<'METAINFO'
+    <?xml version="1.0" encoding="UTF-8"?>
+    <component type="desktop-application">
+      <id>bbport</id>
+      <name>Bloodborne (bbport)</name>
+      <summary>Native PC port launcher for your own copy of Bloodborne</summary>
+      <metadata_license>CC0-1.0</metadata_license>
+      <description>
+        <p>Runs the PS4 game Bloodborne (CUSA03173, v1.09) natively on Linux from the player's own
+        game files, with FSR upscaling, frame generation and the community patches.</p>
+      </description>
+      <launchable type="desktop-id">bbport.desktop</launchable>
+      <url type="homepage">https://github.com/deadinside28/bloodborne_pc</url>
+      <categories><category>Game</category></categories>
+    </component>
+    METAINFO
+    sed -i 's/^    //' $out/share/metainfo/bbport.appdata.xml
     install -m755 out/bb-probe $d/bin/bb-probe
     install -m755 out/bb-gpu-capabilities $d/bin/bb-gpu-capabilities
     install -Dm755 out/gpu/libbbgpu.so $d/bin/gpu/libbbgpu.so
     # Their debug info names the build environment's headers (the full GCC, Vulkan headers): Nix
     # took those for dependencies, ~300 MB. Symbols stay (crash reports).
     ${pkgs.binutils-unwrapped}/bin/strip --strip-debug $d/bin/bb-probe $d/bin/bb-gpu-capabilities
-    # The online module (gpu/bbnet), when the build has it.
-    if [ -f out/gpu/libbbnet.so ]; then
-      install -Dm755 out/gpu/libbbnet.so $d/bin/gpu/libbbnet.so
-    fi
+    # The online module (gpu/bbnet20), when the build has it.
     if [ -f out/gpu/libbbnet20.so ]; then
       install -Dm755 out/gpu/libbbnet20.so $d/bin/gpu/libbbnet20.so
-      ${pkgs.binutils-unwrapped}/bin/strip --strip-debug $d/bin/gpu/libbbnet20.so $d/bin/gpu/libbbnet.so 2>/dev/null || true
+      ${pkgs.binutils-unwrapped}/bin/strip --strip-debug $d/bin/gpu/libbbnet20.so 2>/dev/null || true
     fi
     if [ -f out/libbbport_dlss.so ]; then
       install -m755 out/libbbport_dlss.so $d/bin/libbbport_dlss.so
-      for ngx in out/libnvidia-ngx-dlss.so.*; do
+      for ngx in out/libnvidia-ngx-dlss.so.* out/libnvidia-ngx-dlssg.so.*; do
         [ -f "$ngx" ] && install -m755 "$ngx" $d/bin/
       done
       [ -f out/NVIDIA-DLSS-LICENSE.txt ] && install -m644 out/NVIDIA-DLSS-LICENSE.txt $d/NVIDIA-DLSS-LICENSE.txt
@@ -214,8 +265,9 @@ pkgs.stdenv.mkDerivation {
       --set BB_PREBUILT 1 \
       --set PYTHON ${pkgs.python3}/bin/python3 \
       --set BB_BUNDLED_VK_DRIVER_FILES ${icds} \
+      --set BB_BUNDLED_VK_LAYER_PATH ${vulkanDrivers}/share/vulkan/implicit_layer.d \
       --prefix PATH : ${lib.makeBinPath [ pkgs.bash pkgs.coreutils pkgs.util-linux pkgs.procps
-                                          pkgs.gawk pkgs.gnused pkgs.gnugrep pkgs.spirv-tools
+                                          pkgs.gawk pkgs.gnused pkgs.gnugrep pkgs.spirv-tools pkgs.p7zip
                                           pkgs.systemdMinimal ]} \
       --run 'export BB_DATA_DIR=''${BB_DATA_DIR:-''${XDG_DATA_HOME:-$HOME/.local/share}/bbport}; mkdir -p "$BB_DATA_DIR"'
     # The game alone, without the launcher (settings from the data directory's bbport.ini).
@@ -224,6 +276,7 @@ pkgs.stdenv.mkDerivation {
       --set BB_PREBUILT 1 \
       --set PYTHON ${pkgs.python3}/bin/python3 \
       --set BB_BUNDLED_VK_DRIVER_FILES ${icds} \
+      --set BB_BUNDLED_VK_LAYER_PATH ${vulkanDrivers}/share/vulkan/implicit_layer.d \
       --prefix PATH : ${lib.makeBinPath [ pkgs.bash pkgs.coreutils pkgs.procps ]} \
       --run 'export BB_DATA_DIR=''${BB_DATA_DIR:-''${XDG_DATA_HOME:-$HOME/.local/share}/bbport}; mkdir -p "$BB_DATA_DIR"'
   '';

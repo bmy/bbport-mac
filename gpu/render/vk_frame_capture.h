@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: frame analyzer. Creating the file named by BB_CAPTURE_TRIGGER records the next full
 // frame: every render pass (targets, depth, draw count, shaders, sampled textures) and compute
@@ -49,6 +50,8 @@ public:
     /// Contents of a bound buffer (first 1 KiB), kept for small passes and a pass's first draw.
     static void Buffer(u64 stage_hash, u32 slot, VAddr address, const void* data, u64 size);
     static void Note(const char* text);
+    /// A line kept with the next draw or dispatch (like Buffer).
+    static void Pending(std::string text);
 
 private:
     enum : u32 { Idle, Armed, Recording };

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: libSceGnmDriver, the PS4's graphics driver library as games call it. It writes PM4
 // packets into the game's command buffers (draws, dispatches, shader state, markers: the console

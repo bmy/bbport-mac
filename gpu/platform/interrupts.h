@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: the GPU's interrupt lines as the system libraries see them. The command processor
 // raises a line (end of pipe, flip, compute release, idle); libraries listen: Gnm turns end-of-pipe

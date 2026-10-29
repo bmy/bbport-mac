@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: writes a multisampled depth image from a color image that holds one sample per
 // channel (a game's depth resolve read back as color): sample N takes channel N.

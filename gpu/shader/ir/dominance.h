@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport shader translator IR: dominators and dominance frontiers (Cooper, Harvey and Kennedy,
 // "A Simple, Fast Dominance Algorithm"), from a post order.

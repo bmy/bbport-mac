@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: x86-64 instruction decoding (Zydis) for fault handlers that need to know what a
 // faulting instruction did.

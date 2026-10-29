@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Float arithmetic, transcendentals and compares. Adds, multiplies, divides and FMAs are
 // NoContraction: the host compiler must not fuse what GCN computed separately.

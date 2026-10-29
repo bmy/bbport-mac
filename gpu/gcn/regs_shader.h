@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport gcn: the shader stages' registers (SPI_SHADER_*, COMPUTE_*, the pixel shader's inputs
 // and exports) and the header the PS4 shader compiler appends to each program.

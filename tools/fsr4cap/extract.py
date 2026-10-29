@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 # bbport: builds the FSR 4.1.1 asset set for vk_fsr411.cpp from fsr4cap captures
 # (capture_<render>_<output> directories written by capture_all.sh; fp8/capture_* for the DLL's
 # FP8 matrix variant).
@@ -37,10 +39,25 @@ VARIANTS = {
                      8: (16, 2), 9: (16, 1), 10: (16, 4), 11: (16, 1), 12: (16, 8)},
             'prepass': (64, 2), 'postpass': (64, 2), 'post_align': 32},
 }
+# FSR 4.1.2 (AMD's driver DLL, amdxcffx64.dll): its INT8 model for RDNA2 (ffxProvider_FSR4_Int8_Navi2)
+# has the INT8 passes and weights' layout, with pass11 in 8x4 tiles.
+VARIANTS['navi2'] = dict(VARIANTS['int8'], tile={**VARIANTS['int8']['tile'], 11: (8, 4)})
 POST_LOCAL_SIZE = 32
 # Output folder, extra dxil-spirv flags and environment of each translation of a variant.
+# FSR 4.1.2's small INT8 model (ffxProvider_FSR4Lite_Int8; vk_fsr411.cpp kLite): 12 dispatches,
+# named here by position (the second border clear of pass1, its shader also called pass1_post,
+# is pass1_postb). Per dispatch: (file name, kind, level, tile).
+LITE = [('spd', 'spd', 0, None), ('prepass', 'prepass', 0, (16, 16)), ('pass0_post', 'border', 1, None),
+        ('pass1', 'model', 1, (32, 4)), ('pass1_post', 'border', 1, None), ('pass1_postb', 'border', 2, None),
+        ('pass2', 'model', 2, (64, 1)), ('pass2_post', 'border', 2, None), ('pass3', 'model', 2, (64, 1)),
+        ('pass3_post', 'border', 1, None), ('postpass', 'postpass', 0, (32, 32)), ('rcas', 'rcas', 0, None)]
+LITE_SEQUENCE = [n if n != 'pass1_postb' else 'pass1_post' for n, *_ in LITE]
+LITE_SHIFTS = [1, 0, 1, 2, 2, 1, 0, 0, 0]
+VARIANTS['lite'] = dict(VARIANTS['int8'])
 TRANSLATIONS = {
     'int8': [('', [], {})],
+    'navi2': [('navi2', [], {})],
+    'lite': [('lite', [], {})],
     'fp8': [('fp8', ['--full-wmma', '1', '0'], {}),
             ('fp8emu', [], {'DXIL_SPIRV_CONFIG': 'wmma_rdna3_workaround'})],
 }
@@ -67,9 +84,31 @@ def shader_name(path):
 def ceil_div(a, b):
     return (a + b - 1) // b
 
-def tensor_sizes(aw, ah):
+def tensor_sizes(aw, ah, variant='int8'):
+    if variant == 'lite':
+        return [(aw >> s, ah >> s) for s in LITE_SHIFTS]
     d = [1, 0, 1, 1, 2, 2, 2, 3, 3, 3, 2, 2, 1, 1, 0, 0, 0]
     return [(aw >> s, ah >> s) for s in d]
+
+def border_groups(level, aw, ah, ow, oh, align):
+    w, h = aw >> level, ah >> level
+    t2160 = ow > 1920 or oh > 1080
+    tw, th = (3840 if t2160 else 1920) >> level, (2160 if t2160 else 1080) >> level
+    kx = min((tw + align - 1) // align * align + 1 - w, align + 1)
+    ky = min(th + 1 - h, 1)
+    threads = (w + 1 + kx) + h + h * kx + (w + 1 + kx) * ky
+    return (ceil_div(threads, POST_LOCAL_SIZE), 1, 1)
+
+def lite_groups(index, rw, rh, ow, oh):
+    _, kind, level, tile = LITE[index]
+    aw, ah = (ow + 7) & ~7, (oh + 7) & ~7
+    if kind == 'spd':
+        return (ceil_div(rw, 64), ceil_div(rh, 64), 1)
+    if kind == 'rcas':
+        return (ceil_div(aw, 16), ceil_div(ah, 16), 1)
+    if kind == 'border':
+        return border_groups(level, aw, ah, ow, oh, VARIANTS['lite']['post_align'])
+    return (ceil_div(aw >> level, tile[0]), ceil_div(ah >> level, tile[1]), 1)
 
 def expected_groups(name, rw, rh, ow, oh, variant):
     rules = VARIANTS[variant]
@@ -98,7 +137,9 @@ def expected_groups(name, rw, rh, ow, oh, variant):
     return (ceil_div(threads, POST_LOCAL_SIZE), 1, 1)
 
 variants = {}
-captures = [('int8', c) for c in sorted(glob.glob(os.path.join(root, 'capture_*')))]
+# FSR4CAP_MODEL: which INT8 model the capture_* directories hold (int8; navi2: the RDNA2 one).
+int8_model = os.environ.get('FSR4CAP_MODEL', 'int8')
+captures = [(int8_model, c) for c in sorted(glob.glob(os.path.join(root, 'capture_*')))]
 captures += [('fp8', c) for c in sorted(glob.glob(os.path.join(root, 'fp8', 'capture_*')))]
 for variant, cap in captures:
     sets = variants.setdefault(variant, {})
@@ -118,15 +159,18 @@ for variant, cap in captures:
     frame = re.split(r'MARK (?:frame \d+|end)\n', trace.split(mark)[1])[0]
     disp = re.findall(r'DISPATCH #\d+ cs=(\w+) root=\w+ groups=(\d+),(\d+),(\d+)\n((?:  .*\n)*)', frame)
     names = [shader_name(os.path.join(cap, f'cs_{h}.dxil')) for h, *_ in disp]
-    if names != SEQUENCE:
+    if names != (LITE_SEQUENCE if variant == 'lite' else SEQUENCE):
         fail(f'{cap}: sequence {names}')
         continue
+    if variant == 'lite':
+        names = [n for n, *_ in LITE]
     key = f'{tier}_{model}'
     entry = sets.setdefault(key, {'shaders': {}, 'init': None, 'caps': []})
     entry['caps'].append(os.path.basename(cap))
-    for (h, gx, gy, gz, body), name in zip(disp, names):
+    for index, ((h, gx, gy, gz, body), name) in enumerate(zip(disp, names)):
         groups = (int(gx), int(gy), int(gz))
-        want = expected_groups(name, rw, rh, ow, oh, variant)
+        want = (lite_groups(index, rw, rh, ow, oh) if variant == 'lite'
+                else expected_groups(name, rw, rh, ow, oh, variant))
         if want != groups:
             fail(f'{cap} {name}: groups {groups}, rule {want}')
         prev = entry['shaders'].get(name)
@@ -136,10 +180,12 @@ for variant, cap in captures:
         entry.setdefault('dxil', {})[name] = os.path.join(cap, f'cs_{h}.dxil')
         cbv = re.search(r'CBV r\d+\+\d+ data=(data_\w+\.bin)', body)
         data = open(os.path.join(cap, cbv[1]), 'rb').read() if cbv else b''
-        if data and re.fullmatch(r'pass\d+(_post)?', name):
+        if data and re.fullmatch(r'pass\d+(_postb?)?', name):
             u = struct.unpack('<68I', data[:272])
-            got = [u[i:i + 2] for i in range(0, 68, 4)]
-            if got != tensor_sizes((ow + 7) & ~7, (oh + 7) & ~7):
+            want_sizes = tensor_sizes((ow + 7) & ~7, (oh + 7) & ~7, variant)
+            # The Lite model's table has 9 entries (what follows in its buffer is not its own).
+            got = [u[i:i + 2] for i in range(0, 4 * len(want_sizes), 4)]
+            if got != want_sizes:
                 fail(f'{cap} {name}: tensor sizes {got}')
         if name == 'prepass':
             f = struct.unpack('<16f', data[:64])
@@ -150,7 +196,8 @@ for variant, cap in captures:
                     fail(f'{cap} prepass constant {i}: {f[i]} != {w}')
             if (u[0], u[1], u[3], u[4]) != (ow, oh, rw, rh):
                 fail(f'{cap} prepass sizes {u[:5]}')
-    init = re.search(r'COPYBUFFER r\d+\+0 <- r\d+\+0 size 131072 data=(data_\w+\.bin)', trace)
+    # The weights: 131072 bytes (27392 for the Lite model).
+    init = re.search(r'COPYBUFFER r\d+\+0 <- r\d+\+0 size (?:131072|27392) data=(data_\w+\.bin)', trace)
     if not init:
         fail(f'{cap}: no model initializer upload recorded')
         continue
@@ -192,12 +239,14 @@ def write_set(d, entry, variant, flags, env):
         if (wave == 32) != matrices or wave not in (0, 32):
             sys.exit(f'{d}/{name}: wave size heuristic {wave}, cooperative matrices {matrices}: '
                      f'vk_fsr411.cpp would pick another subgroup size')
-        if name == 'postpass' and variant == 'int8':
+        if name == 'postpass' and variant in ('int8', 'navi2'):
             # Stores through workgroup memory (bit-exact, ~2.3x faster): postpass_lds.py.
             os.replace(spv, os.path.join(d, 'postpass_orig.spv'))
             asm = subprocess.run(['spirv-dis', os.path.join(d, 'postpass_orig.spv')], check=True,
                                  capture_output=True, text=True).stdout
-            run = subprocess.run([sys.executable, os.path.join(os.path.dirname(__file__), 'postpass_lds.py')],
+            # bbport-run.exe (Windows, PyInstaller) runs scripts itself: --run-script.
+            python = [sys.executable] + (['--run-script'] if getattr(sys, 'frozen', False) else [])
+            run = subprocess.run([*python, os.path.join(os.path.dirname(__file__), 'postpass_lds.py')],
                                  input=asm, capture_output=True, text=True)
             if run.returncode != 0:
                 sys.exit(f'postpass_lds.py failed on {d}/postpass:\n{run.stderr}')

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Find PM4 type-3 packet headers built as immediates in the eboot's code, grouped by function.
 
 Function bounds come from .eh_frame_hdr (the eboot is stripped). Usage: pm4_scan.py out/eboot.elf

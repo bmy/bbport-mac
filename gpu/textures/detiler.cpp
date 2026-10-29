@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "textures/detiler.h"
 
@@ -156,15 +157,16 @@ vk::Pipeline Detiler::Pipeline(const ImageInfo& info, bool tiler) {
     return handle;
 }
 
-vk::DescriptorBufferInfo Detiler::LevelTable(const ImageInfo& info, u32 num_levels) {
+vk::DescriptorBufferInfo Detiler::LevelTable(const ImageInfo& info, u32 num_levels,
+                                             u32 first_level) {
     LevelTableData table{
         .bank_swizzle = info.bank_swizzle,
-        .micro_tiled_levels = info.micro_tiled_mips,
+        .micro_tiled_levels = info.micro_tiled_mips >> first_level,
         .num_levels = num_levels,
     };
     for (u32 level = 0; level < num_levels; ++level) {
         auto& entry = table.levels[level];
-        entry = info.mips_layout[level];
+        entry = info.mips_layout[level + first_level];
         if (info.props.is_block) { // the shader counts 4x4 blocks
             entry.pitch = std::max((entry.pitch + 3) / 4, 1u);
             entry.height = std::max((entry.height + 3) / 4, 1u);
@@ -204,22 +206,25 @@ void Detiler::Dispatch(vk::Pipeline pipeline, const vk::DescriptorBufferInfo& ti
 }
 
 std::pair<const Buffer*, u64> Detiler::DetileImage(const Buffer* in_buffer, u64 in_offset,
-                                                   const ImageInfo& info) {
+                                                   const ImageInfo& info, u32 first_level) {
     if (!info.props.is_tiled) {
         return {in_buffer, in_offset};
     }
-    const auto levels = LevelTable(info, info.resources.levels);
-    const auto staging = runtime.GetStagingPool().Request(info.guest_size, MemoryType::DeviceLocal);
+    first_level = std::min(first_level, info.resources.levels - 1);
+    const u64 skipped = first_level != 0 ? info.mips_layout[first_level].offset : 0;
+    const u64 bytes = info.guest_size - skipped;
+    const auto levels = LevelTable(info, info.resources.levels - first_level, first_level);
+    const auto staging = runtime.GetStagingPool().Request(bytes, MemoryType::DeviceLocal);
     scheduler.EndRendering();
     runtime.FlushBarriers();
     Dispatch(Pipeline(info, false), {in_buffer->Handle(), in_offset, info.guest_size},
-             {staging.buffer->Handle(), staging.offset, info.guest_size}, levels,
-             info.guest_size / (info.num_bits / 8));
+             {staging.buffer->Handle(), staging.offset, bytes}, levels,
+             u32(bytes / (info.num_bits / 8)));
     // The source may be the arena (pre-uploads), which later uploads write: they wait for this.
     runtime.AccessBuffer(in_buffer, in_offset, info.guest_size,
                          vk::PipelineStageFlagBits2::eComputeShader,
                          vk::AccessFlagBits2::eShaderRead);
-    runtime.AccessBuffer(staging.buffer, staging.offset, info.guest_size,
+    runtime.AccessBuffer(staging.buffer, staging.offset, bytes,
                          vk::PipelineStageFlagBits2::eComputeShader,
                          vk::AccessFlagBits2::eShaderWrite);
     return {staging.buffer, staging.offset};

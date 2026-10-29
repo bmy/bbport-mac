@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport BB_TIMELINE=<file>: a timeline of the frame's way to the GPU (guest submissions and
 // waits, decoding, Vulkan submissions, GPU completion), to see where the GPU waits for work.
@@ -6,6 +7,7 @@
 #pragma once
 
 #include <atomic>
+#include "shim/bb_env.h"
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -29,6 +31,14 @@ enum Event : std::uint32_t {
     DecoderIdleEnd,
     RecorderIdleBegin, ///< the draw recording thread (stage B) has no packet to run
     RecorderIdleEnd,
+    FlipProcessed,     ///< Display::Flip (where the frame statistics count frames), arg: flips so far
+    Presented,         ///< vkQueuePresentKHR returned, arg2: ns it took
+    PresentBegin,      ///< the presenter thread takes a frame (Presenter::Present)
+    AcquireBegin,      ///< vkAcquireNextImageKHR
+    AcquireEnd,
+    WaitSubmitBegin,   ///< the presenter waits for the frame's submission (BB_ASYNC_SUBMIT)
+    WaitSubmitEnd,
+    FlushCaller,       ///< Rasterizer::Flush, arg2: its return address minus FlushAnchor's (rasterizer.cpp)
 };
 
 struct Entry {
@@ -41,9 +51,9 @@ struct Entry {
 inline constexpr std::uint64_t Capacity = 400000;
 
 struct State {
-    const char* path = std::getenv("BB_TIMELINE");
+    const char* path = bb_env("BB_TIMELINE");
     std::int64_t start_ns = [] {
-        const char* env = std::getenv("BB_TIMELINE_START");
+        const char* env = bb_env("BB_TIMELINE_START");
         return std::int64_t(env ? std::atof(env) * 1e9 : 30e9);
     }();
     std::atomic<std::int64_t> first_ns{0};

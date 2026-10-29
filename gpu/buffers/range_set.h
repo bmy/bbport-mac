@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport buffers: a set of address ranges (half-open, touching ones joined), by address and size.
 #pragma once

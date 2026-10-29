@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport layer: the PS4 GPU's view of memory on a PC GPU, without sparse resources.
 //
@@ -62,11 +63,29 @@ struct Resolution {
 /// end of the mapping (one physically contiguous run) it lies in. False: not direct memory.
 using GuestTranslate = bool (*)(std::uint64_t va, std::uint64_t* phys, std::uint64_t* end);
 
+/// BB_ZERO_SCAN (diagnostics): notes guest addresses the GPU uses.
+void NoteGpuTouch(std::uint64_t va, std::uint64_t size);
+
+/// Lazy guest memory: makes [phys, phys + size) of direct memory a source (an import of the
+/// game's memory where the GPU had none); true when a source now holds at least its start.
+using GuestPopulate = bool (*)(std::uint64_t phys, std::uint64_t size);
+/// Lazy guest memory: where the run of physical memory from `phys` the populate callback just
+/// refused as never written (a hole of the game's memory) ends; 0 for none.
+using GuestHoleEnd = std::uint64_t (*)(std::uint64_t phys);
+/// Ranges below this (the paged buffer size) are given a source holding them whole.
+inline constexpr std::uint64_t WholeLimit = std::uint64_t{64} << 20;
+
 class GpuMemory {
 public:
     static GpuMemory& Get();
 
     void SetTranslate(GuestTranslate translate);
+    /// Lazy guest memory (GuestPopulate): sources are made on demand and may overlap.
+    void SetPopulate(GuestPopulate populate);
+    void SetHoleEnd(GuestHoleEnd hole_end);
+    /// After a guest address failed to resolve: where the never written memory there ends (a
+    /// paged binding skips it whole), or 0.
+    std::uint64_t UnbackedEnd(std::uint64_t va) const;
     /// Blocks (the unit moved to VRAM) of 1 << shift bytes.
     void SetBlockShift(std::uint32_t shift);
     std::uint32_t BlockShift() const {
@@ -74,12 +93,21 @@ public:
     }
 
     /// A chunk of direct memory [phys, phys + size) the GPU uses in place through `buffer`.
-    /// Chunks never overlap and stay for the whole run.
+    /// Chunks stay for the whole run; with lazy guest memory they may overlap (the same pages
+    /// imported again for a range across two).
     void AddGuestSource(std::uint64_t phys, std::uint64_t size, VkBuffer buffer,
                         VkDeviceAddress device_address, void* owner);
 
-    /// The guest source holding physical address `phys`, or null.
-    const MemorySource* GuestSource(std::uint64_t phys) const;
+    /// The guest source `owner` made (AddGuestSource) is gone (a heap's piece given back): later
+    /// lookups do not find it. Its MemorySource stays allocated (a reader may hold the old list).
+    void RemoveGuestSource(void* owner);
+
+    /// Diagnostics: the physical address a GPU address in a guest source holds, or ~0.
+    std::uint64_t PhysOfDevice(std::uint64_t device_address) const;
+
+    /// The guest source holding physical address `phys` that reaches the furthest, or null.
+    /// With lazy guest memory a missing one is made (GuestPopulate) for `want` bytes from phys.
+    const MemorySource* GuestSource(std::uint64_t phys, std::uint64_t want = 1) const;
 
     /// [va, va + size) whole in one guest source and physically contiguous: bound in place as
     /// one buffer range. Empty when part of it is not direct memory in a source, or it spans
@@ -148,10 +176,13 @@ public:
                 at = next;
                 continue;
             }
-            const MemorySource* source = GuestSource(phys);
             std::uint64_t piece = std::min(end, map_end) - at;
+            const MemorySource* source = GuestSource(phys, piece);
             if (source) {
                 piece = std::min(piece, source->base + source->size - phys);
+            }
+            if (source) {
+                NoteGpuTouch(at, piece);
             }
             f(Span{source, source ? phys - source->base : 0, at, piece});
             at += piece;
@@ -163,6 +194,11 @@ private:
     bool AllValidLocked(std::uint64_t first_block, std::uint64_t end_block) const;
 
     GuestTranslate translate = nullptr;
+    GuestPopulate populate = nullptr;
+    GuestHoleEnd hole_end = nullptr;
+    /// The longest guest source (lookups walk back that far over overlapping ones).
+    std::atomic<std::uint64_t> longest_source{0};
+    const MemorySource* FindSource(std::uint64_t phys, std::uint64_t want) const;
     std::uint32_t block_shift = 16;
     std::mutex write_mutex;
     /// Sorted by base; replaced whole on each addition (readers take no lock; old lists stay

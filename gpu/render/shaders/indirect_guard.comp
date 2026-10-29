@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: the group counts of an indirect dispatch, checked on the GPU before it runs
 // (vk_indirect_guard.cpp). Counts no game dispatches on purpose (billions of groups: garbage in

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport Windows: sigsetjmp/siglongjmp for the fault recovery points (a draw preparation worker
 // reading guest memory that went away; the runtime's own). No SEH unwinding (guest frames have no

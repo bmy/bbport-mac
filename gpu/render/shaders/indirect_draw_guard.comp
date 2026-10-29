@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: the arguments of indirect draws, checked on the GPU before the draws run
 // (vk_indirect_guard.cpp). A draw of billions of vertices (garbage in its arguments: another game,

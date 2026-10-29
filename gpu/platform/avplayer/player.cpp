@@ -1,5 +1,9 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include <chrono>
+#include "shim/bb_env.h"
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include "common/logging/log.h"
@@ -10,7 +14,13 @@ namespace BbAvPlayer {
 
 namespace {
 constexpr s32 ErrorNotSupported = s32(0x806A0004);
+
+/// BB_AVPLAYER_TRACE=1 (avplayer.cpp's trace): what the player tells the game.
+bool Tracing() {
+    static const bool on = bb_env_on("BB_AVPLAYER_TRACE");
+    return on;
 }
+} // namespace
 
 Player::Player(const AvPlayerInitData& init_) : init{init_}, game_events{init_.event_replacement} {
     auto_start = !game_events.event_callback || init.auto_start;
@@ -62,12 +72,20 @@ bool Player::SetState(State next) {
 }
 
 void Player::Emit(AvPlayerEvents event, void* data) {
+    if (Tracing()) {
+        std::printf("AvPlayer trace: event %d to the game%s (state %d)\n", int(event),
+                    auto_start && event == AvPlayerEvents::StateReady ? " (auto start instead)" : "",
+                    int(state.load()));
+    }
     if (auto_start && event == AvPlayerEvents::StateReady) {
         AutoStart(); // the player starts itself instead of telling the game
         return;
     }
     if (game_events.event_callback) {
         game_events.event_callback(game_events.object_ptr, event, 0, data);
+        if (Tracing()) {
+            std::printf("AvPlayer trace: event %d: the game's callback returned\n", int(event));
+        }
     }
 }
 
@@ -179,6 +197,9 @@ void Player::Handle(const Event& event) {
             std::unique_lock lock{source_mutex};
             found = source && source->FindStreams();
         }
+        if (Tracing()) {
+            std::printf("AvPlayer trace: streams %s (%d)\n", found ? "found" : "NOT found", found ? StreamCount() : -1);
+        }
         if (found) {
             SetState(State::Ready);
             Announce(State::Ready);
@@ -246,7 +267,19 @@ bool Player::AddSource(std::string_view path) {
         }
     }
     SetState(State::AddingSource);
-    Post({Event::Kind::AddSource});
+    // The streams found and StateReady told before AddSource returns: the game's movie (0x28fe620:
+    // one event a frame from its queue; 0x28fe720 starts only after StateReady was handled) tries
+    // to start on its next frames and tears the movie down when that fails. At 200+ FPS in the
+    // menus a frame came before the controller thread's StateReady (~10 ms: the stream search) and
+    // the opening movie's audio thread then ran into its torn-down object (DL_PANIC "Mutex is not
+    // initialized", Windows, 2026-10-27; at the PS4's 33 ms a frame it always came in time).
+    // BB_AVPLAYER_ASYNC_READY=1: on the controller thread, as before.
+    static const bool async_ready = bb_env_on("BB_AVPLAYER_ASYNC_READY");
+    if (async_ready) {
+        Post({Event::Kind::AddSource});
+    } else {
+        Handle({Event::Kind::AddSource});
+    }
     return true;
 }
 

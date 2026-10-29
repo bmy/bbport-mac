@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport Windows: sigaction over a vectored exception handler (posix_win32.cpp). The handlers the
 // port has for Linux (write traps' SIGSEGV, the int3 hooks' SIGTRAP) run as they are: an access

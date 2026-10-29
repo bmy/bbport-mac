@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport gcn: surface tiling of the PS4 GPU. A surface names one of 32 tile modes (the
 // GB_TILE_MODE table the system programs: array mode, micro tile mode, pipes, splits) and,

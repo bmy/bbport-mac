@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #ifdef _WIN32
 #define VK_USE_PLATFORM_WIN32_KHR
@@ -9,10 +10,13 @@
 #endif
 
 #include "vulkan/platform.h"
+#include "shim/bb_env.h"
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include <fmt/ranges.h>
@@ -21,6 +25,9 @@
 #include "core/emulator_settings.h"
 #include "sdl_window.h"
 #include "upscale/vk_dlss.h"
+#ifdef _WIN32
+#include "platform/win32/nvidia_profile.h"
+#endif
 
 #ifdef __APPLE__
 #include <climits>
@@ -139,6 +146,26 @@ std::vector<const char*> Extensions(Frontend::WindowSystemType window_type,
 vk::UniqueInstance CreateInstance(Frontend::WindowSystemType window_type, bool enable_validation,
                                   bool enable_crash_diagnostic) {
     LOG_INFO(Render_Vulkan, "Creating vulkan instance");
+#ifdef _WIN32
+    // Before the driver loads (it reads its profile then): NVIDIA cards kept low clocks.
+    BbNvidiaProfile::Apply();
+#endif
+    // AMD Anti-Lag 2 on Linux (render/vk_low_latency): Mesa's anti-lag layer gives
+    // VK_AMD_anti_lag on any Mesa driver. Its manifest is implicit but enabled only by this
+    // variable, and the layer does nothing for a device created without the antiLag feature.
+    // The package carries its own copy (BB_BUNDLED_VK_LAYER_PATH, found before the host's: a host
+    // layer is built against the host's libc). Only with BB_ANTI_LAG=1 (issue #289): it gained ~0 in
+    // our measurements, and a frame generation layer (lsfg-vk, mako) adds presents the layer does
+    // not expect, which crashes it (anti_lag_QueuePresentKHR, signal 11).
+    if (bb_env_on("BB_ANTI_LAG")) {
+        setenv("ENABLE_LAYER_MESA_ANTI_LAG", "1", 0);
+        if (const char* bundled = bb_env("BB_BUNDLED_VK_LAYER_PATH"); bundled && *bundled) {
+            const char* added = std::getenv("VK_ADD_IMPLICIT_LAYER_PATH");
+            const std::string path =
+                added && *added ? std::string{bundled} + ":" + added : std::string{bundled};
+            setenv("VK_ADD_IMPLICIT_LAYER_PATH", path.c_str(), 1);
+        }
+    }
 #ifdef __APPLE__
     // bbport (macOS): the driver manifest next to the executable unless the environment names one
     // (tools/macos env.sh and the app name KosmicKrisp).
@@ -153,7 +180,7 @@ vk::UniqueInstance CreateInstance(Frontend::WindowSystemType window_type, bool e
     // macOS drops it when bash starts) loads its own copy this way; the default search only tries
     // leaf names.
     static vk::detail::DynamicLoader loader = [] {
-        const char* library = std::getenv("BB_VULKAN_LIBRARY");
+        const char* library = bb_env("BB_VULKAN_LIBRARY");
         if (library && library[0]) {
             return vk::detail::DynamicLoader(library);
         }

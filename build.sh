@@ -28,6 +28,12 @@ pgo=${BB_PGO:-}
 if [[ -z $pgo ]]; then
     if [[ -n $(find pgo -name '*.gcda' -print -quit 2>/dev/null) ]]; then pgo=use; else pgo=off; fi
 fi
+# A profile only applies when its files are named as this build names them (relative to out/gpu,
+# -fprofile-prefix-path): one recorded elsewhere matched nothing and PGO was silently off.
+if [[ $pgo == use && -z $(find pgo -name 'CMakeFiles#bbgpu.dir#*.gcda' -print -quit 2>/dev/null) ]]; then
+    echo 'PGO: the profile in pgo/ is from another build layout (rebuild it: BB_PGO=generate); built without it' >&2
+    pgo=off
+fi
 mkdir -p pgo
 # Submodules (git clone --recursive, or: git submodule update --init) and this port's changes
 # to FSR-Vulkan (gpu/patches/fsr-vulkan), applied to its working tree once.
@@ -54,19 +60,27 @@ cmake -S gpu -B out/gpu -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBB_PGO="$pg
 grep '^-- Online module' out/gpu-cmake.log || true
 echo "GPU library: PGO $pgo, LTO ${BB_LTO:-ON}"
 # A failed GPU build must stop here: an older libbbgpu.so would otherwise be used silently.
-if ! ninja -C out/gpu bbgpu $(grep -q "^build bbnet:" out/gpu/build.ninja && echo bbnet) $(grep -q "^build bbnet20:" out/gpu/build.ninja && echo bbnet20) > out/gpu-build.log 2>&1; then
+if ! ninja -C out/gpu bbgpu $(grep -q "^build bbnet20:" out/gpu/build.ninja && echo bbnet20) > out/gpu-build.log 2>&1; then
     grep -v '^\[' out/gpu-build.log | tail -40 >&2
     echo 'GPU library build failed (full log: out/gpu-build.log)' >&2; exit 1
 fi
 # Optional DLSS (NVIDIA RTX): DLSS_SDK_ROOT=<github.com/NVIDIA/DLSS checkout> builds the bridge
 # (gpu/dlss_bridge, the only code using NVIDIA's SDK) and puts it next to bb-probe with NVIDIA's
-# libnvidia-ngx-dlss.so. Without them the DLSS upscaler is listed as unavailable.
+# libnvidia-ngx-dlss.so (Super Resolution) and libnvidia-ngx-dlssg.so (Frame Generation, GeForce
+# RTX 40 and newer; SDK 310.7 or newer has it). Without them the DLSS upscaler and DLSS Frame
+# Generation are listed as unavailable.
 if [[ -n ${DLSS_SDK_ROOT:-} ]]; then
     cmake -S gpu/dlss_bridge -B out/dlss-bridge -G Ninja -DCMAKE_BUILD_TYPE=Release \
         -DDLSS_SDK_ROOT="$DLSS_SDK_ROOT" >/dev/null
     ninja -C out/dlss-bridge >/dev/null
-    rm -f out/libnvidia-ngx-dlss.so.*
+    rm -f out/libnvidia-ngx-dlss.so.* out/libnvidia-ngx-dlssg.so.*
     cp out/dlss-bridge/libbbport_dlss.so "$DLSS_SDK_ROOT"/lib/Linux_x86_64/rel/libnvidia-ngx-dlss.so.* out/
+    if ls "$DLSS_SDK_ROOT"/lib/Linux_x86_64/rel/libnvidia-ngx-dlssg.so.* >/dev/null 2>&1; then
+        cp "$DLSS_SDK_ROOT"/lib/Linux_x86_64/rel/libnvidia-ngx-dlssg.so.* out/
+        echo "DLSS Frame Generation library: $(ls out/libnvidia-ngx-dlssg.so.*)"
+    else
+        echo "DLSS Frame Generation library not in this SDK (lib/Linux_x86_64/rel/libnvidia-ngx-dlssg.so.*): DLSS Super Resolution only"
+    fi
     cp "$DLSS_SDK_ROOT/LICENSE.txt" out/NVIDIA-DLSS-LICENSE.txt
     echo "DLSS bridge: out/libbbport_dlss.so"
 fi
@@ -89,7 +103,7 @@ if [[ ${1:-} == --test ]]; then
     out/pad-test
     "$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -I. -Isrc tests/test_runtime.c "${runtime[@]}" out/libatrac9.a -lm "${gpu[@]}" "${libraries[@]}" -o out/runtime-test
     out/runtime-test
-    "$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -Isrc tests/test_file_mods.c -o out/file-mods-test
+    "$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -Isrc tests/test_file_mods.c src/runtime_remote.c -o out/file-mods-test
     out/file-mods-test
     "$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -I. -Isrc tests/test_sema.c "${runtime[@]}" out/libatrac9.a -lm "${gpu[@]}" "${libraries[@]}" -o out/sema-test
     out/sema-test
@@ -97,4 +111,6 @@ if [[ ${1:-} == --test ]]; then
     out/online-test
     "$CC" -std=c11 -D_GNU_SOURCE -O2 -g -Wall -Wextra -Werror -I. -Isrc tests/test_content.c src/runtime_content.c -o out/content-test
     out/content-test
+    "$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -Isrc tests/test_trophy.c src/runtime_trophy.c -o out/trophy-test
+    out/trophy-test out/trophy_test_tmp
 fi

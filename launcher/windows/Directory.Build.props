@@ -1,0 +1,7 @@
+<Project>
+  <!-- Build output outside launcher/ (the AppImage copies that folder whole). -->
+  <PropertyGroup>
+    <BaseOutputPath>$(MSBuildThisFileDirectory)../../out/launcher-win/bin/</BaseOutputPath>
+    <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory)../../out/launcher-win/obj/</BaseIntermediateOutputPath>
+  </PropertyGroup>
+</Project>

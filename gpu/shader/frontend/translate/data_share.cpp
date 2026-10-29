@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // DS: LDS (and GDS) reads, writes, atomics, swizzles and the append/consume counters, and the
 // lane reads/writes of VOP2/VOP1. Fragment shaders on GCN use LDS only as per-lane scratch

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 """tools/fsr4cap/dll_info.py: which AMD DLLs the FSR 4.1.1 build accepts (synthetic files)."""
 from paths import ROOT
 import importlib.util

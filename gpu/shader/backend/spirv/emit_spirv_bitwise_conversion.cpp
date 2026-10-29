@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Bit casts and the packed formats: GLSL pack/unpack instructions where SPIR-V has them,
 // otherwise bit field extracts and inserts (integer formats, 10:11:11 floats through helper

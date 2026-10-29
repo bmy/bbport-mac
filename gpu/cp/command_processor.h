@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport cp: the command processor. Games submit command buffers (graphics: draw and constant
 // engine buffers; compute: ring buffers per queue); one thread (bb:GpuComm) decodes them in order,
@@ -115,9 +116,6 @@ public:
     std::thread::id GetGpuCommandProcessorThread() const {
         return thread_id;
     }
-    u32 GetGpuCommandProcessorThreadId() const {
-        return thread_tid;
-    }
 
     /// A compute ring the game mapped (sceGnmMapComputeQueue).
     struct AscQueueInfo {
@@ -134,8 +132,10 @@ public:
     /// The register-writing packets' effect on `regs` (shared with the draw preparation workers,
     /// which replay the stream): the blocks written go to `dirty`, the packet into `checksum`
     /// (equal checksums at a draw mean equal register files).
+    /// `touched`: also marks the blocks there (the reset of a CLEAR_STATE then restores only them).
     static void ApplyGraphicsRegisterPacket(Regs& regs, const u32* packet, u64& checksum,
-                                            RegDirty* dirty = nullptr);
+                                            RegDirty* dirty = nullptr,
+                                            Gcn::RegTouched* touched = nullptr, bool hash = true);
     static u64 HashRegisterPacket(u64 checksum, const u32* words, u32 count);
 
     Regs regs{};
@@ -144,6 +144,8 @@ public:
     CbDbExtent last_db_extent{};
     /// Register blocks written since the last draw handed to the draw recording thread.
     RegDirty pipe_dirty;
+    /// `regs`' blocks written since the last CLEAR_STATE (Gcn::ResetRegs).
+    Gcn::RegTouched gfx_touched;
     /// Running checksum of graphics-register packets (ApplyGraphicsRegisterPacket).
     u64 gfx_reg_checksum{};
 
@@ -189,6 +191,7 @@ private:
         Walk ce;
         u32 queue = 0;
         u64 seq = NoSeq;
+        u64 stamp = 0; ///< BbStats::guest_submit_stamp when made
         bool started = false;
         bool ce_started = false;
         std::shared_ptr<SubmittedCopy> copy;

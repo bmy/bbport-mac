@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: BB_FREE_CHECK=1 — a diagnostic for the guest heap corruption at guest offset
 // 0x263b8e7. The game keeps its GPU label objects (48 bytes) in a small-object pool: 4 KiB
@@ -29,8 +30,21 @@ enum Source : std::uint32_t {
     DmaCopy,
     BufferDownload,
     ImageDownload,
+    // Writes the GPU itself makes into the game's memory (BB_POOL_WATCH, NoteGpuWrite): recorded
+    // when queued, they land when the GPU gets there.
+    GpuLabel,
+    GpuTimestamp,
+    MirrorCopyBack,
+    InPlaceWrite,
 };
 bool Enabled();
+/// BB_POOL_WATCH=1 (or BB_FREE_CHECK=1): the watcher walks the free lists of the pool pages
+/// writes go to and reports a corrupted one with the recent writes into its page, the GPU's
+/// included; unlike BB_FREE_CHECK it changes nothing in how the port writes (GPU labels stay).
+bool WatchEnabled();
+/// A write the GPU will make into the game's memory (`value` when known, else 0).
+void NoteGpuWrite(std::uint64_t address, std::uint64_t size, std::uint64_t value, Source source);
+
 /// Before a write of `size` bytes at `address`; `data` (may be null) is what will be written.
 /// `seq`: the fence's place in the graphics command stream (NextFenceSeq), 0 for none: a
 /// fence written after one that follows it in the stream is reported.
@@ -56,6 +70,9 @@ bool OnTrapFault(void* ucontext, std::uint64_t address);
 bool OnStaleTrapFault(std::uint64_t address);
 /// A graphics submission by the guest (sceGnmSubmitCommandBuffers).
 void NoteSubmit(std::uint64_t submit, const void* buffer, std::uint64_t size);
+/// The recorded emulator and GPU writes into [address, address + size), newest first (a guest
+/// range found corrupted elsewhere, e.g. a shader program the decoder could not read).
+void DumpWrites(std::uint64_t address, std::uint64_t size, const char* what);
 /// At a guest fault: the free check's view of the page the guest was in (`rax`, `r14`).
 void DumpAtFault(std::uint64_t rax, std::uint64_t r14);
 } // namespace BbFreeCheck

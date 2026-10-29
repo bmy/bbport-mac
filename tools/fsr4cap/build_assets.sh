@@ -1,5 +1,16 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 # tools/fsr4cap/build_assets.sh <amd_fidelityfx_upscaler_dx12.dll 4.1.x> [loader DLL 2.3.x]
+# tools/fsr4cap/build_assets.sh <amdxcffx64.dll | AMD Adrenalin installer .exe> [upscaler DLL 4.1.x]
+#
+# The second form adds FSR 4.1.2's models from AMD's driver (Adrenalin 26.10.1 and later): INT8
+# RDNA2 (navi2/) and INT8 Lite (lite/), and the INT8 set (as 4.1.1's) when there is none yet.
+# The driver DLL answers through the upscaler DLL's driver query (vkd3d-proton's amdxc64,
+# FSR4_UPGRADE=1): the 4.1.x upscaler DLL is needed as well (the second argument, or the one the
+# last 4.1.1 build left in the work folder). driver_model.py makes, per model, a copy of the
+# driver DLL that offers only that model; it sits next to fsr4cap.exe for the recording.
+# BB_FSR4_DRIVER_MODELS: the models to build (default "navi2 lite", plus int8 without an INT8 set).
 #
 # Builds the FSR 4.1.1 asset set (fsr4_411/: SPIR-V of every pass, model weights) from AMD's
 # upscaler DLL, for upscaler=fsr411 (gpu/.../fsr411). Nothing of AMD's is downloaded or
@@ -31,12 +42,37 @@ set -euo pipefail
 here=$(cd -- "$(dirname -- "$0")" && pwd)
 root=$(cd -- "$here/../.." && pwd)
 cd -- "$root"
+args=("$@")
 upscaler=$(realpath "${1:?upscaler DLL}")
 loader=${2:+$(realpath "$2")}
 work=$(realpath -m "${BB_FSR4CAP_WORK:-$root/out/fsr4cap}")
 out=$(realpath -m "${BB_FSR411_OUT:-$root/fsr4_411}")
 tools=${BB_FSR4CAP_TOOLS:-}
 python=${PYTHON:-python3}
+# FSR 4.1.2 from AMD's driver: its DLL (Vulkan's amdvkffx64.dll stands for the D3D12 one next to
+# it) or the Adrenalin installer holding it; the upscaler DLL from the second argument or the work
+# folder.
+driver=
+name=$(basename -- "${upscaler,,}")
+if [[ $name == *.exe || $name == amdxcffx64.dll || $name == amdvkffx64.dll ]]; then
+    driver=$upscaler
+    if [[ $name == amdvkffx64.dll ]]; then
+        driver=$(dirname -- "$upscaler")/amdxcffx64.dll
+        if [[ ! -f $driver ]]; then
+            echo "amdvkffx64.dll is the driver's Vulkan module; the recording needs its D3D12 one," \
+                 "amdxcffx64.dll, from the same driver folder (or the Adrenalin installer .exe)." >&2
+            exit 2
+        fi
+    fi
+    upscaler=${loader:-$work/amd_fidelityfx_upscaler_dx12.dll}
+    loader=
+    if [[ ! -f $upscaler ]]; then
+        echo "FSR 4.1.2 from the driver also needs AMD's FSR 4.1.x upscaler DLL" \
+             "(amd_fidelityfx_upscaler_dx12.dll): give it as the second argument, or build" \
+             "FSR 4.1.1 from it first." >&2
+        exit 2
+    fi
+fi
 
 # Before anything long: is it a DLL bbport can replay, and where is its loader? (Without Python
 # yet, after nix-shell below.)
@@ -57,6 +93,7 @@ fi
 # nixpkgs comes from the nixos-unstable channel URL.
 # Python: the one named by PYTHON (the package sets it; python3 is not on its PATH) or python3.
 needed=("$python" spirv-dis spirv-as)
+[[ ${driver,,} != *.exe ]] || needed+=(7z)
 [[ -n $tools ]] || needed+=(x86_64-w64-mingw32-gcc cmake ninja gcc git)
 missing=()
 for tool in "${needed[@]}"; do
@@ -66,8 +103,8 @@ if [[ ${#missing[@]} -ne 0 && -z ${BB_FSR4CAP_SHELL:-} ]] && command -v nix-shel
     nixpkgs=()
     nix-instantiate --find-file nixpkgs >/dev/null 2>&1 || nixpkgs=(-I nixpkgs=channel:nixos-unstable)
     exec env BB_FSR4CAP_SHELL=1 nix-shell "${nixpkgs[@]}" -p pkgsCross.mingwW64.buildPackages.gcc cmake \
-        ninja gcc python3 spirv-tools git umu-launcher \
-        --run "bash $(printf %q "$0") $(printf %q "$upscaler") ${loader:+$(printf %q "$loader")}"
+        ninja gcc python3 spirv-tools git umu-launcher p7zip \
+        --run "bash $(printf %q "$0") $(printf '%q ' "${args[@]}")"
 fi
 if [[ ${#missing[@]} -ne 0 ]]; then
     echo "Missing tools: ${missing[*]}. Install them (or Nix), then run this again:" >&2
@@ -114,12 +151,64 @@ else
         "$here/fsr4cap.c" "$here/capture.c" "$here/rootsig.c" \
         -o "$work/fsr4cap.exe" -ld3d12 -ldxguid -static
 fi
-copy_in "$upscaler" "$work/amd_fidelityfx_upscaler_dx12.dll"
+# (The driver form may name the copy already there.)
+[[ $upscaler -ef $work/amd_fidelityfx_upscaler_dx12.dll ]] ||
+    copy_in "$upscaler" "$work/amd_fidelityfx_upscaler_dx12.dll"
 rm -f -- "$work/amd_fidelityfx_loader_dx12.dll"
 if [[ -n $loader ]]; then
     copy_in "$loader" "$work/amd_fidelityfx_loader_dx12.dll"
 fi
 
+# replace_sets <new> <folder or ""> : the sets of one model (<new>/<folder>) in place of the old.
+replace_sets() {
+    local from=$1/${2:-.} to=$out/${2:-.}
+    mkdir -p "$to"
+    for set in "$from"/t*_m*; do
+        rm -rf "$to/$(basename -- "$set")"
+        mv "$set" "$to/"
+    done
+}
+if [[ -n $driver ]]; then
+    dll=$driver
+    if [[ ${driver,,} == *.exe ]]; then
+        echo "Unpacking the driver's FSR 4 module from $(basename -- "$driver")..."
+        rm -rf "$work/driver-unpack"
+        7z x -y -o"$work/driver-unpack" "$driver" -r amdxcffx64.dll >/dev/null
+        dll=$(find "$work/driver-unpack" -path '*/Drivers/Display/*' -name amdxcffx64.dll | head -1)
+        [[ -n $dll ]] || dll=$(find "$work/driver-unpack" -name amdxcffx64.dll | head -1)
+        if [[ -z $dll ]]; then
+            echo "No amdxcffx64.dll in $driver (Adrenalin 26.10.1 or later is needed)" >&2
+            exit 2
+        fi
+    fi
+    if ! "$python" "$here/driver_model.py" info "$dll"; then
+        echo "$dll does not hold FSR 4.1.2's models (Adrenalin 26.10.1 or later is needed)" >&2
+        exit 2
+    fi
+    models=${BB_FSR4_DRIVER_MODELS:-navi2 lite}
+    [[ -f $out/t1080_m0/initializer.bin ]] || models="int8 $models"
+    d=$work/driver
+    mkdir -p "$d"
+    copy_in "$work/fsr4cap.exe" "$d/fsr4cap.exe"
+    [[ $upscaler -ef $d/amd_fidelityfx_upscaler_dx12.dll ]] ||
+        copy_in "$upscaler" "$d/amd_fidelityfx_upscaler_dx12.dll"
+    rm -rf "$work/driver-out"
+    for model in $models; do
+        echo "FSR 4.1.2 $model: recording the driver's passes under Proton (20 sizes)..."
+        rm -rf "$d"/capture_* "$d/fp8"
+        "$python" "$here/driver_model.py" force "$dll" "$d/amdxcffx64.dll" "$model"
+        FSR4_UPGRADE=1 FSR4CAP_VERSION=4.1.2 BB_FSR4CAP_FP8=0 bash "$here/capture_all.sh" "$d"
+        echo "FSR 4.1.2 $model: translating the passes to SPIR-V..."
+        FSR4CAP_MODEL=$model "$python" "$here/extract.py" "$dxil_spirv" "$d" "$work/driver-out"
+    done
+    for model in $models; do
+        case $model in int8) replace_sets "$work/driver-out" "" ;; *) replace_sets "$work/driver-out" "$model" ;; esac
+    done
+    rm -rf "$work/driver-out" "$work/driver-unpack" "$d"/capture_*
+    [[ ${BB_FSR4CAP_CLEAN:-0} != 1 ]] || rm -rf "$d"
+    echo "FSR 4.1.2 models ($models) in $out (the menu's FSR 4 model)"
+    exit 0
+fi
 echo "Recording the DLL's passes under Proton (20 sizes; 40 with the FP8 variant on RDNA4)..."
 bash "$here/capture_all.sh" "$work"
 echo "Translating the passes to SPIR-V..."
@@ -129,6 +218,9 @@ if [[ ${VERIFY:-0} == 1 ]]; then
     rm -rf "$out.old"
     [[ ! -e $out ]] || mv "$out" "$out.old"
     mv "$out.new" "$out"
+    for model in navi2 lite; do
+        [[ ! -d $out.old/$model ]] || mv "$out.old/$model" "$out/"
+    done
     bash build.sh
     ninja -C out/gpu fsr4-bench >/dev/null
     bash "$here/verify.sh" "$work"
@@ -137,6 +229,10 @@ else
     rm -rf "$out.old"
     [[ ! -e $out ]] || mv "$out" "$out.old"
     mv "$out.new" "$out"
+    # FSR 4.1.2's models from the driver (the second form) stay.
+    for model in navi2 lite; do
+        [[ ! -d $out.old/$model ]] || mv "$out.old/$model" "$out/"
+    done
     rm -rf "$out.old"
 fi
 if [[ ${BB_FSR4CAP_CLEAN:-0} == 1 ]]; then

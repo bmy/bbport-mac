@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Exercise run.sh across a re-exec with lightweight preparation/probe stand-ins."""
 from paths import ROOT
 import json
@@ -12,7 +14,8 @@ import unittest
 
 
 class RestartResolutionTests(unittest.TestCase):
-    def run_restarts(self, explicit=False, live=False, ini_extra='', caps=None, bare_path=False):
+    def run_restarts(self, explicit=False, live=False, ini_extra='', caps=None, bare_path=False,
+                     hybrid=None, live_off=False):
         with tempfile.TemporaryDirectory() as directory:
             data = Path(directory)
             # Preparation is unrelated to this test; allow the real patch compiler to
@@ -45,7 +48,7 @@ class RestartResolutionTests(unittest.TestCase):
                 'stage=int(os.environ.get("BB_TEST_STAGE", "0"))\n'
                 'with (config.parent/"environments").open("a") as f:\n'
                 '    f.write(json.dumps({key:os.environ.get(key) for key in '
-                '("BB_RENDER_RES", "BB_OUTPUT_RES", "BB_AUTO_RENDER_RES")})+"\\n")\n'
+                '("BB_RENDER_RES", "BB_OUTPUT_RES", "BB_AUTO_RENDER_RES", "BB_LIVE_HYBRID")})+"\\n")\n'
                 'if stage<2:\n'
                 '    config.write_text("upscaler=fsr3\\npreset=4\\noutput_res="+'
                 '("1280x720" if stage==0 else "1920x1080")+"\\n")\n'
@@ -54,13 +57,18 @@ class RestartResolutionTests(unittest.TestCase):
             probe.chmod(0o755)
             env = dict(os.environ, BB_PREBUILT='1', BB_PROBE=str(probe), PYTHON=str(python),
                        BB_DATA_DIR=str(data), BB_CONFIG=str(config), BB_GAME_DIR=str(data))
-            for key in ('BB_RENDER_RES', 'BB_OUTPUT_RES', 'BB_AUTO_RENDER_RES', 'BB_TEST_STAGE'):
+            for key in ('BB_RENDER_RES', 'BB_OUTPUT_RES', 'BB_AUTO_RENDER_RES', 'BB_TEST_STAGE',
+                        'BB_LIVE_HYBRID', 'BB_MONITOR_SIZE'):
                 env.pop(key, None)
+            if hybrid is not None:
+                env['BB_LIVE_HYBRID'] = hybrid
             env.pop('BB_LIVE_RES', None)
             if explicit:
                 env['BB_RENDER_RES'] = '800x450'
             if live:
                 env['BB_LIVE_RES'] = '1'
+            if live_off:
+                env['BB_LIVE_RES'] = '0'
             if bare_path:  # the AppImage's PATH: coreutils and bash, no sed/grep
                 tools = data / 'bin'
                 tools.mkdir()
@@ -71,36 +79,40 @@ class RestartResolutionTests(unittest.TestCase):
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=30)
             return [json.loads(line) for line in (data / 'environments').read_text().splitlines()]
 
-    def test_outputs_other_than_1080p_patch_the_render_size_and_restarts_recompute_it(self):
+    def test_outputs_patch_the_render_size_and_restarts_recompute_it(self):
+        # Live presets over the startup patch by default: 720p Quality, 720p Ultra Performance
+        # after a restart, then 1080p Ultra Performance (patched too); scenes a multiple of 8.
         rows = self.run_restarts()
-        # 720p Quality, 720p Ultra Performance after a restart, then 1080p (live host targets).
-        self.assertEqual([row['BB_RENDER_RES'] for row in rows], ['854x480', '426x240', None])
-        self.assertEqual([row['BB_OUTPUT_RES'] for row in rows], ['1280x720', '1280x720', None])
-        self.assertEqual([row['BB_AUTO_RENDER_RES'] for row in rows], ['1', '1', None])
+        self.assertEqual([row['BB_RENDER_RES'] for row in rows], ['856x480', '424x240', '640x360'])
+        self.assertEqual([row['BB_OUTPUT_RES'] for row in rows], ['1280x720', '1280x720', '1920x1080'])
+        self.assertEqual([row['BB_AUTO_RENDER_RES'] for row in rows], ['1', '1', '1'])
+        self.assertEqual([row['BB_LIVE_HYBRID'] for row in rows], ['1', '1', '1'])
 
-    def test_live_resolution_keeps_guest_sizes_native(self):
-        rows = self.run_restarts(live=True)
+    def test_startup_patch_without_live_changes(self):
+        # BB_LIVE_RES=0 (tests only): the startup patch alone, at the preset's exact size.
+        row = self.run_restarts(live_off=True)[0]
+        self.assertEqual(row['BB_RENDER_RES'], '854x480')
+        self.assertIsNone(row['BB_LIVE_HYBRID'])
+
+    def test_proxies_only_keep_guest_sizes_native(self):
+        rows = self.run_restarts(live=True, hybrid='0')
         self.assertTrue(all(row['BB_RENDER_RES'] is None for row in rows))
         self.assertTrue(all(row['BB_OUTPUT_RES'] is None for row in rows))
         self.assertTrue(all(row['BB_AUTO_RENDER_RES'] is None for row in rows))
 
-    def test_live_resolution_setting_and_gpu_check(self):
-        # Only the first launch matters here: the probe rewrites bbport.ini for the restarts.
-        self.assertIsNone(self.run_restarts(ini_extra='live_resolution=1\n')[0]['BB_RENDER_RES'])
-        self.assertEqual(self.run_restarts(ini_extra='live_resolution=0\n', caps=1)[0]['BB_RENDER_RES'],
-                         '854x480')
-        # Unset: off (the startup patch), whatever the GPU; auto asks the GPU check.
-        self.assertEqual(self.run_restarts(caps=1)[0]['BB_RENDER_RES'], '854x480')
-        self.assertIsNone(self.run_restarts(ini_extra='live_resolution=auto\n', caps=1)[0]['BB_RENDER_RES'])
-        self.assertEqual(self.run_restarts(ini_extra='live_resolution=auto\n', caps=0)[0]['BB_RENDER_RES'],
-                         '854x480')
+    def test_old_live_resolution_key_is_ignored(self):
+        # Live changes are always on (free over the startup patch): the launcher no longer has
+        # the setting, an old bbport.ini's live_resolution=0/auto changes nothing.
+        for extra, caps in (('live_resolution=0\n', 1), ('live_resolution=auto\n', 0), ('', None)):
+            self.assertEqual(self.run_restarts(ini_extra=extra, caps=caps)[0]['BB_RENDER_RES'],
+                             '856x480')
 
     def test_live_resolution_without_sed_or_grep(self):
         # A missing sed ended run.sh (exit 127) before the game in the AppImage on NixOS.
         self.assertEqual(self.run_restarts(ini_extra='live_resolution=0\n', caps=1,
-                                           bare_path=True)[0]['BB_RENDER_RES'], '854x480')
-        self.assertIsNone(self.run_restarts(ini_extra='live_resolution=auto\n', caps=1,
-                                            bare_path=True)[0]['BB_RENDER_RES'])
+                                           bare_path=True)[0]['BB_RENDER_RES'], '856x480')
+        self.assertEqual(self.run_restarts(live_off=True, bare_path=True)[0]['BB_RENDER_RES'],
+                         '854x480')
 
     def test_explicit_render_override_survives_restart(self):
         rows = self.run_restarts(explicit=True)

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: glibc's adaptive mutex: spins a little before sleeping, for locks held for a moment.
 #pragma once

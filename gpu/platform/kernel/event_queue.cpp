@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include <algorithm>
 #include <array>
@@ -107,7 +108,7 @@ private:
             }
             const auto at = items.top().at;
             if (std::chrono::steady_clock::now() < at - Spin) {
-                cv.wait_until(lock, stop, at - Spin, [] { return false; });
+                Common::WaitUntil(cv, lock, at - Spin, [&] { return stop.stop_requested(); });
                 continue; // an earlier timer may have come in
             }
             const TimerItem item = items.top();
@@ -289,7 +290,7 @@ int EventQueue::Wait(Event* out, int max, const u32* timeout_us) {
     } else if (!timeout_us) {
         cv.wait(lock, ready);
     } else {
-        cv.wait_for(lock, std::chrono::microseconds(*timeout_us), ready);
+        Common::WaitFor(cv, lock, std::chrono::microseconds(*timeout_us), ready);
     }
     return count;
 }

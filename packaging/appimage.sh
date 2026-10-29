@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Builds dist/Bloodborne-bbport-x86_64.AppImage: the port's current build (run build.sh first),
 # its scripts and the launcher, bundled with their Nix closure (nix-appimage: the AppImage mounts
 # its /nix/store with user namespaces, available on SteamOS and most desktops).
@@ -24,7 +26,7 @@ needed_dirs() {
 }
 {
     echo '['
-    for elf in out/bb-probe out/gpu/libbbgpu.so $(ls out/libbbport_dlss.so out/gpu/libbbnet.so out/gpu/libbbnet20.so 2>/dev/null); do
+    for elf in out/bb-probe out/gpu/libbbgpu.so $(ls out/libbbport_dlss.so out/gpu/libbbnet20.so 2>/dev/null); do
         needed_dirs "$elf"
     done | grep -o '^/nix/store/[^/]*' | sort -u | grep -v -- '-nix-shell$' | sed 's/.*/  "&"/'
     echo ']'

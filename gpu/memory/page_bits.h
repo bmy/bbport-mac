@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport memory: one bit per page of a tracked region (which pages the CPU or the GPU changed,
 // which are protected). Ranges are half-open page indices; iterating a set of bits yields its

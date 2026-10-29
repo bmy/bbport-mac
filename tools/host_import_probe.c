@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* Probe for importing guest memory into Vulkan (VK_EXT_external_memory_host).
  *
  * Guest memory is a memfd mapped twice: at guest addresses (page protection for write tracking)

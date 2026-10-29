@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Availability of the FSR 4.1.1 model required by a selected output/preset."""
 from pathlib import Path
 from bbport_i18n import tr

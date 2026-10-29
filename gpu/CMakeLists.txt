@@ -30,9 +30,22 @@ if (BB_LTO)
         message(WARNING "LTO unavailable: ${bb_ipo_error}")
     endif()
 endif()
-if (BB_PGO STREQUAL "generate")
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND BB_PGO STREQUAL "generate")
+    # Clang (the Windows build, llvm-mingw): instrumented, the profile written to BB_PGO_FILE's
+    # directory as bbport-%p.profraw (merged with llvm-profdata into BB_PGO_FILE for "use").
+    add_compile_options(-fprofile-instr-generate -fprofile-update=atomic)
+    add_link_options(-fprofile-instr-generate)
+    add_compile_definitions(BB_PGO_GENERATE BB_PGO_CLANG)
+elseif (CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND BB_PGO STREQUAL "use")
+    set(BB_PGO_FILE "${BB_PGO_DIR}/bbport.profdata" CACHE FILEPATH "Merged Clang profile")
+    add_compile_options(-fprofile-instr-use=${BB_PGO_FILE} -Wno-profile-instr-out-of-date
+                        -Wno-profile-instr-unprofiled -Wno-backend-plugin)
+elseif (BB_PGO STREQUAL "generate")
     # Atomic counters: the GPU, recording, preparation and copy threads run the same code.
-    add_compile_options(-fprofile-generate=${BB_PGO_DIR} -fprofile-update=atomic)
+    # Profile files named relative to the build directory (not its absolute path): moving the
+    # checkout (game_files/native_probe -> bbport) left a profile nothing matched, silently.
+    add_compile_options(-fprofile-generate=${BB_PGO_DIR} -fprofile-update=atomic
+                        -fprofile-prefix-path=${CMAKE_BINARY_DIR})
     add_link_options(-fprofile-generate=${BB_PGO_DIR})
     add_compile_definitions(BB_PGO_GENERATE)
 elseif (BB_PGO STREQUAL "use")
@@ -40,6 +53,7 @@ elseif (BB_PGO STREQUAL "use")
     # threads can be slightly inconsistent (correction). Functions changed since the profile
     # (or built differently for it, bbgpu_init) are compiled without it.
     add_compile_options(-fprofile-use=${BB_PGO_DIR} -fprofile-partial-training
+                        -fprofile-prefix-path=${CMAKE_BINARY_DIR}
                         -fprofile-correction -Wno-missing-profile -Wno-coverage-mismatch)
 endif()
 
@@ -137,15 +151,57 @@ add_own_shader(buffers/shaders/fault_scan.comp fault_scan_comp)
 add_own_shader(render/shaders/fullscreen.vert fullscreen_vert)
 add_own_shader(render/shaders/present_encode.frag present_encode_frag)
 add_own_shader(upscale/shaders/camera_motion.comp camera_motion_comp)
+# GT-VBAO in place of the game's SSAO (upscale/vk_vbao.cpp, docs/vbao.md; contributed by redditor69).
+add_own_shader(upscale/shaders/vbao.comp vbao_comp)
+add_own_shader(upscale/shaders/vbao_blur.comp vbao_blur_comp)
+add_own_shader(upscale/shaders/vbao_blur.comp vbao_blur_rgba_comp OUTPUT_RGBA=1)
+add_own_shader(upscale/shaders/vbao_view.comp vbao_view_comp)
 add_own_shader(upscale/shaders/upscale_merge.comp upscale_merge_comp)
 add_own_shader(upscale/shaders/upscale_reactive.comp upscale_reactive_comp)
 add_own_shader(upscale/shaders/taa.comp taa_comp)
 add_own_shader(upscale/shaders/taa_sharpen.comp taa_sharpen_comp)
+add_own_shader(upscale/shaders/fsr1_easu.comp fsr1_easu_comp)
 add_own_shader(upscale/shaders/taa_sharpen.comp taa_sharpen_ldr_comp LDR_OUTPUT=1)
 add_own_shader(upscale/shaders/fsr4_color.comp fsr4_decode_comp)
 add_own_shader(upscale/shaders/fsr4_color.comp fsr4_encode_comp ENCODE=1)
 add_own_shader(upscale/shaders/fsr4_reactive.comp fsr4_reactive_comp)
+add_own_shader(upscale/shaders/fg_display_lut.comp fg_display_lut_comp)
+# SMAA 1x for anti_aliasing=smaa (upscale/vk_smaa.cpp; third_party/smaa, MIT).
+add_own_shader(upscale/shaders/smaa.comp smaa_edges_comp PASS=0)
+add_own_shader(upscale/shaders/smaa.comp smaa_weights_comp PASS=1)
+add_own_shader(upscale/shaders/smaa.comp smaa_blend_comp PASS=2)
+# bbport: FSR 3.1 frame generation passes compiled here (ffx_vk.cpp ffxVkShaderOverride): the SDK's
+# GLSL with its own headers, as FidelityFX_SC builds them (-Os, Vulkan 1.2), changed where faster.
+set(FFX_GPU_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/fsr-vulkan/upstream/ffx-1.1.4/sdk/include/FidelityFX/gpu)
+# The port's changed copies of SDK headers: a change to one rebuilds every pass.
+file(GLOB_RECURSE FFX_OWN_HEADERS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/upscale/shaders/ffx/*.h)
+function(add_ffx_shader FILENAME SHADER_NAME)
+    set(OUT ${OWN_SHADER_DIR}/${SHADER_NAME}.h)
+    string(TOUPPER ${SHADER_NAME} SYMBOL)
+    set(DEFINES ${ARGN})
+    list(TRANSFORM DEFINES PREPEND "-D")
+    add_custom_command(OUTPUT ${OUT}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${OWN_SHADER_DIR}
+        COMMAND ${GLSLANG_COMPILER} --target-env vulkan1.2 -S comp -Os -o ${OUT} --vn ${SYMBOL}
+                -DFFX_GPU=1 -DFFX_GLSL=1 ${DEFINES} -I${CMAKE_CURRENT_SOURCE_DIR}/upscale/shaders/ffx -I${FFX_GPU_DIR}
+                ${CMAKE_CURRENT_SOURCE_DIR}/${FILENAME}
+        COMMAND ${CMAKE_COMMAND} "-DHEADER_FILE=${OUT}" -P ${CMAKE_CURRENT_SOURCE_DIR}/render/shaders/header.cmake
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${FILENAME} ${FFX_OWN_HEADERS} VERBATIM)
+    set(SHADER_HEADERS ${SHADER_HEADERS} ${OUT} PARENT_SCOPE)
+endfunction()
+add_ffx_shader(upscale/shaders/ffx/of_v5.comp ffx_of_v5 FFX_HALF=0 FFX_OPTICALFLOW_OPTION_HDR_COLOR_INPUT=0)
+add_ffx_shader(upscale/shaders/ffx/of_v5.comp ffx_of_v5_hdr FFX_HALF=0 FFX_OPTICALFLOW_OPTION_HDR_COLOR_INPUT=1)
+add_ffx_shader(upscale/shaders/ffx/of_v5.comp ffx_of_v5_16 FFX_HALF=1 FFX_OPTICALFLOW_OPTION_HDR_COLOR_INPUT=0)
+add_ffx_shader(upscale/shaders/ffx/of_v5.comp ffx_of_v5_16_hdr FFX_HALF=1 FFX_OPTICALFLOW_OPTION_HDR_COLOR_INPUT=1)
+# BB_OF_FAST: the finest optical flow level takes the coarser one's vectors (no search).
+add_ffx_shader(upscale/shaders/ffx/of_v5.comp ffx_of_v5_fast FFX_HALF=0 FFX_OPTICALFLOW_OPTION_HDR_COLOR_INPUT=0 BB_OF_LEVEL0_PREDICT=1)
+add_ffx_shader(upscale/shaders/ffx/of_v5.comp ffx_of_v5_hdr_fast FFX_HALF=0 FFX_OPTICALFLOW_OPTION_HDR_COLOR_INPUT=1 BB_OF_LEVEL0_PREDICT=1)
+add_ffx_shader(upscale/shaders/ffx/of_v5.comp ffx_of_v5_16_fast FFX_HALF=1 FFX_OPTICALFLOW_OPTION_HDR_COLOR_INPUT=0 BB_OF_LEVEL0_PREDICT=1)
+add_ffx_shader(upscale/shaders/ffx/of_v5.comp ffx_of_v5_16_hdr_fast FFX_HALF=1 FFX_OPTICALFLOW_OPTION_HDR_COLOR_INPUT=1 BB_OF_LEVEL0_PREDICT=1)
+add_ffx_shader(upscale/shaders/ffx/fi_interpolation.comp ffx_fi_interpolation FFX_HALF=0)
+add_ffx_shader(upscale/shaders/ffx/fi_interpolation.comp ffx_fi_interpolation_check FFX_HALF=0 BB_FI_HARDWARE_BILINEAR=2)
 add_own_shader(render/shaders/buffer_multi_copy.comp buffer_multi_copy_comp)
+add_own_shader(render/shaders/atlas_decode.comp atlas_decode_comp)
 add_own_shader(render/shaders/occlusion_resolve.comp occlusion_resolve_comp)
 add_own_shader(render/shaders/gpu_timestamp.comp gpu_timestamp_comp)
 add_own_shader(render/shaders/indirect_guard.comp indirect_guard_comp)
@@ -177,7 +233,7 @@ file(GLOB SHIM_SOURCES CONFIGURE_DEPENDS shim/*.cpp shim/*/*.cpp)
 # The layer's own modules (independent of the shadPS4 code): layer/.
 file(GLOB LAYER_SOURCES CONFIGURE_DEPENDS layer/*.cpp)
 # Game profiles (what the translator knows about one game, out of its core): games/.
-file(GLOB GAME_SOURCES CONFIGURE_DEPENDS games/*.cpp)
+file(GLOB GAME_SOURCES CONFIGURE_DEPENDS games/*.cpp games/*/*.cpp)
 # The translator's own command processor (docs/TRANSLATOR_ARCHITECTURE.ru.md, step 2): cp/.
 file(GLOB CP_SOURCES CONFIGURE_DEPENDS cp/*.cpp memory/*.cpp gcn/*.cpp textures/*.cpp buffers/*.cpp vulkan/*.cpp)
 # The translator's rendering pieces (labels, timestamps, occlusion, draw preparation, profiling,
@@ -238,6 +294,15 @@ elseif (NOT WIN32)
     target_link_options(bbgpu PRIVATE -Wl,--allow-shlib-undefined)
 endif()
 target_link_libraries(bbgpu PRIVATE ffx-vulkan::portable ffx-vulkan::fsr4-v07-vulkan)
+# Trophy names: trophy00.trp decrypted with the user's trophy key (shim/bbport_trophies.cpp).
+# Without OpenSSL the unlocks are kept and shown by number.
+find_package(OpenSSL QUIET COMPONENTS Crypto)
+if (OpenSSL_FOUND)
+    target_link_libraries(bbgpu PRIVATE OpenSSL::Crypto)
+    target_compile_definitions(bbgpu PRIVATE BB_TROPHY_DECRYPT=1)
+else()
+    message(STATUS "Trophy names: off (OpenSSL's libcrypto missing; unlocks shown by number)")
+endif()
 target_link_libraries(bbgpu PUBLIC Vulkan::Headers fmt::fmt Boost::headers magic_enum::magic_enum
     tsl::robin_map GPUOpen::VulkanMemoryAllocator PkgConfig::XXHASH PkgConfig::SDL3 PkgConfig::FFMPEG miniz::miniz Zydis::Zydis sirit)
 if (NOT WIN32 AND NOT APPLE) # bbport (macOS): no X11 there
@@ -281,6 +346,9 @@ else()
 endif()
 
 # Explicit test targets; neither launches the game nor needs a Vulkan device.
+add_executable(trophy-test EXCLUDE_FROM_ALL ../tests/test_trophies.cpp shim/bbport_trophy_data.cpp)
+target_compile_options(trophy-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+target_include_directories(trophy-test PRIVATE shim)
 add_executable(motion-history-test EXCLUDE_FROM_ALL ../tests/test_motion_history.cpp)
 target_compile_options(motion-history-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 target_include_directories(motion-history-test PRIVATE ..)
@@ -302,6 +370,11 @@ target_include_directories(effect-flags-test PRIVATE shim)
 add_executable(settings-test EXCLUDE_FROM_ALL ../tests/test_settings.cpp shim/bbport_settings.cpp)
 target_compile_options(settings-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 target_include_directories(settings-test PRIVATE .. shim)
+
+# The clip-space matrices DLSS Frame Generation gets (upscale/camera_matrices.h): no GPU.
+add_executable(camera-matrices-test EXCLUDE_FROM_ALL ../tests/test_camera_matrices.cpp)
+target_compile_options(camera-matrices-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+target_include_directories(camera-matrices-test PRIVATE ..)
 
 add_executable(scene-resolution-test EXCLUDE_FROM_ALL ../tests/test_scene_resolution.cpp ../tests/test_gpu_runtime_stubs.cpp)
 target_include_directories(scene-resolution-test PRIVATE . shim ${SHADER_INCLUDE} third_party/gcn/include)
@@ -333,6 +406,14 @@ set_source_files_properties(../tests/test_translation_memory.cpp PROPERTIES
     COMPILE_OPTIONS "-fvisibility=hidden;-fvisibility-inlines-hidden")
 target_link_libraries(translation-memory-test PRIVATE bbgpu)
 
+# Spare images on a real GPU (textures/image_spares.h): the time a texture costs the recording
+# thread with and without them, the GPU busy.
+add_executable(image-spares-test EXCLUDE_FROM_ALL ../tests/test_image_spares.cpp
+    textures/image_spares.cpp vulkan/vk_common.cpp)
+target_include_directories(image-spares-test PRIVATE . shim)
+target_compile_options(image-spares-test PRIVATE -UNDEBUG)
+target_link_libraries(image-spares-test PRIVATE Vulkan::Headers GPUOpen::VulkanMemoryAllocator)
+
 # bbport: FSR 4 benchmark outside the game (tools/fsr4_bench.cpp): ninja -C out/gpu fsr4-bench.
 add_executable(upscaler-support-test EXCLUDE_FROM_ALL ../tests/test_upscaler_support.cpp
     shim/bbport_settings.cpp)
@@ -344,7 +425,7 @@ add_executable(fsr4-bench EXCLUDE_FROM_ALL tools/fsr4_bench.cpp
 target_include_directories(fsr4-bench PRIVATE upscale/fsr411)
 target_link_libraries(fsr4-bench PRIVATE ffx-vulkan::fsr4-v07-vulkan ffx-vulkan::fsr4-v07-assets Vulkan::Vulkan)
 
-# bbport online module (gpu/bbnet, libbbnet.so): built when its libraries are there (shell.nix);
+# bbport online module (gpu/bbnet20, libbbnet20.so): built when its libraries are there (shell.nix);
 # BB_NET=OFF leaves it out. Without it the port plays offline.
 option(BB_NET "Build the online module (shadNet)" ON)
 if (BB_NET)
@@ -356,9 +437,8 @@ if (BB_NET)
     find_library(MINIUPNPC_LIBRARY NAMES miniupnpc)
     if (Protobuf_FOUND AND nlohmann_json_FOUND AND OpenSSL_FOUND AND ZLIB_FOUND AND
         MINIUPNPC_INCLUDE AND MINIUPNPC_LIBRARY)
-        add_subdirectory(bbnet)
         add_subdirectory(bbnet20)
-        message(STATUS "Online module: on (libbbnet.so)")
+        message(STATUS "Online module: on (libbbnet20.so)")
     else()
         # Named one by one (#145: "the build has no online module" with no hint why).
         set(missing "")

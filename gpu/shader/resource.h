@@ -1,9 +1,13 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport shader translator: the resources a shader binds. Each is described by where its sharp
 // is read at draw time (SharpFetch: per dword a flat user data slot or an immediate), the post
 // operation the shader applied to the sharp, and how the shader uses it. The push data block
 // (viewport transform, user data registers, buffer offsets) is defined here as well.
 #pragma once
+
+#include <cstdlib>
+#include "shim/bb_env.h"
 
 #include <array>
 #include <cstring>
@@ -115,10 +119,41 @@ using BufferResourceList = boost::container::static_vector<BufferResource, NUM_B
 
 /// BB_LAYER_MEMORY: a guest buffer of 64 MiB or more (a shader given nearly all memory as one
 /// buffer) is reached through the page table, not as one bound range: the game's memory is in
-/// several buffers (its chunks, VRAM mirrors). docs/MEMORY_MODULE_PLAN.ru.md.
-constexpr u64 PagedBufferMinSize = u64{64} << 20;
-inline bool IsPagedBuffer(bool enabled, const ::Gcn::Buffer& sharp) {
-    return enabled && sharp.base_address != 0 && u64(sharp.GetSize()) >= PagedBufferMinSize;
+/// several buffers (its chunks, VRAM mirrors). docs/MEMORY_MODULE_PLAN.ru.md. BB_PAGED_MIN_MB
+/// overrides (tests).
+inline u64 PagedBufferMinSize() {
+    static const u64 size = [] {
+        const char* env = bb_env("BB_PAGED_MIN_MB");
+        const u64 mb = env && *env ? std::strtoull(env, nullptr, 10) : 64;
+        return (mb >= 16 && mb <= 1024 ? mb : 64) << 20;
+    }();
+    return size;
+}
+/// Lazy guest memory: whether [va, va + size) lies across imports of the game's memory (two
+/// granules, BbGuestMemory): such a buffer goes through the page table too, instead of an import
+/// over both granules (overlapping imports: GTT counted twice, and past their budget the
+/// binding went to VRAM copies). Null: no lazy guest memory.
+inline bool (*paged_range_hook)(u64 va, u64 size) = nullptr;
+/// Small ones (16 KiB, the stream threshold) are not paged for crossing alone: copied when bound
+/// (the game rewrites constants right after its draws), a page table would read them later, as
+/// the GPU gets there. Formatted ones are (their loads are raw ones, LowerBufferFormatToRaw).
+inline bool PagedFormatted() {
+    static const bool on = !bb_env_off("BB_PAGED_FORMATTED");
+    return on;
+}
+/// A program whose buffers are paged for size alone (tests: BB_PAGED_COPY_CROSSING=0 makes it
+/// the game's buffer copy shader).
+inline u64 paged_crossing_exclude = 0;
+inline bool IsPagedBuffer(bool enabled, const ::Gcn::Buffer& sharp, bool formatted = false,
+                          u64 pgm_hash = 0) {
+    if (!enabled || sharp.base_address == 0) {
+        return false;
+    }
+    const u64 size = u64(sharp.GetSize());
+    return size >= PagedBufferMinSize() ||
+           (size > (u64{16} << 10) && (!formatted || PagedFormatted()) && paged_range_hook &&
+            (pgm_hash == 0 || pgm_hash != paged_crossing_exclude) &&
+            paged_range_hook(sharp.base_address, size));
 }
 
 /// Storage access to one mip level where the host cannot address levels in image operations:

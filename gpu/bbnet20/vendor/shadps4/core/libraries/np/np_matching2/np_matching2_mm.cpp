@@ -1437,7 +1437,7 @@ bool RequestSignalingInfos(std::string_view target_online_id, u32* out_addr, u16
         client = g_mm.client;
     }
     if (!client || !client->IsAuthenticated()) {
-        return false;
+        return Core::Net::P2P::Relay::Instance().LookupOrAllocatePeer(target_online_id, out_addr, out_port);
     }
     // Room events and replies are handled on the reader thread, which is the one that would
     // read this reply. Waiting there always times out, so leave it to the handshake thread.
@@ -1457,29 +1457,29 @@ bool RequestSignalingInfos(std::string_view target_online_id, u32* out_addr, u16
         if (!g_mm.sig_cv.wait_for(lock, std::chrono::seconds(5),
                                   [&] { return g_mm.sig_replies.count(pkt_id) > 0; })) {
             LOG_WARNING(Lib_NpMatching2, "timed out for '{}'", target_online_id);
-            return false;
+            return Core::Net::P2P::Relay::Instance().LookupOrAllocatePeer(target_online_id, out_addr, out_port);
         }
         reply = std::move(g_mm.sig_replies[pkt_id]);
         g_mm.sig_replies.erase(pkt_id);
     }
     if (reply.first != ShadNet::ErrorType::NoError) {
-        return false;
+        return Core::Net::P2P::Relay::Instance().LookupOrAllocatePeer(target_online_id, out_addr, out_port);
     }
 
     shadnet::RequestSignalingInfosReply rep;
     const std::string proto = ExtractProtoBytes(reply.second);
     if (proto.empty() || !rep.ParseFromString(proto)) {
-        return false;
+        return Core::Net::P2P::Relay::Instance().LookupOrAllocatePeer(target_online_id, out_addr, out_port);
     }
     const std::string addr_str = rep.target_ip();
     const u16 port_host = static_cast<u16>(rep.target_port());
     if (addr_str.empty() || port_host == 0) {
-        return false;
+        return Core::Net::P2P::Relay::Instance().LookupOrAllocatePeer(target_online_id, out_addr, out_port);
     }
 
     u32 addr_nbo = 0;
     if (Libraries::Net::sceNetInetPton(Net::ORBIS_NET_AF_INET, addr_str.c_str(), &addr_nbo) <= 0) {
-        return false;
+        return Core::Net::P2P::Relay::Instance().LookupOrAllocatePeer(target_online_id, out_addr, out_port);
     }
     *out_addr = addr_nbo;
     *out_port = Libraries::Net::sceNetHtons(port_host);

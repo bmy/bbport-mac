@@ -1,6 +1,9 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "bbport_timeline.h"
+#include "shim/bb_env.h"
 #include "render/scheduler.h"
+#include "render/vk_low_latency.h"
 
 #include <algorithm>
 #include <chrono>
@@ -101,7 +104,7 @@ namespace {
 /// from 12. One thread records ~75% of a core at 200 FPS (4 cores / 8 threads); the segments
 /// let the stream use more than one.
 u32 RecordingThreadCount() {
-    if (const char* env = std::getenv("BB_VK_RECORD_THREADS")) {
+    if (const char* env = bb_env("BB_VK_RECORD_THREADS")) {
         return std::clamp(std::atoi(env), 1, 8);
     }
     const unsigned available = BbThreads::Available();
@@ -249,13 +252,12 @@ Scheduler::Scheduler(const Instance& instance, bool threaded_recording)
     crumb_stream = Breadcrumbs::NewStream(
         instance, threaded_recording ? "draws: game and presenter" : "presentation");
     // BB_VK_RECORD_THREAD=0 records on the calling thread.
-    const char* env = std::getenv("BB_VK_RECORD_THREAD");
-    if (threaded_recording && !(env && env[0] == '0')) {
+    if (threaded_recording && !bb_env_off("BB_VK_RECORD_THREAD")) {
         record_chunk = AcquireChunk();
         ordered_chunk = AcquireChunk();
         // A segment of ~64 KiB of closures is ~60 draws: a frame of ~700 draws gives each
         // thread several segments, and the render passes a cut reopens stay few.
-        const char* segment_kb = std::getenv("BB_VK_SEGMENT_KB");
+        const char* segment_kb = bb_env("BB_VK_SEGMENT_KB");
         split_bytes = size_t(segment_kb ? std::max(1, std::atoi(segment_kb)) : 64) * 1024;
         const u32 count = RecordingThreadCount();
         for (u32 i = 0; i < count; ++i) {
@@ -278,7 +280,7 @@ Scheduler::Scheduler(const Instance& instance, bool threaded_recording)
     // bbport BB_ASYNC_SUBMIT (default on; 0: off): submissions go out from the recording threads
     // once their segments are recorded, instead of this thread waiting for them (~65 us each).
     if (!workers.empty()) {
-        const char* async = std::getenv("BB_ASYNC_SUBMIT");
+        const char* async = bb_env("BB_ASYNC_SUBMIT");
         async_submit = !async || async[0] != '0';
         if (async_submit) {
             std::printf("GPU: submissions go out from the recording threads (BB_ASYNC_SUBMIT)\n");
@@ -382,10 +384,7 @@ void Scheduler::EndRendering() {
     if (!is_rendering) {
         return;
     }
-    static const bool trace = [] {
-        const char* env = std::getenv("BB_PASS_BREAK_TRACE");
-        return env && env[0] == '1';
-    }();
+    static const bool trace = bb_env_on("BB_PASS_BREAK_TRACE");
     if (trace) {
         // This function, then its caller and theirs.
         std::array<void*, std::tuple_size_v<PassEndStack> + 1> frames{};
@@ -451,10 +450,7 @@ void Scheduler::TracePassBreak(const PassEndStack& stack) {
 }
 
 void Scheduler::TraceDirectRecording(void* caller) {
-    static const bool enabled = [] {
-        const char* env = std::getenv("BB_RECORDER_TRACE");
-        return env && env[0] == '1';
-    }();
+    static const bool enabled = bb_env_on("BB_RECORDER_TRACE");
     if (!enabled) {
         return;
     }
@@ -491,39 +487,6 @@ std::unique_ptr<RecordChunk> Scheduler::AcquireChunk() {
     auto chunk = std::move(free_chunks.back());
     free_chunks.pop_back();
     return chunk;
-}
-
-void Scheduler::SignalAfterHostCopies(std::function<void()> signal) {
-    // A direct segment queues it too: signals queued before it must not be overtaken.
-    if (!IsRecordingDeferred() && !direct_segment) {
-        WaitHostCopies();
-        signal();
-        return;
-    }
-    BbCopy::FlushBatch();
-    deferred_signals_issued.fetch_add(1, std::memory_order_relaxed);
-    RecordOrdered([signal = std::move(signal), done = deferred_signals_done]() mutable {
-        BbCopy::AfterCopies([signal = std::move(signal), done = std::move(done)] {
-            signal();
-            done->fetch_add(1, std::memory_order_release);
-        });
-    });
-    KickRecording(true);
-}
-
-void Scheduler::WaitDeferredSignals() {
-    const u64 issued = deferred_signals_issued.load(std::memory_order_relaxed);
-    if (deferred_signals_done->load(std::memory_order_acquire) >= issued ||
-        BbToggle::Disabled(BbToggle::OrderedGuestWrites)) {
-        return;
-    }
-    BbStats::WaitTimer timer{BbStats::host_copies_wait_ns};
-    KickRecording(true);
-    while (deferred_signals_done->load(std::memory_order_acquire) < issued) {
-        // Helps the copy threads the signals wait for.
-        BbCopy::WaitAsync();
-        std::this_thread::yield();
-    }
 }
 
 namespace {
@@ -785,10 +748,7 @@ void Scheduler::EnterDirectMode() {
     // here get a segment of their own, from this thread's pool, after the segments handed over:
     // the recording threads go on with those instead of this thread waiting for them (~90 us,
     // the upscaler's passes every frame). BB_DIRECT_SEGMENT=0: the wait.
-    static const bool own_segment = [] {
-        const char* env = std::getenv("BB_DIRECT_SEGMENT");
-        return !(env && env[0] == '0');
-    }();
+    static const bool own_segment = !bb_env_off("BB_DIRECT_SEGMENT");
     if (own_segment && async_submit && current_segment + 2 < MaxSegments &&
         !BbToggle::Disabled(BbToggle::ThreadedRecording)) {
         if (is_rendering) {
@@ -860,6 +820,7 @@ void Scheduler::RecorderThread(std::stop_token stoken, u32 index) {
         std::snprintf(name, sizeof(name), "bb:VkRecorder%u", index);
         Common::SetCurrentThreadName(name);
     }
+    BbThreads::MakeCritical();
     Worker& worker = *workers[index];
     std::vector<std::unique_ptr<RecordChunk>> ordered;
     const auto has_work = [&] {
@@ -1042,24 +1003,45 @@ void Scheduler::QueueSubmit(std::span<const vk::CommandBuffer> cmdbufs, SubmitIn
     // dumps also read it before ColorAttachmentOutput. Waiting only at color output
     // lets those reads race the encode that produces the frame. All submission waits
     // cover their earliest consumers, regardless of their index in SubmitInfo.
-    static constexpr std::array<vk::PipelineStageFlags, SubmitInfo::MaxSemaphores> wait_stages{
-        vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eAllCommands,
-        vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eAllCommands};
-    const vk::TimelineSemaphoreSubmitInfo timeline{
-        .waitSemaphoreValueCount = info.num_wait_semas,
-        .pWaitSemaphoreValues = info.wait_ticks.data(),
-        .signalSemaphoreValueCount = info.num_signal_semas,
-        .pSignalSemaphoreValues = info.signal_ticks.data(),
-    };
-    const vk::SubmitInfo submit{
-        .pNext = &timeline,
-        .waitSemaphoreCount = info.num_wait_semas,
-        .pWaitSemaphores = info.wait_semas.data(),
-        .pWaitDstStageMask = wait_stages.data(),
-        .commandBufferCount = u32(cmdbufs.size()),
-        .pCommandBuffers = cmdbufs.data(),
-        .signalSemaphoreCount = info.num_signal_semas,
-        .pSignalSemaphores = info.signal_semas.data(),
+    // vkQueueSubmit2: Mesa's anti-lag layer (AMD Anti-Lag 2) adds its timeline semaphore to the
+    // signals; on vkQueueSubmit it shifts the submission's own signal values by one place (Mesa
+    // 26.2: our timeline signalled with 0, the device lost at the title screen), on
+    // vkQueueSubmit2 it is right.
+    std::array<vk::SemaphoreSubmitInfo, SubmitInfo::MaxSemaphores> waits;
+    for (u32 i = 0; i < info.num_wait_semas; ++i) {
+        waits[i] = {.semaphore = info.wait_semas[i],
+                    .value = info.wait_ticks[i],
+                    .stageMask = vk::PipelineStageFlagBits2::eAllCommands};
+    }
+    std::array<vk::SemaphoreSubmitInfo, SubmitInfo::MaxSemaphores> signals;
+    for (u32 i = 0; i < info.num_signal_semas; ++i) {
+        signals[i] = {.semaphore = info.signal_semas[i],
+                      .value = info.signal_ticks[i],
+                      .stageMask = vk::PipelineStageFlagBits2::eAllCommands};
+    }
+    thread_local std::vector<vk::CommandBufferSubmitInfo> buffers;
+    buffers.clear();
+    for (const vk::CommandBuffer cmdbuf : cmdbufs) {
+        buffers.push_back({.commandBuffer = cmdbuf});
+    }
+    // Low latency: the frame this submission belongs to (Reflex: for the driver; Anti-Lag 2
+    // times the submissions itself).
+    auto& low_latency = LowLatency::Get();
+    if (renders_frames && info.present_id == 0 && low_latency.Available()) {
+        info.present_id = low_latency.RenderPresentId();
+        low_latency.RenderSubmitStart();
+    }
+    const vk::LatencySubmissionPresentIdNV latency_id{.presentID = info.present_id};
+    const vk::SubmitInfo2 submit{
+        .pNext = info.present_id != 0 && low_latency.GetBackend() == LowLatency::Backend::Reflex
+                     ? &latency_id
+                     : nullptr,
+        .waitSemaphoreInfoCount = info.num_wait_semas,
+        .pWaitSemaphoreInfos = waits.data(),
+        .commandBufferInfoCount = u32(buffers.size()),
+        .pCommandBufferInfos = buffers.data(),
+        .signalSemaphoreInfoCount = info.num_signal_semas,
+        .pSignalSemaphoreInfos = signals.data(),
     };
     QueueRecord* record = nullptr;
     {
@@ -1090,7 +1072,11 @@ void Scheduler::QueueSubmit(std::span<const vk::CommandBuffer> cmdbufs, SubmitIn
         std::scoped_lock lock{queue_log_mutex};
         record->ops_ns = SteadyNs();
     }
-    const vk::Result result = instance.GetGraphicsQueue().submit(submit, info.fence);
+    vk::Result result;
+    {
+        BbStats::VkMemTimer timer{BbStats::t_vk_submit, BbStats::n_vk_submit};
+        result = instance.GetGraphicsQueue().submit2(submit, info.fence);
+    }
     {
         std::scoped_lock lock{queue_log_mutex};
         record->exit_ns = SteadyNs();

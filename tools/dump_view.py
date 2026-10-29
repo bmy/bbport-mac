@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Converts the upscaler dumps (BB_DUMP_TRIGGER, BB_PRESENT_DUMP_TRIGGER) into PNGs.
 
     nix-shell -p "python3.withPackages (p: [p.numpy p.pillow])" --run "python3 tools/dump_view.py out/dump"

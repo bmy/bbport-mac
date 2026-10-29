@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: the port's button prompt icons on the GPU (gpu/shim/bbport_button_prompts.h). One image
 // array, a layer per game icon; a binding of one of the game's key guide icons samples its layer
@@ -56,7 +57,13 @@ private:
         u32 upload = 0;
         u32 generation = 0;
         std::map<std::tuple<bool, bool, u32>, vk::UniqueImageView> views;
+        vk::UniqueImageView storage_view; ///< the copy as rgba8, written by the decode
+        vk::Image source;              ///< the game's image the source view is of
+        vk::UniqueImageView source_view; ///< it as UNORM BC7, sampled by the decode
     };
+
+    /// The decode of a BC atlas into its rgba8 copy (atlas_decode.comp); false when it cannot be made.
+    bool DecodePipeline();
 
     const Instance& instance;
     Scheduler& scheduler;
@@ -69,6 +76,10 @@ private:
     std::vector<u32> small; ///< the icons at the game's size (atlas cells), a layer after another
     std::unordered_map<u64, Atlas> atlases; ///< by Image::image_uid
     std::map<std::tuple<u32, bool, bool, u32>, vk::UniqueImageView> views;
+    vk::UniqueDescriptorSetLayout decode_set_layout;
+    vk::UniquePipelineLayout decode_layout;
+    vk::UniquePipeline decode_pipeline;
+    bool decode_failed = false;
 };
 
 } // namespace Vulkan

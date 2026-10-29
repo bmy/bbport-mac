@@ -1,5 +1,7 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include <algorithm>
+#include "shim/bb_env.h"
 #include <chrono>
 #include <filesystem>
 #include <thread>
@@ -78,13 +80,17 @@ u64 CommandProcessor::HashRegisterPacket(u64 checksum, const u32* words, u32 cou
 }
 
 void CommandProcessor::ApplyGraphicsRegisterPacket(Regs& regs, const u32* packet, u64& checksum,
-                                                   RegDirty* dirty) {
+                                                   RegDirty* dirty, Gcn::RegTouched* touched,
+                                                   bool hash) {
     const u32 header = packet[0];
     const u32 body_words = BodyWords(header);
     const u32* body = packet + 1;
     const auto mark = [&](u32 index, u32 count) {
         if (dirty) {
             dirty->Mark(index, count);
+        }
+        if (touched) {
+            touched->Mark(index, count);
         }
     };
     const auto set = [&](u32 bank) {
@@ -99,7 +105,11 @@ void CommandProcessor::ApplyGraphicsRegisterPacket(Regs& regs, const u32* packet
     };
     switch (Header{header}.Opcode()) {
     case Op::ClearState:
-        regs.SetDefaults();
+        if (touched) {
+            Gcn::ResetRegs(regs, *touched);
+        } else {
+            regs.SetDefaults();
+        }
         if (dirty) {
             dirty->Clear();
             dirty->reset = true;
@@ -162,7 +172,9 @@ void CommandProcessor::ApplyGraphicsRegisterPacket(Regs& regs, const u32* packet
     default:
         return;
     }
-    checksum = HashRegisterPacket(checksum, packet, body_words + 1);
+    if (hash) {
+        checksum = HashRegisterPacket(checksum, packet, body_words + 1);
+    }
 }
 
 // ---- Thread ----------------------------------------------------------------------------------
@@ -170,7 +182,7 @@ void CommandProcessor::ApplyGraphicsRegisterPacket(Regs& regs, const u32* packet
 CommandProcessor::CommandProcessor()
     : guest_markers_enabled{EmulatorSettings.IsVkGuestMarkersEnabled()} {
     thread = std::jthread{[this](std::stop_token stop) { Run(stop); }};
-    if (const char* env = std::getenv("BB_STALL_REPORT"); !(env && env[0] == '0')) {
+    if (!bb_env_off("BB_STALL_REPORT")) {
         stall_watch = std::jthread{[this](std::stop_token stop) { StallWatch(stop); }};
     }
 }
@@ -203,10 +215,7 @@ void CommandProcessor::WaitGpuIdle() noexcept {
 }
 
 bool CommandProcessor::IsGpuIdle() const {
-    static const bool use_retired = [] {
-        const char* env = std::getenv("BB_WORK_RETIRED");
-        return !(env && env[0] == '0');
-    }();
+    static const bool use_retired = !bb_env_off("BB_WORK_RETIRED");
     // BB_SUBMIT_LOCK=decode with honest labels: decoded is enough.
     return num_submits == 0 && (work_retired || !use_retired || BbGnm::SubmitLockOnDecode());
 }
@@ -231,16 +240,15 @@ void CommandProcessor::RunCommands() {
 
 void CommandProcessor::WaitForWork(std::stop_token stop) {
     const auto has_work = [this] { return num_commands || num_submits || submit_done; };
-    // BB_HONEST_LABELS: fences (and GPU idle) wait for work not submitted yet; it goes out once
+    // Fences (and GPU idle) wait for work not submitted yet; it goes out once
     // this thread has had nothing to do for BB_HONEST_IDLE_US (0.2 ms): the guest may be waiting.
-    if (rasterizer && Vulkan::Rasterizer::HonestLabels() &&
-        (rasterizer->HasUnsubmittedSignals() || !rasterizer->DrawPipeIdle())) {
+    if (rasterizer && (rasterizer->HasUnsubmittedSignals() || !rasterizer->DrawPipeIdle())) {
         static const auto idle_wait = std::chrono::microseconds([] {
-            const char* env = std::getenv("BB_HONEST_IDLE_US");
+            const char* env = bb_env("BB_HONEST_IDLE_US");
             return env ? std::strtoll(env, nullptr, 10) : 200ll;
         }());
         std::unique_lock lock{submit_mutex};
-        if (!submit_cv.wait_for(lock, idle_wait, has_work)) {
+        if (!Common::WaitFor(submit_cv, lock, idle_wait, has_work)) {
             lock.unlock();
             if (rasterizer->PipeSignals()) {
                 // The recording thread submits once it gets there (waiting for it to run dry,
@@ -257,7 +265,7 @@ void CommandProcessor::WaitForWork(std::stop_token stop) {
     // microseconds. Spin first, with cores to spare (BB_GPU_SPIN_US, default 200 with 12+
     // hardware threads, else 0).
     static const auto spin_time = std::chrono::microseconds([] {
-        if (const char* env = std::getenv("BB_GPU_SPIN_US")) {
+        if (const char* env = bb_env("BB_GPU_SPIN_US")) {
             return std::max(0, std::atoi(env));
         }
         return BbThreads::Available() >= 12 ? 200 : 0;
@@ -386,6 +394,8 @@ void CommandProcessor::ReportStall(const char* why) {
 #endif
     std::fputs(out.c_str(), stdout);
     std::fflush(stdout);
+    Diagnostics::DumpRolledBackLabels(40);
+    std::fflush(stderr);
 #if !defined(_WIN32) && !defined(__APPLE__) // bbport (macOS): no tgkill
     if (thread_tid != 0) {
         syscall(SYS_tgkill, getpid(), thread_tid, SIGUSR2);
@@ -395,11 +405,8 @@ void CommandProcessor::ReportStall(const char* why) {
     // Every thread of the process prints its frames and registers (the runtime's SIGUSR2 handler):
     // when the guest itself stops (its job system, a lock), they say what each one waits for.
     // BB_STALL_THREADS=0: the command thread only.
-    static const bool all_threads = [] {
-        const char* env = std::getenv("BB_STALL_THREADS");
-        return !(env && env[0] == '0');
-    }();
-    if (all_threads && !std::getenv("BB_STALL_THREADS_DONE")) {
+    static const bool all_threads = !bb_env_off("BB_STALL_THREADS");
+    if (all_threads && !bb_env("BB_STALL_THREADS_DONE")) {
         setenv("BB_STALL_THREADS_DONE", "1", 1); // once per run
         std::fputs("  all threads follow (frames: image-relative, then registers and stack):\n", stdout);
         std::fflush(stdout);
@@ -417,6 +424,7 @@ void CommandProcessor::ReportStall(const char* why) {
 
 void CommandProcessor::Run(std::stop_token stop) {
     Common::SetCurrentThreadName("bb:GpuComm");
+    BbThreads::MakeCritical();
     BbSections::command_thread = true;
 #ifndef __APPLE__ // bbport (macOS): no clock for another thread's CPU time
     if (clockid_t clock; pthread_getcpuclockid(pthread_self(), &clock) == 0) {
@@ -444,6 +452,15 @@ void CommandProcessor::Run(std::stop_token stop) {
                     continue;
                 }
                 work = queue.works.front().get();
+            }
+            if (!work->started) {
+                if (rasterizer) {
+                    rasterizer->ProcessDeadImagesInOrder(); // freed before this was submitted
+                    rasterizer->NewGuestWorkInOrder();
+                }
+                if (work->stamp > BbStats::started_submit_stamp.load(std::memory_order_relaxed)) {
+                    BbStats::started_submit_stamp.store(work->stamp, std::memory_order_release);
+                }
             }
             if (work != last_decoded) {
                 last_decoded = work;
@@ -483,20 +500,22 @@ void CommandProcessor::AfterBatch() {
         if (rasterizer && rasterizer->PipeSignals()) {
             // BB_PIPE_SIGNALS: the frame's cache work runs on the recording thread after the
             // frame (this thread decodes the next one meanwhile).
-            static constexpr u8 none = 0;
+            const u64 started = BbStats::started_submit_stamp.load(std::memory_order_acquire);
             rasterizer->RunInOrder(
-                [](Vulkan::Rasterizer& r, const u8*) {
-                    r.OnSubmit();
+                [](Vulkan::Rasterizer& r, const u8* data) {
+                    u64 started_stamp;
+                    std::memcpy(&started_stamp, data, sizeof(started_stamp));
+                    r.OnSubmit(started_stamp);
                     r.Flush();
                     // BB_EXP_FINISH_FRAMES=1 (experiment): the GPU finishes each frame before the next.
-                    static const bool finish = std::getenv("BB_EXP_FINISH_FRAMES") != nullptr;
+                    static const bool finish = bb_env("BB_EXP_FINISH_FRAMES") != nullptr;
                     if (finish) {
                         r.Finish();
                     }
                 },
-                &none, 0);
+                &started, sizeof(started));
         } else if (rasterizer) {
-            rasterizer->OnSubmit();
+            rasterizer->OnSubmit(BbStats::started_submit_stamp.load(std::memory_order_acquire));
             rasterizer->Flush();
         }
         submit_done = false;
@@ -509,12 +528,11 @@ void CommandProcessor::AfterBatch() {
     const bool pipe_signals = rasterizer && rasterizer->PipeSignals();
     if (rasterizer && !pipe_signals) {
         rasterizer->DrainDrawPipe(DrawPipe::ReasonSubmissionEnd);
-        rasterizer->WaitDeferredSignals();
     }
     // GPU idle only if nothing was submitted meanwhile: the drain and the deferred fences take
     // milliseconds, and a submission plus sceGnmSubmitDone in that time would release the lock for
     // work not even decoded (late fences in the guest's heap, command buffers reused as garbage).
-    if (rasterizer && Vulkan::Rasterizer::HonestLabels()) {
+    if (rasterizer) {
         u64 generation;
         bool decoded;
         {
@@ -536,7 +554,6 @@ void CommandProcessor::AfterBatch() {
                 [](Vulkan::Rasterizer& r, const u8* data) {
                     IdleSignal idle;
                     std::memcpy(&idle, data, sizeof(idle));
-                    r.WaitDeferredSignals();
                     r.SignalAfterGpu([idle] { idle.self->SignalGpuIdle(idle.generation); });
                     r.SubmitForSignals(); // at once if the GPU has run dry
                 },
@@ -582,6 +599,7 @@ void CommandProcessor::SignalDecodedFrames() {
                 u64 retired;
                 std::memcpy(&retired, data, sizeof(retired));
                 BbTimeline::Note(BbTimeline::PipeTask, 7, r.CurrentTick());
+                r.NoteFrameEndTask(retired);
                 r.SignalAfterGpu([retired] { BbGnm::NoteFramesRetired(retired); });
                 r.Flush();
             },
@@ -589,6 +607,7 @@ void CommandProcessor::SignalDecodedFrames() {
         return;
     }
     rasterizer->DrainDrawPipe(DrawPipe::ReasonSubmissionEnd);
+    rasterizer->NoteFrameEndTask(frame);
     rasterizer->SignalAfterGpu([frame] { BbGnm::NoteFramesRetired(frame); });
     rasterizer->Flush();
 }
@@ -626,6 +645,8 @@ void CommandProcessor::SubmitGfx(std::span<const u32> dcb, std::span<const u32> 
         copy->ccb_dwords = ccb.size();
         copy->submitted = std::chrono::steady_clock::now();
         Diagnostics::InspectSubmittedCopy(*copy);
+        Diagnostics::RepairSubmittedCopy(
+            *copy, BbStats::guest_submit_stamp.load(std::memory_order_relaxed) + 1);
         Diagnostics::RememberSubmittedCopy(copy);
         dcb = {copy->data.data(), copy->dcb_dwords};
         ccb = {copy->data.data() + copy->dcb_dwords, copy->ccb_dwords};
@@ -639,6 +660,7 @@ void CommandProcessor::SubmitGfx(std::span<const u32> dcb, std::span<const u32> 
     {
         // Numbering, enqueueing and queueing under one lock keep the three orders the same.
         std::scoped_lock lock{queue.mutex};
+        work->stamp = BbStats::guest_submit_stamp.fetch_add(1, std::memory_order_acq_rel) + 1;
         if (draw_prep) {
             work->seq = gfx_submit_seq++;
             draw_prep->Enqueue(work->seq, std::move(prepared));
@@ -664,6 +686,7 @@ void CommandProcessor::SubmitAsc(u32 gnm_vqid, std::span<const u32> acb) {
     work->dcb = acb;
     {
         std::scoped_lock lock{queue.mutex};
+        work->stamp = BbStats::guest_submit_stamp.fetch_add(1, std::memory_order_acq_rel) + 1;
         queue.works.push_back(std::move(work));
     }
     std::scoped_lock lock{submit_mutex};

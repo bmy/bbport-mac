@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: the GPU library's log: one line per message on stderr,
 // "gpu <level> (<class>): <message> [<file>:<line>]". BB_GPU_LOG=trace|debug|info|warning|error|

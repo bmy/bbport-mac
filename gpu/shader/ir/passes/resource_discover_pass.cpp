@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Finds every instruction that uses a resource and the dwords its sharps were read from. Some
 // games edit a sharp in the shader before use (a stride bit forced on, a cube map read as a 2D

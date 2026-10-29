@@ -1,0 +1,83 @@
+<Window x:Class="BbportLauncher.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Bloodborne" Width="1060" Height="760" MinWidth="720" MinHeight="480"
+        Icon="pack://application:,,,/bloodborne.png" WindowStartupLocation="CenterScreen">
+  <Window.Resources>
+    <!-- The sidebar's entries as in Windows' Settings: a soft highlight and an accent bar. -->
+    <Style x:Key="NavItem" TargetType="ListBoxItem">
+      <Setter Property="Margin" Value="2,1" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ListBoxItem">
+            <Grid>
+              <Border x:Name="Back" CornerRadius="5" Background="Transparent" />
+              <Border x:Name="Bar" Width="3" Height="16" CornerRadius="1.5" HorizontalAlignment="Left"
+                      Visibility="Collapsed" Background="{DynamicResource AccentFillColorDefaultBrush}" />
+              <ContentPresenter Margin="10,0,8,0" />
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Back" Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}" />
+              </Trigger>
+              <Trigger Property="IsSelected" Value="True">
+                <Setter TargetName="Back" Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}" />
+                <Setter TargetName="Bar" Property="Visibility" Value="Visible" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+  </Window.Resources>
+  <Grid>
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="250" />
+      <ColumnDefinition Width="*" />
+    </Grid.ColumnDefinitions>
+
+    <!-- Sidebar: the sections and the Play button. -->
+    <DockPanel Grid.Column="0" Margin="8,8,4,8">
+      <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="10,8,10,14">
+        <Image Source="pack://application:,,,/bloodborne.png" Width="36" Height="36" Margin="0,0,10,0" />
+        <StackPanel VerticalAlignment="Center">
+          <TextBlock Text="Bloodborne" FontSize="18" FontWeight="SemiBold" />
+          <TextBlock x:Name="VersionText" FontSize="12" Opacity="0.65" />
+        </StackPanel>
+      </StackPanel>
+      <StackPanel DockPanel.Dock="Bottom" Margin="6,8,6,4">
+        <TextBlock x:Name="GameStatus" TextWrapping="Wrap" FontSize="12" Opacity="0.75" Margin="2,0,2,8" />
+        <Button x:Name="PlayButton" Height="42" FontSize="15" FontWeight="SemiBold"
+                HorizontalAlignment="Stretch" Click="OnPlay" />
+      </StackPanel>
+      <ListBox x:Name="Sections" BorderThickness="0" Background="Transparent" ItemContainerStyle="{StaticResource NavItem}"
+               ScrollViewer.HorizontalScrollBarVisibility="Disabled" SelectionChanged="OnSection" />
+    </DockPanel>
+
+    <!-- Content: the selected section. -->
+    <Grid Grid.Column="1">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto" />
+        <RowDefinition Height="*" />
+      </Grid.RowDefinitions>
+      <StackPanel Margin="28,22,28,10">
+        <TextBlock x:Name="SectionTitle" FontSize="28" FontWeight="SemiBold" />
+        <TextBlock x:Name="SectionDescription" TextWrapping="Wrap" Opacity="0.75" Margin="0,6,0,0" />
+      </StackPanel>
+      <ScrollViewer x:Name="Scroller" Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                    HorizontalScrollBarVisibility="Disabled">
+        <StackPanel x:Name="Items" Margin="28,4,28,28" MaxWidth="980" />
+      </ScrollViewer>
+      <DockPanel x:Name="LogPanel" Grid.Row="1" Margin="28,4,28,28" Visibility="Collapsed">
+        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,10,0,0">
+          <Button x:Name="OpenLogsButton" Click="OnOpenLogs" Padding="14,6" />
+          <Button x:Name="CopyLogButton" Click="OnCopyLog" Padding="14,6" Margin="8,0,0,0" />
+        </StackPanel>
+        <TextBox x:Name="LogBox" IsReadOnly="True" FontFamily="Cascadia Mono, Consolas" FontSize="12"
+                 TextWrapping="NoWrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto"
+                 HorizontalScrollBarVisibility="Auto" />
+      </DockPanel>
+    </Grid>
+  </Grid>
+</Window>

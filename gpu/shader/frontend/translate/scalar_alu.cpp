@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // SOP2/SOP1/SOPK/SOPC: scalar arithmetic, logic, shifts, bit fields and compares, with SCC.
 // 64-bit masks (EXEC, VCC and their copies) are logic on lane masks: their SCC ("any bit

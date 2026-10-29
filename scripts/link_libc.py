@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Link the user's plaintext libc into a separate, reproducible probe image.
 
 The original boot.bin remains usable. Symbols are matched by library/module

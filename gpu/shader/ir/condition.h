@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport shader translator IR: branch conditions of the GCN program (scalar condition code, VCC
 // and EXEC tested for zero).

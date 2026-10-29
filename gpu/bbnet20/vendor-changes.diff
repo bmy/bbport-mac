@@ -100,3 +100,312 @@ index 1d8b958..f05d5cb 100644
  }
  
  u64 ShadNetClient::ReportClientVersion() {
+
+bbport: on top of the changes above, the login in plain words, no secrets in HTTP logs and the
+UPnP lease.
+
+diff --git a/a/core/libraries/net/net_upnp.cpp b/b/core/libraries/net/net_upnp.cpp
+index 7c093ab..adf7dad 100644
+--- a/a/core/libraries/net/net_upnp.cpp
++++ b/b/core/libraries/net/net_upnp.cpp
+@@ -3,6 +3,8 @@
+ 
+ #include <chrono>
+ #include <cstring>
++#include <string>
++#include <vector>
+ #include <upnperrors.h>
+ #include "common/logging/log.h"
+ #include "net_upnp.h"
+@@ -23,11 +25,13 @@ UPnPClient& UPnPClient::Instance() {
+ }
+ 
+ UPnPClient::~UPnPClient() {
++    m_map_cancel = true;
+     if (m_thread.joinable())
+         m_thread.join();
+     if (m_map_thread.joinable())
+         m_map_thread.join();
+-    // Mappings have no lease time: leave nothing behind on the router.
++    // Leave nothing behind on the router (the lease ends the mapping too when the game ends
++    // without this destructor: _Exit, a crash).
+     if (const u16 port = m_mapped_port.exchange(0); port != 0)
+         RemoveMapping(port);
+     if (m_available.load())
+@@ -119,6 +123,42 @@ void UPnPClient::DiscoverThread() {
+     m_cv.notify_all();
+ }
+ 
++// bbport: the router's port mapping lasts MappingLease seconds and is renewed while the game
++// runs (the game usually ends without removing it: _Exit, a crash). Mappings this PC's earlier
++// sessions left (same description and address, another port) are removed first, so they do not
++// pile up.
++namespace {
++constexpr const char* MappingDescription = "bbport";
++constexpr const char* MappingLease = "7200";
++constexpr auto MappingRenewal = std::chrono::hours(1);
++constexpr int OnlyPermanentLeasesSupported = 725;
++} // namespace
++
++void UPnPClient::RemoveStaleMappings(u16 port) {
++    std::vector<std::string> stale;
++    for (int index = 0; index < 256; ++index) {
++        char ext_port[6]{}, int_client[16]{}, int_port[6]{}, protocol[4]{}, desc[80]{}, enabled[4]{},
++            remote_host[64]{}, duration[16]{};
++        const std::string index_str = std::to_string(index);
++        if (UPNP_GetGenericPortMappingEntry(m_urls.controlURL, m_data.first.servicetype,
++                                            index_str.c_str(), ext_port, int_client, int_port,
++                                            protocol, desc, enabled, remote_host,
++                                            duration) != UPNPCOMMAND_SUCCESS) {
++            break; // the end of the list (or a router that does not list its mappings)
++        }
++        if (std::strcmp(desc, MappingDescription) == 0 && std::strcmp(protocol, "UDP") == 0 &&
++            std::strcmp(int_client, m_lan_addr) == 0 && std::to_string(port) != ext_port) {
++            stale.emplace_back(ext_port);
++        }
++    }
++    for (const std::string& old_port : stale) {
++        const int ret = UPNP_DeletePortMapping(m_urls.controlURL, m_data.first.servicetype,
++                                               old_port.c_str(), "UDP", nullptr);
++        LOG_INFO(Lib_Net, "UPNP: removed an earlier session's UDP port mapping {} ({})", old_port,
++                 ret == UPNPCOMMAND_SUCCESS ? "done" : strupnperror(ret));
++    }
++}
++
+ void UPnPClient::AddMapping(u16 port) {
+     if (!m_p2p_features_enabled.load())
+         return;
+@@ -126,14 +166,23 @@ void UPnPClient::AddMapping(u16 port) {
+     if (!m_available.load())
+         return;
+ 
++    RemoveStaleMappings(port);
+     const std::string port_str = std::to_string(port);
+-    const int ret =
+-        UPNP_AddPortMapping(m_urls.controlURL, m_data.first.servicetype, port_str.c_str(),
+-                            port_str.c_str(), m_lan_addr, "shadPS4", "UDP", nullptr, "0");
++    int ret = UPNP_AddPortMapping(m_urls.controlURL, m_data.first.servicetype, port_str.c_str(),
++                                  port_str.c_str(), m_lan_addr, MappingDescription, "UDP", nullptr,
++                                  MappingLease);
++    const bool permanent = ret == OnlyPermanentLeasesSupported;
++    if (permanent) {
++        ret = UPNP_AddPortMapping(m_urls.controlURL, m_data.first.servicetype, port_str.c_str(),
++                                  port_str.c_str(), m_lan_addr, MappingDescription, "UDP", nullptr,
++                                  "0");
++    }
+ 
+     if (ret == UPNPCOMMAND_SUCCESS) {
+         m_external_port.store(port);
+-        LOG_INFO(Lib_Net, "UPNP: mapped UDP port {}", port);
++        LOG_INFO(Lib_Net, "UPNP: mapped UDP port {} ({})", port,
++                 permanent ? "this router keeps it until the next session removes it"
++                           : "for 2 hours, renewed while the game runs");
+     } else {
+         // Store the requested port as best-guess even on failure so callers still get a value.
+         m_external_port.store(port);
+@@ -143,8 +192,10 @@ void UPnPClient::AddMapping(u16 port) {
+ 
+ void UPnPClient::MapPortAsync(u16 port) {
+     std::scoped_lock lock{m_map_mutex};
++    m_map_cancel = true;
+     if (m_map_thread.joinable())
+         m_map_thread.join();
++    m_map_cancel = false;
+     m_map_thread = std::thread([this, port] {
+         if (!WaitReady(10'000)) {
+             LOG_INFO(Lib_Net, "UPNP: no IGD, UDP port {} is not forwarded", port);
+@@ -154,11 +205,22 @@ void UPnPClient::MapPortAsync(u16 port) {
+         if (previous != 0 && previous != port)
+             RemoveMapping(previous);
+         AddMapping(port);
++        // bbport: the lease renewed every hour until another request or UnmapPort (a second's
++        // wait for them at most).
++        auto renew = std::chrono::steady_clock::now() + MappingRenewal;
++        while (!m_map_cancel.load()) {
++            std::this_thread::sleep_for(std::chrono::seconds(1));
++            if (!m_map_cancel.load() && std::chrono::steady_clock::now() >= renew) {
++                AddMapping(port);
++                renew = std::chrono::steady_clock::now() + MappingRenewal;
++            }
++        }
+     });
+ }
+ 
+ void UPnPClient::UnmapPort(u16 port) {
+     std::scoped_lock lock{m_map_mutex};
++    m_map_cancel = true;
+     if (m_map_thread.joinable())
+         m_map_thread.join();
+     u16 expected = port;
+diff --git a/a/core/libraries/net/net_upnp.h b/b/core/libraries/net/net_upnp.h
+index 6d9fcc7..7c762cf 100644
+--- a/a/core/libraries/net/net_upnp.h
++++ b/b/core/libraries/net/net_upnp.h
+@@ -42,6 +42,7 @@ public:
+ 
+     // Forwards `port` once discovery has finished (waiting up to 10 s for it), on a background
+     // thread so the caller never waits for the router. Replaces an earlier request's mapping.
++    // bbport: the mapping has a lease, which that thread renews while it is this port's.
+     void MapPortAsync(u16 port);
+     // Removes what MapPortAsync forwarded, if it is `port`.
+     void UnmapPort(u16 port);
+@@ -53,6 +54,7 @@ private:
+     UPnPClient& operator=(const UPnPClient&) = delete;
+ 
+     void DiscoverThread();
++    void RemoveStaleMappings(u16 port);
+ 
+     std::atomic<bool> m_started{false};
+     std::atomic<bool> m_p2p_features_enabled{true};
+@@ -72,6 +74,7 @@ private:
+     std::thread m_thread;
+     std::mutex m_map_mutex; // serializes MapPortAsync / UnmapPort
+     std::thread m_map_thread;
++    std::atomic<bool> m_map_cancel{false}; // bbport: ends m_map_thread's lease renewals
+ };
+ 
+ } // namespace Libraries::Net
+diff --git a/a/core/libraries/network/http.cpp b/b/core/libraries/network/http.cpp
+index 66a9886..19625bc 100644
+--- a/a/core/libraries/network/http.cpp
++++ b/b/core/libraries/network/http.cpp
+@@ -1107,8 +1107,23 @@ static bool HeaderNameMatches(std::string_view a, std::string_view b) {
+ }
+ 
+ static bool IsCredentialHeader(std::string_view name) {
+-    return HeaderNameMatches(name, "Authorization") ||
+-           HeaderNameMatches(name, "Proxy-Authorization") || HeaderNameMatches(name, "Cookie");
++    if (HeaderNameMatches(name, "Authorization") ||
++        HeaderNameMatches(name, "Proxy-Authorization") || HeaderNameMatches(name, "Cookie")) {
++        return true;
++    }
++    // bbport: any other header that can carry an account's secret (tokens, session ids, keys)
++    // never reaches a log either.
++    std::string lower(name);
++    for (char& c : lower) {
++        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
++    }
++    for (const std::string_view secret :
++         {"cookie", "token", "password", "secret", "session", "ticket", "key"}) {
++        if (lower.find(secret) != std::string::npos) {
++            return true;
++        }
++    }
++    return false;
+ }
+ 
+ static std::string GetLibhttpSystemVersionString() {
+diff --git a/a/core/libraries/np/np_handler/np_handler.cpp b/b/core/libraries/np/np_handler/np_handler.cpp
+index 56a8ab9..77aeddd 100644
+--- a/a/core/libraries/np/np_handler/np_handler.cpp
++++ b/b/core/libraries/np/np_handler/np_handler.cpp
+@@ -3,6 +3,7 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
+ #include <algorithm>
++#include <atomic>
+ #include <chrono>
+ #include <cstring>
+ #include <fmt/format.h>
+@@ -23,6 +24,61 @@
+ 
+ namespace Libraries::Np {
+ 
++namespace {
++// bbport: why the account could not sign in, in plain words for the player (the game itself only
++// says that it is not signed in to PlayStation Network). Each reason is told once, not on every
++// reconnect attempt.
++std::atomic<int> told_login_failure{-1};
++// bbport: that it signed in (the log's line for it is below the default level): once, and again
++// after a failure was told.
++std::atomic<bool> told_signed_in{false};
++
++std::string ServerName(const std::string& host) {
++    return host.find("seamlesshunt") != std::string::npos ? std::string("Seamless Hunt") : host;
++}
++
++void TellSignedIn(const std::string& host, const std::string& npid) {
++    if (told_signed_in.exchange(true)) {
++        return;
++    }
++    // The console and the log only (Kind::Online has no overlay line): one line a launcher
++    // can look for.
++    ImGui::ShadNetNotify::Push(ImGui::ShadNetNotify::Kind::Online,
++                               fmt::format("{}: signed in as {}. Online play is on.",
++                                           ServerName(host), npid));
++}
++
++void TellLoginFailure(ShadNet::ShadNetState state, const std::string& host) {
++    using S = ShadNet::ShadNetState;
++    if (state == S::Ok || state == S::FailureProtocol) {
++        return; // told by the protocol handler
++    }
++    if (told_login_failure.exchange(static_cast<int>(state)) == static_cast<int>(state)) {
++        return;
++    }
++    told_signed_in = false;
++    const std::string server = ServerName(host);
++    std::string reason;
++    switch (state) {
++    case S::FailureUsername:
++    case S::FailurePassword:
++    case S::FailureToken:
++    case S::FailureAuth:
++        reason = "login failed - check the username and password";
++        break;
++    case S::FailureAlreadyIn:
++        reason = "this account is logged in already (another copy of the game?) - close it, wait "
++                 "a minute and start again";
++        break;
++    default:
++        reason = "no connection to the server - check the network, or the server is down";
++        break;
++    }
++    ImGui::ShadNetNotify::Push(ImGui::ShadNetNotify::Kind::Info,
++                               fmt::format("{}: {}. Online play is off.", server, reason));
++}
++} // namespace
++
+ NpHandler::NpHandler()
+     : m_matching2_contexts(
+           std::unique_ptr<NpMatching2::ContextManager>(new NpMatching2::ContextManager())),
+@@ -309,6 +365,7 @@ bool NpHandler::ConnectUser(s32 user_id, const std::string& host, u16 port, cons
+         LOG_ERROR(NpHandler, "user_id={} connection failed (state={})", user_id,
+                   static_cast<int>(conn_state));
+         handle_protocol_mismatch(conn_state);
++        TellLoginFailure(conn_state, host);
+         client->Stop();
+         return false;
+     }
+@@ -318,12 +375,15 @@ bool NpHandler::ConnectUser(s32 user_id, const std::string& host, u16 port, cons
+         LOG_ERROR(NpHandler, "user_id={} authentication failed (state={})", user_id,
+                   static_cast<int>(auth_state));
+         handle_protocol_mismatch(auth_state);
++        TellLoginFailure(auth_state, host);
+         client->Stop();
+         return false;
+     }
+ 
++    told_login_failure = -1;
+     LOG_INFO(NpHandler, "user_id={} signed in npid='{}' accountId={}", user_id, npid,
+              client->GetUserId());
++    TellSignedIn(host, npid);
+ 
+     Net::UPnPClient::Instance().SetP2PFeaturesEnabled(client->IsMatching2Enabled());
+     if (client->IsMatching2Enabled() && EmulatorSettings.IsUPnPEnabled()) {
+diff --git a/a/core/libraries/np/np_web_api2/np_web_api2.cpp b/b/core/libraries/np/np_web_api2/np_web_api2.cpp
+index fc64e82..8e05874 100644
+--- a/a/core/libraries/np/np_web_api2/np_web_api2.cpp
++++ b/b/core/libraries/np/np_web_api2/np_web_api2.cpp
+@@ -25,8 +25,9 @@ s32 PS4_SYSV_ABI sceNpWebApi2AddHttpRequestHeader(s64 request_id, const char* fi
+         LOG_ERROR(Lib_NpWebApi2, "Invalid parameters");
+         return ORBIS_NP_WEBAPI2_ERROR_INVALID_ARGUMENT;
+     }
+-    LOG_INFO(Lib_NpWebApi2, "called, request_id = {:#x}, field_name = {}, field_value = {}",
+-             request_id, field_name, field_value);
++    // bbport: the value can be the shadNet bearer token: never in a log.
++    LOG_INFO(Lib_NpWebApi2, "called, request_id = {:#x}, field_name = {}, field_value = (hidden)",
++             request_id, field_name);
+     return addHttpRequestHeader(request_id, field_name, field_value);
+ }
+ 

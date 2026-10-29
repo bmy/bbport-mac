@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport memory: the lock of a tracked region. Four bytes, unlocked when zero (tables of them
 // live in zero-filled memory committed on first touch); spins briefly, as holders keep it for a

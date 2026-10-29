@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport shader translator IR: registers (GCN scalar and vector registers, virtual registers of
 // the translator) and the flag words of texture and buffer instructions.

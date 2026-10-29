@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Tessellation on GCN passes control points through LDS: the local stage writes the hull
 // shader's input patch there, the hull shader writes its output control points and per-patch

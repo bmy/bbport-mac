@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: parallel copies of guest memory. Streaming a new area uploads 50-400 MB of textures
 // and buffers per frame; copied on one thread that is tens of milliseconds (stutter).
 #pragma once
@@ -39,10 +41,5 @@ void FlushBatch();
 /// Starts the calling thread's batch, then waits until every task passed to Async() so far
 /// has finished.
 void WaitAsync();
-
-/// Starts the calling thread's batch and runs `callback` once every task passed to Async() so
-/// far has finished (at once when none is pending), on whichever thread finishes last.
-/// Callbacks run in the order they were registered.
-void AfterCopies(std::function<void()> callback);
 
 } // namespace BbCopy

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Bloodborne (1.09): the mouse as a pointer in the game's own menus (Scaleform lists: the title
 // menu, the inventory, the shops, the options). The item under the pointer gets the game's cursor,

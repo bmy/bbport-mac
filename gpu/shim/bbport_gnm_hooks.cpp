@@ -1,4 +1,7 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include "bbport_map_near.h"
+#include "shim/bb_env.h"
 #include "common/types.h"
 #include "bbport_threads.h"
 #include "bbport_gnm_hooks.h"
@@ -63,10 +66,7 @@ void RememberNative(const DriverRecord& record) {
     ring->records[ring->next++ % ring->records.size()] = record;
 }
 bool TraceDriverWrites() {
-    static const bool on = [] {
-        const char* env = std::getenv("BB_GNM_WRITES_TRACE");
-        return env && env[0] == '1';
-    }();
+    static const bool on = bb_env_on("BB_GNM_WRITES_TRACE");
     return on;
 }
 
@@ -97,26 +97,8 @@ u64* CounterAt(std::size_t i) {
 /// A mapping within +-2 GiB of the image text, for rel32 jumps both ways.
 u8* MapNear(unsigned char* image, std::uint64_t image_size, std::size_t size) {
     const u64 base = reinterpret_cast<u64>(image);
-    for (u64 k = 1; k <= 64; ++k) {
-        for (const u64 hint : {base - k * (16ull << 20), base + image_size + k * (16ull << 20)}) {
-#ifdef MAP_FIXED_NOREPLACE
-            void* p = mmap(reinterpret_cast<void*>(hint), size, PROT_READ | PROT_WRITE,
-                           MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
-#else
-            // bbport (macOS): no MAP_FIXED_NOREPLACE; the hint is taken only where it is free.
-            void* p = mmap(reinterpret_cast<void*>(hint), size, PROT_READ | PROT_WRITE,
-                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-            if (p != MAP_FAILED && p != reinterpret_cast<void*>(hint)) {
-                munmap(p, size);
-                p = MAP_FAILED;
-            }
-#endif
-            if (p != MAP_FAILED) {
-                return static_cast<u8*>(p);
-            }
-        }
-    }
-    return nullptr;
+    return static_cast<u8*>(BbMapNear::Map(base, base + image_size, size, PROT_READ | PROT_WRITE,
+                                           16ull << 20, "Gnm census"));
 }
 
 bool Rel32(const u8* from_next, const void* to, std::int32_t& rel) {
@@ -560,7 +542,7 @@ void ReportLoop() {
         }
         std::sort(rates.rbegin(), rates.rend());
         // BB_GNM_CENSUS_FILE: every function's total calls so far (offset, calls, cb method, PM4).
-        if (const char* path = std::getenv("BB_GNM_CENSUS_FILE")) {
+        if (const char* path = bb_env("BB_GNM_CENSUS_FILE")) {
             if (FILE* f = std::fopen(path, "w")) {
                 for (std::size_t i = 0; i < Count; ++i) {
                     std::fprintf(f, "0x%07llx %llu %d %s\n", (unsigned long long)Table[i].offset,
@@ -636,17 +618,15 @@ void CheckSubmission(const std::uint32_t* commands, std::uint64_t dwords) {
 
 void PatchImage(unsigned char* image, std::uint64_t size) {
     image_base = reinterpret_cast<u64>(image);
-    if (const char* env = std::getenv("BB_GNM_RACE_STACKS"); env && env[0] == '1') {
+    if (const char* env = bb_env("BB_GNM_RACE_STACKS"); env && env[0] == '1') {
         constexpr std::array<u8, 6> entry{0x55, 0x48, 0x89, 0xe5, 0x41, 0x57};
         const bool ok = Core::InstallGuestCodeHook(image + 0x26b4ef0, entry, 0x26b4ef0,
                                                    MainContextUse);
         std::fprintf(stderr, "Gnm main context observer: %s\n", ok ? "on" : "unavailable");
     }
-    const char* env = std::getenv("BB_GNM_CENSUS");
-    const char* observe_env = std::getenv("BB_GNM_OBSERVE");
-    const char* native_env = std::getenv("BB_GNM_NATIVE_ONLY");
-    native_trace_only = native_env && native_env[0] == '1';
-    observe = native_trace_only || (observe_env && observe_env[0] == '1');
+    const char* env = bb_env("BB_GNM_CENSUS");
+    native_trace_only = bb_env_on("BB_GNM_NATIVE_ONLY");
+    observe = native_trace_only || (bb_env_on("BB_GNM_OBSERVE"));
     if (!observe && (!env || env[0] != '1')) {
         return;
     }
@@ -655,7 +635,7 @@ void PatchImage(unsigned char* image, std::uint64_t size) {
     const std::size_t code_bytes = (stub_bytes + page - 1) / page * page;
     const std::size_t map_bytes = code_bytes + Count * CounterStride;
     image_base = reinterpret_cast<u64>(image);
-    if (const char* t = std::getenv("BB_GNM_TRACE")) {
+    if (const char* t = bb_env("BB_GNM_TRACE")) {
         unsigned long long offset = 0;
         int count = 40;
         std::sscanf(t, "%llx:%d", &offset, &count);
@@ -676,7 +656,7 @@ void PatchImage(unsigned char* image, std::uint64_t size) {
     WriteExitThunk(exit_thunk);
     // BB_GNM_CENSUS_RANGE=first:last (table indices, bisecting).
     std::size_t first = 0, last = Count;
-    if (const char* r = std::getenv("BB_GNM_CENSUS_RANGE")) {
+    if (const char* r = bb_env("BB_GNM_CENSUS_RANGE")) {
         std::sscanf(r, "%zu:%zu", &first, &last);
     }
     u8* counters = stubs + code_bytes;

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: button prompts for the device in use. The game draws its key guide ("<?conclusion?>:
 // OK", item pick-ups, tutorials) with 32x32 icons of PlayStation buttons (KG_OK, KG_Cancel,

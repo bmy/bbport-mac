@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 # tools/fsr4_optimize.sh: builds fixed/faster variants of FSR 4 v07 passes into
 # fsr4_shaders/opt/ (vk_fsr4.cpp prefers files there; BB_FSR4_OPT=0 uses the originals):
 #   *_post.spv    stores through shared memory, bit-exact, ~3.5x faster (fsr4_post_lds.pl);

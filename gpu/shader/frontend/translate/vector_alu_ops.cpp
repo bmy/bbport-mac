@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Vector ALU instructions with their own semantics: carries through VCC or an SGPR pair, legacy
 // float rules, 24-bit multiplies, F16 conversions with and without host F16, cube map

@@ -1,12 +1,18 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "textures/image.h"
+#include "shim/bb_env.h"
+#include "textures/image_spares.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <vector>
 #include <fmt/format.h>
 
 #include <vk_mem_alloc.h>
@@ -83,7 +89,7 @@ vk::ImageType VulkanType(Gcn::ImageType type) {
 /// once wholly empty (~0.9 GB on an RX 7800 XT).
 vk::DeviceSize DedicatedFrom() {
     static const vk::DeviceSize bytes = [] {
-        const char* env = std::getenv("BB_VMA_DEDICATED_MB");
+        const char* env = bb_env("BB_VMA_DEDICATED_MB");
         return vk::DeviceSize(env ? std::strtoull(env, nullptr, 10) : 4) << 20;
     }();
     return bytes;
@@ -104,6 +110,66 @@ bool NeedsBarrier(const Image::State& state, vk::ImageLayout layout, vk::AccessF
 
 Common::IncrementalIdProvider<u64> Image::next_uid{};
 
+namespace {
+/// Recently freed texture cache images (HostImage::recyclable), newest last.
+struct Recycled {
+    VmaAllocator allocator;
+    VmaAllocation allocation;
+    vk::Image image;
+    vk::ImageCreateInfo ci;
+    vk::DeviceSize size;
+    std::chrono::steady_clock::time_point freed;
+};
+std::mutex recycle_mutex;
+std::vector<Recycled> recycled;
+vk::DeviceSize recycled_bytes = 0;
+u64 recycle_hits = 0;
+/// BB_IMAGE_RECYCLE_MB (0: off; default 256, at most an eighth of the budget, set by the texture
+/// cache through TrimRecycled's caller); entries older than BB_IMAGE_RECYCLE_SECONDS (90) go.
+vk::DeviceSize RecycleCap() {
+    static const vk::DeviceSize cap = [] {
+        const char* env = bb_env("BB_IMAGE_RECYCLE_MB");
+        return vk::DeviceSize(env && *env ? std::strtoull(env, nullptr, 10) : 256) << 20;
+    }();
+    return cap;
+}
+std::chrono::seconds RecycleAge() {
+    static const auto age = [] {
+        const char* env = bb_env("BB_IMAGE_RECYCLE_SECONDS");
+        return std::chrono::seconds(env && *env ? std::strtoull(env, nullptr, 10) : 90);
+    }();
+    return age;
+}
+bool SameImage(const vk::ImageCreateInfo& a, const vk::ImageCreateInfo& b) {
+    return !a.pNext && !b.pNext && a.flags == b.flags && a.imageType == b.imageType &&
+           a.format == b.format && a.extent == b.extent && a.mipLevels == b.mipLevels &&
+           a.arrayLayers == b.arrayLayers && a.samples == b.samples && a.tiling == b.tiling &&
+           a.usage == b.usage && a.sharingMode == b.sharingMode;
+}
+/// The oldest (or expired) entries destroyed until at most `keep` bytes stay; under the mutex.
+void TrimLocked(vk::DeviceSize keep) {
+    const auto now = std::chrono::steady_clock::now();
+    size_t drop = 0;
+    vk::DeviceSize bytes = recycled_bytes;
+    while (drop < recycled.size() &&
+           (bytes > keep || now - recycled[drop].freed > RecycleAge())) {
+        bytes -= recycled[drop].size;
+        ++drop;
+    }
+    for (size_t i = 0; i < drop; ++i) {
+        BbStats::vk_image_bytes.fetch_sub(recycled[i].size, std::memory_order_relaxed);
+        vmaDestroyImage(recycled[i].allocator, recycled[i].image, recycled[i].allocation);
+    }
+    recycled.erase(recycled.begin(), recycled.begin() + drop);
+    recycled_bytes = bytes;
+}
+} // namespace
+
+void HostImage::TrimRecycled(vk::DeviceSize keep_bytes) {
+    std::scoped_lock lock{recycle_mutex};
+    TrimLocked(keep_bytes);
+}
+
 HostImage::~HostImage() {
     Destroy();
 }
@@ -112,7 +178,7 @@ HostImage::HostImage(HostImage&& other) noexcept
     : device{other.device}, allocator{std::exchange(other.allocator, VK_NULL_HANDLE)},
       allocation{std::exchange(other.allocation, VK_NULL_HANDLE)},
       image{std::exchange(other.image, VK_NULL_HANDLE)}, image_ci{other.image_ci},
-      size_bytes{std::exchange(other.size_bytes, 0)} {}
+      size_bytes{std::exchange(other.size_bytes, 0)}, recyclable{other.recyclable} {}
 
 HostImage& HostImage::operator=(HostImage&& other) noexcept {
     if (this != &other) {
@@ -123,6 +189,7 @@ HostImage& HostImage::operator=(HostImage&& other) noexcept {
         image = std::exchange(other.image, VK_NULL_HANDLE);
         image_ci = other.image_ci;
         size_bytes = std::exchange(other.size_bytes, 0);
+        recyclable = other.recyclable;
     }
     return *this;
 }
@@ -130,13 +197,32 @@ HostImage& HostImage::operator=(HostImage&& other) noexcept {
 void HostImage::Create(const vk::ImageCreateInfo& create_info) {
     ASSERT(!image);
     image_ci = create_info;
-    VmaAllocationCreateFlags dedicated = 0;
-    if (device && DedicatedFrom() != 0) {
-        const vk::DeviceImageMemoryRequirements query{.pCreateInfo = &image_ci};
-        if (device.getImageMemoryRequirements(query).memoryRequirements.size >= DedicatedFrom()) {
-            dedicated = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+    if (recyclable && RecycleCap() != 0) {
+        std::scoped_lock lock{recycle_mutex};
+        for (size_t i = recycled.size(); i-- > 0;) {
+            auto& r = recycled[i];
+            if (r.allocator == allocator && SameImage(r.ci, image_ci)) {
+                allocation = r.allocation;
+                image = r.image;
+                size_bytes = r.size;
+                recycled_bytes -= r.size;
+                recycled.erase(recycled.begin() + i);
+                if (++recycle_hits == 1 || recycle_hits % 256 == 0) {
+                    std::printf("Texture cache: %llu images made again from freed ones (%llu MiB "
+                                "kept for that)\n",
+                                static_cast<unsigned long long>(recycle_hits),
+                                static_cast<unsigned long long>(recycled_bytes >> 20));
+                }
+                return;
+            }
         }
     }
+    // A spare made ahead on the spare thread (image_spares.h): no create or bind on this one.
+    if (recyclable && device && ImageSpares::Take(allocator, image_ci, image, allocation, size_bytes)) {
+        return;
+    }
+    const VmaAllocationCreateFlags dedicated =
+        ImageSpares::MemoryFlags(device, image_ci) & VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
     const VmaAllocationCreateInfo alloc_ci = {
         .flags = VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT | dedicated,
         .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
@@ -144,19 +230,85 @@ void HostImage::Create(const vk::ImageCreateInfo& create_info) {
     const VkImageCreateInfo vk_create_info = image_ci;
     VkImage handle{};
     VmaAllocationInfo alloc_info{};
-    const VkResult result =
-        vmaCreateImage(allocator, &vk_create_info, &alloc_ci, &handle, &allocation, &alloc_info);
+    BbStats::VkMemTimer timer{BbStats::t_vk_alloc, BbStats::n_vk_alloc};
+    const auto split_now = [] { return std::chrono::steady_clock::now(); };
+    const auto split_ns = [](auto a, auto b) {
+        return u64(std::chrono::duration_cast<std::chrono::nanoseconds>(b - a).count());
+    };
+    // vmaCreateImage in its three steps, each timed (the frame stats' stall lines).
+    const auto t0 = split_now();
+    VkResult result = VK_SUCCESS;
+    if (!device) {
+        result = vmaCreateImage(allocator, &vk_create_info, &alloc_ci, &handle, &allocation, &alloc_info);
+    } else {
+        result = VkResult(device.createImage(&image_ci, nullptr, reinterpret_cast<vk::Image*>(&handle)));
+    }
+    const bool split = bool(device);
+    const auto t1 = split_now();
+    if (split && result == VK_SUCCESS) {
+        VmaAllocationCreateInfo split_ci = alloc_ci;
+        split_ci.usage = VMA_MEMORY_USAGE_GPU_ONLY; // AUTO needs the create info
+        result = vmaAllocateMemoryForImage(allocator, handle, &split_ci, &allocation, &alloc_info);
+        if (result != VK_SUCCESS) {
+            device.destroyImage(vk::Image{handle});
+        }
+    }
+    const auto t2 = split_now();
+    if (split && result == VK_SUCCESS) {
+        result = vmaBindImageMemory(allocator, allocation, handle);
+    }
+    const auto t3 = split_now();
+    BbStats::t_img_create.fetch_add(split_ns(t0, t1), std::memory_order_relaxed);
+    BbStats::t_img_alloc.fetch_add(split_ns(t1, t2), std::memory_order_relaxed);
+    BbStats::t_img_bind.fetch_add(split_ns(t2, t3), std::memory_order_relaxed);
+    if (static const u64 slow_us = [] {
+            const char* env = bb_env("BB_SLOW_BIND_LOG"); // microseconds
+            return env ? std::strtoull(env, nullptr, 10) : 0ull;
+        }();
+        slow_us && split_ns(t1, t3) > slow_us * 1000) {
+        std::printf("Slow image: %ux%ux%u %u levels %u layers format %d usage %#x, %llu KiB%s: memory %.1f ms, bind %.1f ms\n",
+                    image_ci.extent.width, image_ci.extent.height, image_ci.extent.depth,
+                    image_ci.mipLevels, image_ci.arrayLayers, int(image_ci.format),
+                    u32(VkImageUsageFlags(image_ci.usage)), (unsigned long long)(alloc_info.size >> 10),
+                    dedicated ? " dedicated" : "", split_ns(t1, t2) / 1e6, split_ns(t2, t3) / 1e6);
+    }
     ASSERT_MSG(result == VK_SUCCESS, "image allocation: {}", vk::to_string(vk::Result{result}));
     image = handle;
     size_bytes = alloc_info.size;
+    BbStats::image_new_bytes.fetch_add(size_bytes, std::memory_order_relaxed);
     BbStats::vk_image_bytes.fetch_add(size_bytes, std::memory_order_relaxed);
+    if (recyclable && device) {
+        ImageSpares::NoteMade(image_ci, size_bytes); // its shape gets spares from now on
+    }
+}
+
+u32 ImageSpares::MemoryFlags(vk::Device device, const vk::ImageCreateInfo& ci) {
+    VmaAllocationCreateFlags flags = VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
+    if (device && DedicatedFrom() != 0) {
+        const vk::DeviceImageMemoryRequirements query{.pCreateInfo = &ci};
+        if (device.getImageMemoryRequirements(query).memoryRequirements.size >= DedicatedFrom()) {
+            flags |= VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+        }
+    }
+    return flags;
 }
 
 void HostImage::Destroy() {
     if (!image) {
         return;
     }
+    if (recyclable && RecycleCap() != 0 && size_bytes <= RecycleCap()) {
+        std::scoped_lock lock{recycle_mutex};
+        recycled.push_back({allocator, allocation, image, image_ci, size_bytes,
+                            std::chrono::steady_clock::now()});
+        recycled_bytes += size_bytes;
+        TrimLocked(RecycleCap());
+        image = vk::Image{};
+        allocation = {};
+        return;
+    }
     BbStats::vk_image_bytes.fetch_sub(size_bytes, std::memory_order_relaxed);
+    BbStats::VkMemTimer timer{BbStats::t_vk_free, BbStats::n_vk_free};
     vmaDestroyImage(allocator, image, allocation);
     image = vk::Image{};
     allocation = {};
@@ -165,7 +317,7 @@ void HostImage::Destroy() {
 Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
              Common::SlotVector<ImageView>& slot_image_views_, const ImageInfo& info_)
     : guest_begin{info_.guest_address}, guest_end{info_.guest_address + info_.guest_size},
-      info{info_}, runtime{&runtime_}, slot_image_views{&slot_image_views_} {
+      info{info_}, guest_info{info_}, runtime{&runtime_}, slot_image_views{&slot_image_views_} {
     BbStats::Timer timer{BbStats::t_image_create};
     if (info.pixel_format == vk::Format::eUndefined) {
         return; // a placeholder (a stencil image's address)
@@ -195,14 +347,31 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
 
     const vk::Format format = instance.GetSupportedFormat(info.pixel_format, format_features);
     const vk::ImageType vk_type = VulkanType(info.type);
-    const auto properties = instance.GetPhysicalDevice().getImageFormatProperties2(
-        vk::PhysicalDeviceImageFormatInfo2{
+    const auto query = [&] {
+        return instance.GetPhysicalDevice().getImageFormatProperties2(vk::PhysicalDeviceImageFormatInfo2{
             .format = format,
             .type = vk_type,
             .tiling = vk::ImageTiling::eOptimal,
             .usage = usage_flags,
             .flags = create_flags,
         });
+    };
+    auto properties = query();
+    // Storage is asked for every color and compressed image; a driver may refuse it for a format
+    // (AMD's Windows driver: BC6H). Such an image is made without it rather than invalid (its
+    // views follow usage_flags), so the game's sampling of it stays defined.
+    if (properties.result == vk::Result::eErrorFormatNotSupported &&
+        (usage_flags & vk::ImageUsageFlagBits::eStorage)) {
+        usage_flags &= ~vk::ImageUsageFlagBits::eStorage;
+        properties = query();
+        if (properties.result == vk::Result::eSuccess) {
+            static std::atomic<int> told{0};
+            if (told.fetch_add(1, std::memory_order_relaxed) < 8) {
+                LOG_WARNING(Render_Vulkan, "image format {} type {}: no storage use on this driver, made without it",
+                            vk::to_string(format), vk::to_string(vk_type));
+            }
+        }
+    }
     if (properties.result == vk::Result::eErrorFormatNotSupported) {
         LOG_ERROR(Render_Vulkan, "image format {} type {} unsupported (flags {}, usage {})",
                   vk::to_string(format), vk::to_string(vk_type), vk::to_string(create_flags),
@@ -215,6 +384,7 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
     backing = &backing_images.emplace_back();
     backing->num_samples = info.num_samples;
     backing->image = HostImage{instance.GetDevice(), instance.GetAllocator()};
+    backing->image.recyclable = true;
     backing->image.Create(vk::ImageCreateInfo{
         .flags = create_flags,
         .imageType = vk_type,
@@ -289,10 +459,7 @@ void Image::GetBarriers(Barriers& out, vk::ImageLayout dst_layout, vk::AccessFla
     // Per level and layer: the parts in the range (all of them when the whole image goes to
     // one state again), runs of layers in the same state in one barrier each.
     const u32 num_layers = info.resources.layers;
-    static const bool barrier_stats = [] {
-        const char* env = std::getenv("BB_BARRIER_STATS");
-        return env && env[0] == '1';
-    }();
+    static const bool barrier_stats = bb_env_on("BB_BARRIER_STATS");
     if (barrier_stats) {
         // BB_BARRIER_STATS=1 (diagnostics): images whose subresource states cost the most.
         struct Row {
@@ -333,15 +500,21 @@ void Image::GetBarriers(Barriers& out, vk::ImageLayout dst_layout, vk::AccessFla
             rows.clear();
         }
     }
-    if (parts.empty()) {
+    const bool fresh = parts.empty();
+    if (fresh) {
         parts.assign(info.resources.levels * num_layers, whole);
     }
     const SubresourceRange walk = partial ? *range : SubresourceRange{{}, info.resources};
-    if (backing->settled && backing->settled_range == walk && backing->settled_state == target &&
+    if (backing->settled && backing->settled_state == target &&
+        (backing->settled_uniform || backing->settled_range == walk) &&
         !NeedsBarrier(target, dst_layout, dst_mask)) {
         whole = target;
         return;
     }
+    // After the walk every part is in `target` when the rest was in it already.
+    const bool uniform_after =
+        walk == SubresourceRange{{}, info.resources} || (fresh && whole == target) ||
+        (backing->settled && backing->settled_uniform && backing->settled_state == target);
     const u32 first_level = walk.base.level;
     const u32 end_level = first_level + walk.extent.levels;
     const u32 first_layer = walk.base.layer;
@@ -368,6 +541,7 @@ void Image::GetBarriers(Barriers& out, vk::ImageLayout dst_layout, vk::AccessFla
     backing->settled = partial;
     backing->settled_range = walk;
     backing->settled_state = target;
+    backing->settled_uniform = partial && uniform_after;
     whole = target;
 }
 

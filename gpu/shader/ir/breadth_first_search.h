@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport shader translator IR: searching the instructions a value is computed from, nearest
 // first (rightmost arguments first at each step), for the first one `pred` returns a result for.

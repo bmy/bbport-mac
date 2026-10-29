@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: camera motion vectors for temporal upscaling (docs/upscaler.md). The scene constants
 // give the camera of each frame; the previous one is kept here. BB_DEBUG_MOTION=1 blends the
@@ -53,6 +54,19 @@ public:
     [[nodiscard]] VideoCore::ImageId Depth() const noexcept {
         return depth_id;
     }
+    /// The projection (x scale, y scale, z scale, z offset; ndc +y down) of this frame's G-buffer
+    /// pass, before the frame's camera is committed; else the last frame's; or zeros (VBAO).
+    [[nodiscard]] std::array<float, 4> SceneProjection() const noexcept {
+        return pass_has_camera && pass_camera.valid ? pass_camera.proj
+               : current.valid                       ? current.proj
+                                                     : std::array<float, 4>{};
+    }
+    /// The world-to-view matrix (3x4 rows) going with SceneProjection, or zeros.
+    [[nodiscard]] std::array<float, 12> SceneView() const noexcept {
+        return pass_has_camera && pass_camera.valid ? pass_camera.view
+               : current.valid                       ? current.view
+                                                     : std::array<float, 12>{};
+    }
     /// The render size in the scene constants (the game's viewport; its targets may be
     /// allocated larger, e.g. 1916x1080 for a 1916x1078 scene), or zero before the first camera.
     [[nodiscard]] std::array<u32, 2> RenderSize() const noexcept {
@@ -66,6 +80,11 @@ public:
     void CameraVectors(float position[3], float up[3], float right[3], float forward[3]) const noexcept;
     // Current projection, previous projection, and row Z of previous-view * inverse-view.
     [[nodiscard]] std::array<std::array<float, 4>, 3> TaaDepthParameters() const noexcept;
+    /// Frame generation (DLSS): row-vector matrices of D3D clip space (upscale/camera_matrices.h):
+    /// the projection, current clip to previous clip, and back. False before two cameras.
+    bool ClipTransforms(std::array<float, 16>& view_to_clip,
+                        std::array<float, 16>& clip_to_prev_clip,
+                        std::array<float, 16>& prev_clip_to_clip) const noexcept;
     /// bbport: the matrices and jitter of the motion of this frame, printed with an upscaler dump
     /// (BB_DUMP_TRIGGER) for offline checks of the vectors.
     void PrintState(int frame) const;
@@ -121,6 +140,8 @@ private:
     std::array<float, 2> jitter{}, previous_jitter{};
     std::array<u32, 2> render_size{};
     VideoCore::ImageId depth_id{};
+    u64 frame_depth_area = 0; ///< bbport: width x height of depth_id (OnGBufferPass)
+    bool side_pass = false;   ///< bbport: in a G-buffer pass smaller than the frame's (ignored)
     float gbuffer_x_sign = 1.0f; ///< bbport: signs of the G-buffer viewport scales (OnGBufferPass)
     float gbuffer_y_sign = 1.0f;
 

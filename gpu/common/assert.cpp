@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: GPU-side check failures stop the port with exit code 23.
 #include <cstdio>
@@ -12,7 +13,12 @@
 // before exec; Vulkan calls failing then are not errors: this thread waits for the exec instead.
 extern "C" __attribute__((weak)) volatile int runtime_restarting; // absent in the tests
 
+bool g_bb_assert_throws = false;
+
 void assert_fail_impl() {
+    if (g_bb_assert_throws) {
+        throw std::runtime_error("assertion failed");
+    }
     if (&runtime_restarting && runtime_restarting) {
         for (;;) {
             pause();

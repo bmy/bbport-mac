@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Without 64-bit floats doubles are computed as floats: 64-bit operations take their 32-bit
 // forms, and the packing of doubles to and from dword pairs converts between the encodings.

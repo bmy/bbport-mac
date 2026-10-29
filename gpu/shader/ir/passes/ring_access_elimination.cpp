@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Stage outputs passed through memory rings on GCN become attributes: the local stage's LDS
 // writes (to the hull shader), the export stage's ES ring stores (to the geometry shader), and the

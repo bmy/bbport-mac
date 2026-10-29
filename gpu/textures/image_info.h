@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport textures: what an image is in guest memory and on the host: its format and size, its
 // mip levels and layers, and where each level lies in the guest's memory (tiling).
@@ -60,6 +61,9 @@ struct ImageInfo {
     s32 SliceOf(const ImageInfo& info, s32 mip) const;
     /// Lays out the levels (mips_layout) and computes guest_size.
     void UpdateSize();
+    /// The image without its `skip` largest levels (texture_quality): level 0 is level `skip` of
+    /// the guest's; the guest address and size stay (the detiler takes the full description).
+    ImageInfo Reduced(u32 skip) const;
 
     struct {
         VAddr cmask_addr;
@@ -91,6 +95,7 @@ struct ImageInfo {
     u32 guest_size{};
     u8 bank_swizzle{};
     bool alt_tile{}; ///< the PS4 Pro's layout
+    u8 skip_levels{}; ///< Reduced: the guest's levels left out
 
     VAddr stencil_addr{};
     u32 stencil_size{};

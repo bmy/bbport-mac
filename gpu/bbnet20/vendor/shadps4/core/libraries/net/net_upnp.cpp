@@ -3,6 +3,8 @@
 
 #include <chrono>
 #include <cstring>
+#include <string>
+#include <vector>
 #include <upnperrors.h>
 #include "common/logging/log.h"
 #include "net_upnp.h"
@@ -23,11 +25,13 @@ UPnPClient& UPnPClient::Instance() {
 }
 
 UPnPClient::~UPnPClient() {
+    m_map_cancel = true;
     if (m_thread.joinable())
         m_thread.join();
     if (m_map_thread.joinable())
         m_map_thread.join();
-    // Mappings have no lease time: leave nothing behind on the router.
+    // Leave nothing behind on the router (the lease ends the mapping too when the game ends
+    // without this destructor: _Exit, a crash).
     if (const u16 port = m_mapped_port.exchange(0); port != 0)
         RemoveMapping(port);
     if (m_available.load())
@@ -85,8 +89,13 @@ void UPnPClient::DiscoverThread() {
     }
 
     char wan_addr[40]{};
+    // [extra] miniupnpc API version compatibility (< 18 uses 5 args, >= 18 uses 7 args)
+#if MINIUPNPC_API_VERSION >= 18 // [extra]
     const int ret = UPNP_GetValidIGD(devlist, &m_urls, &m_data, m_lan_addr, sizeof(m_lan_addr),
                                      wan_addr, sizeof(wan_addr));
+#else // [extra]
+    const int ret = UPNP_GetValidIGD(devlist, &m_urls, &m_data, m_lan_addr, sizeof(m_lan_addr)); // [extra]
+#endif // [extra]
     freeUPNPDevlist(devlist);
 
     if (ret != 1) {
@@ -119,6 +128,42 @@ void UPnPClient::DiscoverThread() {
     m_cv.notify_all();
 }
 
+// bbport: the router's port mapping lasts MappingLease seconds and is renewed while the game
+// runs (the game usually ends without removing it: _Exit, a crash). Mappings this PC's earlier
+// sessions left (same description and address, another port) are removed first, so they do not
+// pile up.
+namespace {
+constexpr const char* MappingDescription = "bbport";
+constexpr const char* MappingLease = "7200";
+constexpr auto MappingRenewal = std::chrono::hours(1);
+constexpr int OnlyPermanentLeasesSupported = 725;
+} // namespace
+
+void UPnPClient::RemoveStaleMappings(u16 port) {
+    std::vector<std::string> stale;
+    for (int index = 0; index < 256; ++index) {
+        char ext_port[6]{}, int_client[16]{}, int_port[6]{}, protocol[4]{}, desc[80]{}, enabled[4]{},
+            remote_host[64]{}, duration[16]{};
+        const std::string index_str = std::to_string(index);
+        if (UPNP_GetGenericPortMappingEntry(m_urls.controlURL, m_data.first.servicetype,
+                                            index_str.c_str(), ext_port, int_client, int_port,
+                                            protocol, desc, enabled, remote_host,
+                                            duration) != UPNPCOMMAND_SUCCESS) {
+            break; // the end of the list (or a router that does not list its mappings)
+        }
+        if (std::strcmp(desc, MappingDescription) == 0 && std::strcmp(protocol, "UDP") == 0 &&
+            std::strcmp(int_client, m_lan_addr) == 0 && std::to_string(port) != ext_port) {
+            stale.emplace_back(ext_port);
+        }
+    }
+    for (const std::string& old_port : stale) {
+        const int ret = UPNP_DeletePortMapping(m_urls.controlURL, m_data.first.servicetype,
+                                               old_port.c_str(), "UDP", nullptr);
+        LOG_INFO(Lib_Net, "UPNP: removed an earlier session's UDP port mapping {} ({})", old_port,
+                 ret == UPNPCOMMAND_SUCCESS ? "done" : strupnperror(ret));
+    }
+}
+
 void UPnPClient::AddMapping(u16 port) {
     if (!m_p2p_features_enabled.load())
         return;
@@ -126,14 +171,23 @@ void UPnPClient::AddMapping(u16 port) {
     if (!m_available.load())
         return;
 
+    RemoveStaleMappings(port);
     const std::string port_str = std::to_string(port);
-    const int ret =
-        UPNP_AddPortMapping(m_urls.controlURL, m_data.first.servicetype, port_str.c_str(),
-                            port_str.c_str(), m_lan_addr, "shadPS4", "UDP", nullptr, "0");
+    int ret = UPNP_AddPortMapping(m_urls.controlURL, m_data.first.servicetype, port_str.c_str(),
+                                  port_str.c_str(), m_lan_addr, MappingDescription, "UDP", nullptr,
+                                  MappingLease);
+    const bool permanent = ret == OnlyPermanentLeasesSupported;
+    if (permanent) {
+        ret = UPNP_AddPortMapping(m_urls.controlURL, m_data.first.servicetype, port_str.c_str(),
+                                  port_str.c_str(), m_lan_addr, MappingDescription, "UDP", nullptr,
+                                  "0");
+    }
 
     if (ret == UPNPCOMMAND_SUCCESS) {
         m_external_port.store(port);
-        LOG_INFO(Lib_Net, "UPNP: mapped UDP port {}", port);
+        LOG_INFO(Lib_Net, "UPNP: mapped UDP port {} ({})", port,
+                 permanent ? "this router keeps it until the next session removes it"
+                           : "for 2 hours, renewed while the game runs");
     } else {
         // Store the requested port as best-guess even on failure so callers still get a value.
         m_external_port.store(port);
@@ -143,8 +197,10 @@ void UPnPClient::AddMapping(u16 port) {
 
 void UPnPClient::MapPortAsync(u16 port) {
     std::scoped_lock lock{m_map_mutex};
+    m_map_cancel = true;
     if (m_map_thread.joinable())
         m_map_thread.join();
+    m_map_cancel = false;
     m_map_thread = std::thread([this, port] {
         if (!WaitReady(10'000)) {
             LOG_INFO(Lib_Net, "UPNP: no IGD, UDP port {} is not forwarded", port);
@@ -154,11 +210,22 @@ void UPnPClient::MapPortAsync(u16 port) {
         if (previous != 0 && previous != port)
             RemoveMapping(previous);
         AddMapping(port);
+        // bbport: the lease renewed every hour until another request or UnmapPort (a second's
+        // wait for them at most).
+        auto renew = std::chrono::steady_clock::now() + MappingRenewal;
+        while (!m_map_cancel.load()) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            if (!m_map_cancel.load() && std::chrono::steady_clock::now() >= renew) {
+                AddMapping(port);
+                renew = std::chrono::steady_clock::now() + MappingRenewal;
+            }
+        }
     });
 }
 
 void UPnPClient::UnmapPort(u16 port) {
     std::scoped_lock lock{m_map_mutex};
+    m_map_cancel = true;
     if (m_map_thread.joinable())
         m_map_thread.join();
     u16 expected = port;

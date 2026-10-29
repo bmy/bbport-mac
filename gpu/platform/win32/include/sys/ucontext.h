@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport Windows: the Linux x86-64 signal context the fault handlers read (gregs[REG_*]),
 // filled from the vectored exception handler's CONTEXT by the runtime (BbWin32ToUcontext) and

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Conversions and composites (vectors): one SPIR-V instruction each, written as tables.
 #include "shader/ir/microinstruction.h"

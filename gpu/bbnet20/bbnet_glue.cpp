@@ -2,6 +2,7 @@
 // bbport co-op: what shadPS4 0.20.0's network and NP libraries need from the rest of
 // shadPS4, implemented on top of the bbport runtime, and their registration.
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -14,6 +15,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -26,10 +28,12 @@
 #endif
 
 #include "common/elf_info.h"
+#include "common/logging/line.h"
 #include "common/types.h"
 #include "core/emulator_settings.h"
 #include "core/memory.h"
 #include "core/debugger.h"
+#include "core/bbport_bbsc_kit.h" // Teefpyre (SrShadowy fork)
 #include "core/libraries/kernel/kernel.h"
 #include "core/libraries/kernel/memory.h"
 #include "core/libraries/kernel/threads/pthread.h"
@@ -67,13 +71,14 @@
 #include "common/singleton.h"
 #include "core/bbsc_cinematic.h"
 #include "core/bbsc_persistence.h"
+#include "core/bbsc_relay_client.h"
 #include "core/bloodborne_re.h"
 #include "core/cpu_patches.h"
 #include "core/file_format/psf.h"
 #include "games/game_profile.h"
 #include "thd/thd.h"
 
-#include "bbnet/bbnet.h"
+#include "bbnet20/bbnet.h"
 
 namespace {
 /// The runtime's side (bbnet_init).
@@ -345,14 +350,22 @@ s32 GetCurrentPid() {
 }
 } // namespace Core::Debugger
 
-// ---- Notifications (log only for now) ------------------------------------------------------------
+// ---- Notifications ------------------------------------------------------------------------------
+// The console and the log get every one; an Info notice (the login failed, the server is down or
+// refuses this client) also shows for a while on the port's overlay line, over the game.
 
 namespace ImGui::ShadNetNotify {
 namespace {
 std::mutex history_mutex;
 std::vector<HistoryEntry> history;
 std::size_t unread{};
+// Bumped by every user of the overlay line: a notice clears it only while it is still its own.
+std::atomic<u64> overlay_line_generation{0};
+constexpr auto NoticeShown = std::chrono::seconds(15);
 } // namespace
+void OverlayLineTaken() {
+    ++overlay_line_generation;
+}
 KindDisplay DisplayOf(Kind kind) {
     switch (kind) {
     case Kind::FriendRequest:
@@ -370,7 +383,19 @@ KindDisplay DisplayOf(Kind kind) {
     }
 }
 void Push(Kind kind, std::string text) {
-    std::printf("Co-op: %s: %s\n", DisplayOf(kind).tag, text.c_str());
+    // One write of the whole line: the shadNet threads log at the same moment.
+    Common::Log::WriteLine(stdout,
+                           std::string("Co-op: ") + DisplayOf(kind).tag + ": " + text + "\n");
+    if (kind == Kind::Info) {
+        const u64 mine = ++overlay_line_generation;
+        bbgpu_overlay_banner(text.c_str());
+        std::thread([mine] {
+            std::this_thread::sleep_for(NoticeShown);
+            if (overlay_line_generation.load() == mine) {
+                bbgpu_overlay_banner(nullptr);
+            }
+        }).detach();
+    }
     std::scoped_lock lock{history_mutex};
     history.push_back({kind, std::move(text), {}});
     ++unread;
@@ -469,7 +494,11 @@ void SymbolsResolver::AddSymbol(const char* nid, const char*, const char*, Symbo
 }
 } // namespace Core::Loader
 
+#ifdef _WIN32
+#define BBNET_EXPORT extern "C" __declspec(dllexport)
+#else
 #define BBNET_EXPORT extern "C" __attribute__((visibility("default")))
+#endif
 
 BBNET_EXPORT uintptr_t bbnet_resolve(const char* scoped_nid) {
     const char* hash = std::strchr(scoped_nid, '#');
@@ -503,25 +532,34 @@ BBNET_EXPORT void bbnet_image_ready(uint64_t base, uint64_t size) {
         return;
     }
     MemoryPatcher::g_game_serial = "CUSA03173";
-    // BBSC finds the save it backs up and journals in shadPS4's folders; the port's are
-    // <user>/savedata/<user id>/CUSA00207/SPRJ0005 (BBSC_SAVE_DIR: the folder of userdata0000..).
-    if (!std::getenv("BBSC_SAVE_DIR")) {
-        const char* user = std::getenv("BB_GPU_USER_DIR");
-        std::error_code error;
-        for (const auto& id : std::filesystem::directory_iterator(
-                 std::filesystem::path(user ? user : "user") / "savedata", error)) {
-            const auto folder = id.path() / "CUSA00207" / "SPRJ0005";
-            if (std::filesystem::is_directory(folder, error)) {
-                setenv("BBSC_SAVE_DIR", folder.c_str(), 0);
-                std::printf("BBSC: save folder %s\n", folder.c_str());
-                break;
-            }
-        }
-    }
+    Common::Singleton<PSF>::Instance()->app_ver = "01.09"; // [extra: Teefpyre]
+    extra_bbsc_setup_save_dir(); // [extra: Teefpyre]
     // BBSC writes its byte patches straight into the game's code, and turns some on and off
     // while the game runs (session teardown, the host's lamp): its code pages stay writable
     // (shadPS4 maps them so; the port maps them read and execute).
     unsigned writable = 0;
+#ifdef _WIN32
+    // Windows: the image's executable regions from VirtualQuery, made writable through the
+    // runtime's mprotect (it keeps its own record of the guest's protections).
+    for (unsigned long long at = base; at < base + size;) {
+        MEMORY_BASIC_INFORMATION info{};
+        if (!VirtualQuery(reinterpret_cast<void*>(at), &info, sizeof(info)) || !info.RegionSize) {
+            break;
+        }
+        const unsigned long long start = std::max<unsigned long long>(
+            reinterpret_cast<unsigned long long>(info.BaseAddress), base);
+        const unsigned long long end = std::min<unsigned long long>(
+            reinterpret_cast<unsigned long long>(info.BaseAddress) + info.RegionSize, base + size);
+        constexpr DWORD Executable =
+            PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+        if (info.State == MEM_COMMIT && (info.Protect & Executable) && start < end) {
+            writable += mprotect(reinterpret_cast<void*>(start), end - start,
+                                 PROT_READ | PROT_WRITE | PROT_EXEC) == 0;
+            std::printf("BBSC: code %#llx-%#llx writable\n", start, end);
+        }
+        at = reinterpret_cast<unsigned long long>(info.BaseAddress) + info.RegionSize;
+    }
+#endif
     if (FILE* maps = std::fopen("/proc/self/maps", "r")) {
         char line[512];
         while (std::fgets(line, sizeof(line), maps)) {
@@ -567,6 +605,7 @@ BBNET_EXPORT void bbnet_image_ready(uint64_t base, uint64_t size) {
     Core::Bloodborne::InstallSeamlessCoopPatches();
     Core::Bbsc::InstallPersistentSessionPatches();
     Core::Bloodborne::InstallReverseEngineeringTrace();
+    Core::Bbsc::StartRelayClient(MemoryPatcher::g_game_serial);
 }
 
 namespace Libraries::Np::NpManager {
@@ -605,9 +644,13 @@ BBNET_EXPORT int bbnet_init(const BbNetHost* host) {
         Core::KeepGuestCodeWritable();
     }
     const auto& ids = Common::ElfInfo::Instance().GetNpCommIds();
-    std::printf("Co-op: %s, NP communication id %s%s\n", host->serial ? host->serial : "?",
-                ids.empty() ? "missing" : ids.front().c_str(),
-                EmulatorSettings.IsConnectedToNetwork() ? "; online play on" : "");
+    std::string line = std::string("Co-op: ") + (host->serial ? host->serial : "?") +
+                       ", NP communication id " +
+                       (ids.empty() ? std::string("missing") : ids.front());
+    if (EmulatorSettings.IsConnectedToNetwork()) {
+        line += "; online play on"; // a launcher can look for this
+    }
+    Common::Log::WriteLine(stdout, line + "\n"); // one write (line.h)
     Core::Loader::SymbolsResolver resolver;
     Core::Loader::SymbolsResolver* sym = &resolver;
     if (BbThd::Enabled()) {

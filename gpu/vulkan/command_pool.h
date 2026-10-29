@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport vulkan: command buffers for submissions, reused once the GPU is done with the
 // submission that last used them (grown four at a time).

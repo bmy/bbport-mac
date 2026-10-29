@@ -1,4 +1,8 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 #include "bbport_threads.h"
+#include "bbport_affinity.h"
+#include "shim/bb_env.h"
 #include "bbport_write_log.h"
 #include "bbport_frame_rate.h"
 #include "bbport_game_menu.h"
@@ -43,8 +47,10 @@
 #include "shader/ir/passes/srt.h"
 #include "render/rasterizer.h"
 #include "remote/bb_remote.h"
+#include "games/game_profile.h"
 
 extern "C" {
+void bbgpu_read_sample_start(); // memory/read_sample.cpp (Linux; BB_READ_SAMPLE)
 // runtime_memory.c
 int runtime_memory_is_mapped(uintptr_t address, uint64_t size);
 int runtime_memory_write_backing(uintptr_t address, const void* data, uint64_t size);
@@ -62,6 +68,7 @@ int32_t* runtime_errno(void);
 void runtime_memory_set_gpu_hooks(RuntimeGpuRange map, RuntimeGpuRange unmap, RuntimeGpuRange invalidate);
 void runtime_memory_set_note_write_hook(RuntimeGpuRange note);
 void runtime_memory_set_cpu_write_hook(RuntimeGpuRange hook);
+void runtime_memory_set_host_only_allocations(uint64_t mask);
 }
 
 Frontend::WindowSDL* g_window = nullptr;
@@ -91,9 +98,7 @@ void MemoryManager::SetRasterizer(Vulkan::Rasterizer* rasterizer_) {
     // Existing guest mappings are replayed by the runtime when hooks are installed.
     runtime_memory_set_gpu_hooks(
         [](uintptr_t address, uint64_t size) {
-            auto* r = Memory::Instance()->GetRasterizer();
-            r->RegisterMemory(address, size);
-            r->MapMemory(address, size);
+            Memory::Instance()->GetRasterizer()->MapMemory(address, size);
         },
         [](uintptr_t address, uint64_t size) { Memory::Instance()->GetRasterizer()->UnmapMemory(address, size); },
         [](uintptr_t address, uint64_t size) {
@@ -248,7 +253,21 @@ std::condition_variable g_window_cv;
 bool g_window_ready;
 } // namespace
 
-#ifdef BB_PGO_GENERATE
+#if defined(BB_PGO_GENERATE) && defined(BB_PGO_CLANG)
+extern "C" int __llvm_profile_write_file(void);
+// Clang's instrumented build (Windows): the counts so far rewritten every 30 s (one file, not
+// summed: no reset), as the game may end through _exit.
+static void StartProfileWriter() {
+    std::thread([] {
+        Common::SetCurrentThreadName("bb:pgo");
+        for (;;) {
+            std::this_thread::sleep_for(std::chrono::seconds(30));
+            __llvm_profile_write_file();
+            std::printf("PGO: profile written\n");
+        }
+    }).detach();
+}
+#elif defined(BB_PGO_GENERATE)
 extern "C" void __gcov_dump(void);
 extern "C" void __gcov_reset(void);
 // Instrumented build (BB_PGO=generate): the game often ends through _exit (watchdog, guest
@@ -300,8 +319,18 @@ static void RunOnMainThread(std::function<void()> task) {
 extern "C" int bbgpu_init(const BbGpuConfig* config) {
     BbThreads::guest_main_tid.store(BbThreads::HostTid(), std::memory_order_relaxed);
     BbSettings::Load();
+    BbAffinity::Start();
     // What the translator knows about this game (games/), before anything asks for it.
     Game::Select(config->serial);
+    // Its direct memory allocations the GPU never uses stay host memory (BB_HOST_ONLY_DEFAULT=0: none).
+    if (const Game::Profile* game = Game::Active()) {
+        if (!bb_env_off("BB_HOST_ONLY_DEFAULT") && game->host_only_allocations) {
+            runtime_memory_set_host_only_allocations(game->host_only_allocations);
+        }
+    }
+#if !defined(_WIN32) && !defined(__APPLE__) // bbport (macOS): Linux's signal context
+    bbgpu_read_sample_start(); // BB_READ_SAMPLE (diagnostics)
+#endif
 #ifdef BB_PGO_GENERATE
     StartProfileWriter();
 #endif
@@ -339,10 +368,10 @@ extern "C" int bbgpu_init(const BbGpuConfig* config) {
         BbSettings::save_game_menu_keys_only = true;
         // The hooks in the game's own code (fixes, live effects, aspect ratio): the game's code
         // is in this process; in one process the buffer cache installs them, here bb-gpu doesn't.
-        // No GPU-range notifications: those need the PC memory model.
+        // bbport: their GPU-range notifications (fresh, dead, live ranges) are not forwarded to
+        // bb-gpu's buffer cache yet.
         if (const Game::Profile* game = Game::Active(); game && game->install_hooks) {
-            const char* hooks_env = std::getenv("BB_GUEST_HOOKS");
-            if (hooks_env && hooks_env[0] == '0') {
+            if (bb_env_off("BB_GUEST_HOOKS")) {
                 std::printf("Guest hooks: off (BB_GUEST_HOOKS=0): nothing in the game's own code is hooked\n");
             } else {
                 game->install_hooks(Game::CoreServices{.fresh_range = nullptr});

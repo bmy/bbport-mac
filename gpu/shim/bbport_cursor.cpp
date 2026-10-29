@@ -1,5 +1,7 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "bbport_cursor.h"
+#include "shim/bb_env.h"
 
 #include <algorithm>
 #include <array>
@@ -151,7 +153,7 @@ SDL_Surface* Render(int size) {
 } // namespace
 
 SDL_Cursor* Create() {
-    if (const char* env = std::getenv("BB_CURSOR"); env && env[0] == '0') {
+    if (bb_env_off("BB_CURSOR")) {
         return nullptr;
     }
     SDL_Surface* base = Render(32);

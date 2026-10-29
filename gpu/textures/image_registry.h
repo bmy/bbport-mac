@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport textures: which images lie over each 1 MiB page of the guest's address space, as a
 // two-level table (1024 x 1024 pages over 40 bits; second-level blocks made on first use).

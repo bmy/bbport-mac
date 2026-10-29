@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // VINTRP: attribute interpolation. Normally the host interpolates (P1 is dropped, P2 reads the
 // attribute and records the qualifier its barycentric VGPR stands for). Hosts that need it

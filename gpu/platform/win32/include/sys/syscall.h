@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport Windows: the Linux syscalls the runtime makes directly; gettid only (others fail, ENOSYS).
 #pragma once

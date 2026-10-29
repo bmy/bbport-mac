@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: temporal upscaling of Bloodborne's HDR scene color (docs/upscaler.md). BB_UPSCALER=fsr3
 // runs FSR 3.1 (FireBurn/FSR-Vulkan, native Vulkan) on the scene color right before the
@@ -12,7 +13,9 @@
 #pragma once
 
 #include <array>
+#include "shim/bb_env.h"
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -64,6 +67,14 @@ public:
     [[nodiscard]] bool Enabled() const noexcept {
         return enabled;
     }
+    /// A temporal upscaler accumulates this frame (Active), for passes whose noise it resolves
+    /// (VBAO).
+    [[nodiscard]] bool Accumulating() const {
+        return Active();
+    }
+    /// Called after a scaled upscale with the output image (RGBA8, General layout, before the
+    /// UI draws over it) and its size: debug views of the frame (Vbao's AO view).
+    std::function<void(vk::Image, u32, u32)> on_upscaled;
 
     /// A draw into a full-size RGBA16F target with the scene depth: the scene color.
     void OnSceneColor(VideoCore::ImageId color);
@@ -122,6 +133,8 @@ public:
     bool RedirectColor(VideoCore::ImageId color, const VideoCore::ImageViewInfo& view,
                        Target& target);
     bool RedirectDepth(VideoCore::ImageId depth, Target& target);
+    /// Whether `address` is the UI's colour target (the one RedirectColor redirects).
+    [[nodiscard]] bool IsUiColorAddress(VAddr address) const;
     /// A sampled image replaced by the upscaled frame (the display pass).
     bool RedirectSampled(VideoCore::ImageId image, const VideoCore::ImageViewInfo& info,
                          vk::ImageView& view, vk::ImageLayout& layout);
@@ -140,6 +153,13 @@ public:
     /// The game's display pass of `address` begins (recording thread): frame generation
     /// interpolates this frame now, its scene with the UI complete.
     void OnDisplayPassStart(VAddr address);
+    /// Frame generation for the display pass started last, recorded after that pass's draw
+    /// (Rasterizer::RecordPendingFrameGeneration). False: nothing pending.
+    bool HasPendingInterpolation() const {
+        return pending_interpolation;
+    }
+    void RunPendingInterpolation();
+    bool FrameGenerationWanted() const;
     /// The frame's UI is being drawn (after the scaled scene, before the display pass).
     bool InUiPhase() const {
         return ui_phase;
@@ -172,6 +192,11 @@ private:
     void Run();
     void RunScaled();
     void RunUiOnly(VideoCore::ImageId color, VideoCore::ImageId depth);
+    /// SMAA wanted on this frame's scene: anti_aliasing=smaa, no upscaler, a 3D scene.
+    [[nodiscard]] bool SmaaWanted() const;
+    /// SMAA of the finished scene `color` (RGBA8; `proxy`: of its proxy, at render_width x
+    /// render_height): the result's image (GENERAL), or null.
+    vk::Image RunSmaa(VideoCore::ImageId color, bool proxy = false);
     void EnsureUiResources(u32 width, u32 height, vk::Format color, vk::Format depth);
     void PrepareUiDepth(VideoCore::ImageId depth);
     /// Render size below the scaled-preset output size (the resolution patch is on).
@@ -180,8 +205,8 @@ private:
     /// (a 1916x1078 scene in 1916x1080 targets).
     [[nodiscard]] bool RenderTarget(u32 w, u32 h) const {
         if (!scaled_session) return w == 1920 && h == 1080;
-        return w >= render_width && h >= render_height && w < render_width + 8 &&
-               h < render_height + 8;
+        return w >= native_width && h >= native_height && w < native_width + 8 &&
+               h < native_height + 8;
     }
     /// The scene's size inside a `w` x `h` render target: the game's viewport.
     [[nodiscard]] std::array<u32, 2> SceneSize(u32 w, u32 h) const;
@@ -237,6 +262,7 @@ private:
     bool done_this_frame = false;
     u32 preset_file_frames = 0; ///< BB_PRESET_FILE polling
     u32 applied_output = 0; ///< BbSettings::PackSize
+    u32 startup_output = 0; ///< the output at launch (hybrid: the game's targets were patched for it)
     float applied_aspect = 0.0f; ///< the output's, given to the game's camera
     bool snapshot_taken = false;
     bool opaque_valid = false;
@@ -244,6 +270,7 @@ private:
     std::array<float, 2> jitter{};
     u32 jitter_index = 0;
     bool reset = true;
+    void NoteReset(u32 why);
     u64 frame_id = 0;
     std::chrono::steady_clock::time_point last_frame{};
 
@@ -255,7 +282,7 @@ private:
     VideoCore::ImageId ldr_target{};
     VideoCore::ImageId ui_color{}, ui_depth{};
     bool ui_phase = false;         ///< from the upscale to the next display pass
-    const bool ui_trace_on = std::getenv("BB_UI_TRACE") != nullptr; ///< diagnostics
+    const bool ui_trace_on = bb_env("BB_UI_TRACE") != nullptr; ///< diagnostics
     std::string ui_trace;
     bool display_redirect = false; ///< the display pass of an upscaled frame
     bool ui_read_barrier = false;
@@ -265,8 +292,16 @@ private:
     vk::UniqueImageView ui_depth_view;
     bool depth_blit = false;
     bool scaled_session = false;
+    /// Live presets over the startup patch (BB_LIVE_HYBRID=1 with BB_RENDER_RES): the game's
+    /// targets have the launch preset's size (no proxies, nothing extra a frame); another preset
+    /// chosen in the game is drawn through SceneTargets proxies relative to that size.
+    bool hybrid = false;
+    int startup_preset = -1; ///< the preset the session's patch was made for (hybrid)
     u32 ui_width = 0, ui_height = 0;
-    u32 render_width = 0, render_height = 0;
+    u32 render_width = 0, render_height = 0; ///< the scene's size as drawn (proxies: theirs)
+    u32 native_width = 0, native_height = 0; ///< the game's scene size (its targets)
+    /// Proxies stand in for the game's scene targets (live presets).
+    [[nodiscard]] bool ProxiesOn() const;
     vk::Format ui_format = vk::Format::eUndefined;
     vk::Format ui_depth_format = vk::Format::eUndefined;
     /// Views of the port's images in the formats/swizzles the game's views use.
@@ -292,8 +327,14 @@ private:
     bool resources_ready = false; ///< images below match width/height/out size
     bool resources_fsr4 = false;  ///< made for FSR 4 (no FSR 3 context)
     bool resources_taa = false;
+    bool resources_spatial = false;
     std::unique_ptr<Fsr4Upscaler> fsr4;
     std::unique_ptr<class FrameGeneration> frame_generation;
+    /// anti_aliasing=smaa without an upscaler (RunSmaa); made on first use.
+    std::unique_ptr<class Smaa> smaa;
+    bool smaa_done = false; ///< this frame's SMAA ran at the game's own size (OnDraw)
+    vk::Image pending_interpolation{}; ///< OnDisplayPassStart's frame, for RunPendingInterpolation
+    VAddr pending_display = 0;
     bool hudless_taken = false; ///< this frame's UI-less image went to frame generation
     /// Inputs of this frame's scaled run, for frame generation (CaptureFrameGenScene).
     void CaptureFrameGenScene(vk::Image depth_image, vk::Format depth_format, u32 w, u32 h, u32 ow,
@@ -301,6 +342,8 @@ private:
     bool fsr4_failed = false;
     std::unique_ptr<MetalFxUpscaler> metalfx;
     bool resources_metalfx = false; ///< made for MetalFX (no FSR 3 context)
+    /// The FSR 4 model for this preset and output is still being built (#213): FSR 3.1 meanwhile.
+    bool fsr4_waiting = false;
     bool dlss_failed = false;
     VideoCore::HostImage motion_image;
     VideoCore::HostImage output_image;
@@ -327,6 +370,13 @@ private:
     vk::UniquePipelineLayout taa_sharpen_pipeline_layout;
     vk::UniquePipeline taa_sharpen_pipeline;
     vk::UniquePipeline taa_sharpen_ldr_pipeline;
+    // FSR 1 (upscaler fsr1): EASU, then the RCAS pass above (ExtraSharpen).
+    vk::UniqueSampler easu_sampler;
+    vk::UniqueDescriptorSetLayout easu_desc_layout;
+    vk::UniquePipelineLayout easu_pipeline_layout;
+    vk::UniquePipeline easu_pipeline;
+    void RecordEasu(vk::CommandBuffer cmdbuf, vk::ImageView color, u32 w, u32 h, u32 iw, u32 ih,
+                    u32 ow, u32 oh);
     // bbport: FSR 4 in linear light on the scaled presets (fsr4_color.comp): the decoded input
     // and the passes that decode it and encode the output again.
     VideoCore::HostImage fsr4_linear_image;

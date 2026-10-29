@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // MUBUF/MTBUF buffer loads, stores and atomics, and MIMG image loads, stores, atomics, samples,
 // gathers and queries. Resources are passed as the dwords of their sharps (found and bound by

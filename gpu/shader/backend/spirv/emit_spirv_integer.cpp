@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Integer arithmetic, bit operations, min/max/clamp and compares. 64-bit bit counts and scans
 // are done on the 32-bit halves (Vulkan allows them on 32 bits only).

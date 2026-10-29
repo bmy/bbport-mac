@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Load watch while the game runs: bash tools/load_watch.sh [GAME_LOG]
 # Every 5 s one line in out/load_<time>.log: GPU busy (average/minimum of 0.25 s samples), shader
 # clock, the game's CPU use (100% = one core) and its busiest threads, and the game log's latest

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // After structurization a result may be used where its block no longer dominates the use: such
 // a result goes through a virtual register (stored after it, loaded before each such use), which

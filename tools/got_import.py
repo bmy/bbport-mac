@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Diagnostic: name the import bound to a GOT slot (guest offsets) in out/boot.bin."""
 import re, struct, sys
 from pathlib import Path

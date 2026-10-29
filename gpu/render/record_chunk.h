@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport render: blocks of deferred Vulkan commands for the recording threads (RecordChunk),
 // and the command buffer segments of one submission (SubmissionBatch).

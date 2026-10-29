@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Exercise the actual SPIR-V backend without opening a window or loading the game.
 // Output is validated by spirv-val (see docs/upscaler.md).

@@ -1,9 +1,12 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* libkernel/libScePosix process services: clocks, sleeping, errno mapping,
  * pthread once/keys, signal bookkeeping and a narrow sysctl. Guest values
  * use FreeBSD numbering; host errno values never reach the guest directly. */
 #define _GNU_SOURCE
 #include "runtime.h"
 #include "platform.h"
+#include "../gpu/shim/bb_env.h"
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -183,7 +186,7 @@ static ABI void raise_exception(uint32_t code,uint64_t argument) {
         uint64_t at=0;
         for (int i=0;i<64 && !at;++i) if (frame[i]>=base && frame[i]<hi) at=frame[i]-base;
         static int stop=-1, told;
-        if (stop<0) { const char *e=getenv("BB_GAME_ASSERT_STOP"); stop=e && e[0]=='1'; }
+        if (stop<0) { const char *e=bb_env("BB_GAME_ASSERT_STOP"); stop=e && e[0]=='1'; }
         if (!stop && code==0xa0020007u && ((at>=0xbbc3e0 && at<0xbbc700) || (at>=0xc33000 && at<0xc34200))) {
             if (told++<5) printf("Runtime: the game's blur-kernel assertion at +0x%llx ignored (BB_GAME_ASSERT_STOP=1: stop)\n",(unsigned long long)at);
             return;
@@ -382,7 +385,7 @@ static void guest_call_sites(uint64_t out[3]) {
 }
 void runtime_wait_note(int kind, uint64_t ns) {
     static int enabled=-1;
-    if (enabled<0) enabled=getenv("BB_FRAME_STATS")!=NULL;
+    if (enabled<0) enabled=bb_env("BB_FRAME_STATS")!=NULL;
     if (!enabled) return;
     if (!wait_tid) {
 #ifdef __APPLE__
@@ -415,7 +418,7 @@ void runtime_wait_report(double frames) {
     }
     if (!n || frames<=0) return;
     static FILE *dump; static int dump_checked;
-    if (!dump_checked) { const char *path=getenv("BB_WAIT_LOG"); if (path && *path) dump=fopen(path,"w"); dump_checked=1; }
+    if (!dump_checked) { const char *path=bb_env("BB_WAIT_LOG"); if (path && *path) dump=fopen(path,"w"); dump_checked=1; }
     if (dump) {
         for (int i=0;i<n;++i)
             fprintf(dump,"%s %d %s %#lx %#lx %#lx %.2f %.3f\n", rows[i].w->name, rows[i].w->tid, kinds[rows[i].w->kind&3],
@@ -512,7 +515,7 @@ static void *sampler_main(void *arg) {
 }
 static void sample_start(void) {
     static int started;
-    const char *name=getenv("BB_SAMPLE_THREAD");
+    const char *name=bb_env("BB_SAMPLE_THREAD");
     if (started || !name || !*name) return;
     started=1;
     struct sigaction action={0};
@@ -538,7 +541,7 @@ static uint64_t sample_rips[SAMPLE_SLOTS], sample_callers[SAMPLE_SLOTS];
 static _Atomic uint64_t samples_total;
 static void sample_start(void) {
     static int reported;
-    const char *name=getenv("BB_SAMPLE_THREAD");
+    const char *name=bb_env("BB_SAMPLE_THREAD");
     if (!reported && name && *name) { reported=1; puts("Runtime: BB_SAMPLE_THREAD is Linux-only"); }
 }
 #endif
@@ -556,9 +559,9 @@ static void *sample_reporter(void *arg) {
     return NULL;
 }
 __attribute__((constructor)) static void sample_report_timer(void) {
-    const char *v=getenv("BB_SAMPLE_REPORT_SECONDS");
+    const char *v=bb_env("BB_SAMPLE_REPORT_SECONDS");
     const unsigned seconds=v ? (unsigned)atoi(v) : 0;
-    if (!seconds || !getenv("BB_SAMPLE_THREAD")) return;
+    if (!seconds || !bb_env("BB_SAMPLE_THREAD")) return;
     sample_start();
     pthread_t thread;
     pthread_create(&thread,NULL,sample_reporter,(void *)(uintptr_t)seconds);
@@ -568,7 +571,7 @@ static void sample_report(void) {
     static int got_dumped;
     if (!got_dumped) {
         got_dumped=1;
-        const char *got=getenv("BB_DUMP_GOT"); /* a guest GOT slot (offset): which host function it calls */
+        const char *got=bb_env("BB_DUMP_GOT"); /* a guest GOT slot (offset): which host function it calls */
         if (got && *got) {
             const uint64_t target=*(const uint64_t *)(0x800000000ull+strtoull(got,NULL,0));
             Dl_info dl={0};
@@ -584,7 +587,7 @@ static void sample_report(void) {
     for (int i=1;i<n;++i) for (int j=i;j>0 && rows[j].count>rows[j-1].count;--j) { __typeof__(rows[0]) t=rows[j]; rows[j]=rows[j-1]; rows[j-1]=t; }
     /* BB_SAMPLE_ALL=1: every sampled address as module+offset, one per line (for addr2line). */
     static int all=-1;
-    if (all<0) { const char *v=getenv("BB_SAMPLE_ALL"); all=v && v[0]=='1'; }
+    if (all<0) { const char *v=bb_env("BB_SAMPLE_ALL"); all=v && v[0]=='1'; }
     if (all) {
         for (int i=0;i<n;++i) {
             Dl_info dl={0};
@@ -618,6 +621,29 @@ static void sample_report(void) {
                dl.dli_sname ? dl.dli_sname : "",(unsigned long)(rows[i].rip-(dl.dli_sname ? (uint64_t)dl.dli_saddr : (uint64_t)dl.dli_fbase)),
                (unsigned long)rows[i].caller,100.0*rows[i].count/total);
     }
+    /* By where: the game's libGnm (BB_SAMPLE_RANGE=lo-hi, game offsets; Bloodborne's by default), host
+     * code it called (the port's Gnm work on this thread), the rest of the game, the rest of the host. */
+    static uint64_t range_lo, range_hi;
+    if (!range_hi) {
+        const char *r=bb_env("BB_SAMPLE_RANGE");
+        range_lo=0x1068000; range_hi=0x10a0000;
+        if (r && *r) { char *end; range_lo=strtoull(r,&end,0); if (*end=='-') range_hi=strtoull(end+1,NULL,0); }
+    }
+    uint64_t in_gnm=0, from_gnm=0, game=0, host=0;
+    for (int i=0;i<n;++i) {
+        const uint64_t text_lo=0x800000000ull, text_hi=0x800000000ull+0x50d96dcull;
+        const uint64_t c=rows[i].count;
+        if (rows[i].rip>=text_lo && rows[i].rip<text_hi) {
+            const uint64_t off=rows[i].rip-text_lo;
+            if (off>=range_lo && off<range_hi) in_gnm+=c; else game+=c;
+        } else if (!(rows[i].caller>>63) && rows[i].caller>=range_lo && rows[i].caller<range_hi) {
+            from_gnm+=c;
+        } else {
+            host+=c;
+        }
+    }
+    printf("; by where: libGnm %.1f%%, port code called from it %.1f%%, game %.1f%%, host %.1f%%",
+           100.0*in_gnm/total,100.0*from_gnm/total,100.0*game/total,100.0*host/total);
     printf("\n");
 }
 /* The first three return addresses into the game's code on the calling thread's stack. */

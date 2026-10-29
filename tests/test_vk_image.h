@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport tests: a VMA-allocated Vulkan image owned by the test (device-local, freed with it).
 #pragma once

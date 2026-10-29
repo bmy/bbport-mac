@@ -1,0 +1,41 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
+// FSR 1 EASU (upscaler fsr1): the finished frame (the scene's w x h at the top left of a
+// iw x ih image) scaled to the output, spatially; RCAS (taa_sharpen) sharpens it afterwards.
+// The constants follow FsrEasuCon (ffx_fsr1.h), computed here from the sizes.
+#version 450
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D source;
+layout(binding = 1, rgba16f) uniform writeonly image2D result_img;
+layout(push_constant) uniform Params {
+    uvec2 view;   // the scene's size in the source
+    uvec2 size;   // the source image's size
+    uvec2 out_size;
+};
+#define A_GPU 1
+#define A_GLSL 1
+#include "fsr/ffx_a.h"
+#define FSR_EASU_F 1
+AF4 FsrEasuRF(AF2 p) { return textureGather(source, p, 0); }
+AF4 FsrEasuGF(AF2 p) { return textureGather(source, p, 1); }
+AF4 FsrEasuBF(AF2 p) { return textureGather(source, p, 2); }
+#include "fsr/ffx_fsr1.h"
+
+void main() {
+    const uvec2 p = gl_GlobalInvocationID.xy;
+    if (any(greaterThanEqual(p, out_size))) return;
+    const vec2 in_view = vec2(view), in_size = vec2(size), out_view = vec2(out_size);
+    uvec4 con0, con1, con2, con3;
+    con0 = uvec4(floatBitsToUint(in_view.x / out_view.x), floatBitsToUint(in_view.y / out_view.y),
+                 floatBitsToUint(0.5 * in_view.x / out_view.x - 0.5),
+                 floatBitsToUint(0.5 * in_view.y / out_view.y - 0.5));
+    con1 = uvec4(floatBitsToUint(1.0 / in_size.x), floatBitsToUint(1.0 / in_size.y),
+                 floatBitsToUint(1.0 / in_size.x), floatBitsToUint(-1.0 / in_size.y));
+    con2 = uvec4(floatBitsToUint(-1.0 / in_size.x), floatBitsToUint(2.0 / in_size.y),
+                 floatBitsToUint(1.0 / in_size.x), floatBitsToUint(2.0 / in_size.y));
+    con3 = uvec4(floatBitsToUint(0.0), floatBitsToUint(4.0 / in_size.y), 0u, 0u);
+    vec3 c;
+    FsrEasuF(c, p, con0, con1, con2, con3);
+    imageStore(result_img, ivec2(p), vec4(c, 1.0));
+}

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport Windows: the mmap/mprotect subset the GPU library uses, over VirtualAlloc/VirtualProtect
 // (posix_win32.cpp). Anonymous mappings only; protections of guest memory (the runtime's views)
@@ -36,6 +37,14 @@ int madvise(void* address, size_t size, int advice);
 /// views of it, fallocate zeroes), and the placeholder reservation MAP_FIXED maps replace in.
 int bb_section_create(unsigned long long size);
 int bb_reserve_arena(unsigned long long begin, unsigned long long end);
+/* Committed private memory replacing [address, address + size) of the arena (bbport: the GPU
+ * imports it; see runtime_memory.c private regions). MAP_FAILED on failure. */
+void* bb_private_at(void* address, size_t size);
+/// bbport: [address, +size) of a view or private memory holds nothing of interest any more: its pages
+/// go back to the system (MEM_RESET, out of the working set). Not zeroed: a heap's piece given back.
+void bb_discard(void* address, size_t size);
+/// The same for [offset, +length) of a section (bb_section_create), through its own view.
+int bb_section_discard(int fd, unsigned long long offset, unsigned long long length);
 #define FALLOC_FL_KEEP_SIZE 1
 #define FALLOC_FL_PUNCH_HOLE 2
 int fallocate(int fd, int mode, off_t offset, off_t length);

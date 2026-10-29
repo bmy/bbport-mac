@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport gcn: the GPU's register file as the command processor keeps it: 0xD000 dwords in four
 // banks (config 0x2000, SH 0x2C00, context 0xA000, uconfig 0xC000), the registers the
@@ -246,6 +247,22 @@ struct RegDirty {
 #endif
     }
 };
+
+/// bbport: the register blocks written since the last ResetRegs, all that can differ from the
+/// defaults. CLEAR_STATE filled the whole file (208 KiB) and set the defaults again, ~63 times a
+/// frame on each pipeline stage: ~25 MiB of memory traffic a frame.
+struct RegTouched {
+    RegDirty marks;
+    bool all = true; ///< not known (a whole copy came in): the next reset is a whole one
+
+    void Mark(u32 word, u32 count) {
+        marks.Mark(word, count);
+    }
+};
+
+/// CLEAR_STATE: the touched blocks back to their defaults (BB_REGS_FULL_RESET=1: the whole file;
+/// BB_REGS_CHECK=1: compared with the defaults afterwards, a block left over is reported).
+void ResetRegs(Regs& regs, RegTouched& touched);
 
 /// The values of the blocks a RegDirty marked.
 struct RegDelta {

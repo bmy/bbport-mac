@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport textures: a guest image on the host: its Vulkan image (one per sample count it has been
 // used with), its views, its layout and access state for barriers, and what the cache knows of
@@ -53,6 +54,8 @@ public:
 
     void Create(const vk::ImageCreateInfo& create_info);
     void Destroy();
+    /// Pooled images given back: all (`keep_bytes` 0) or down to `keep_bytes`.
+    static void TrimRecycled(vk::DeviceSize keep_bytes);
 
     operator vk::Image() const {
         return image;
@@ -67,6 +70,11 @@ public:
     vk::Image image{};
     vk::ImageCreateInfo image_ci{};
     vk::DeviceSize size_bytes{};
+    /// The texture cache's images: a destroyed one goes to a pool of recently freed images, and a
+    /// new one with the same create info takes it from there (no vkCreateImage, no allocation).
+    /// The game frees and allocates the same render targets again (a menu opened: ~25 images,
+    /// 106 MiB, 100-130 ms on a GTX 1050 laptop, dedicated allocations being slow on Windows).
+    bool recyclable = false;
 };
 
 struct Image {
@@ -154,6 +162,8 @@ struct Image {
     u64 image_uid{};
 
     ImageInfo info;
+    /// The guest's description of it (`info` without the levels texture_quality left out).
+    ImageInfo guest_info;
     Vulkan::Runtime* runtime;
     Common::SlotVector<ImageView>* slot_image_views;
     vk::ImageAspectFlags aspect_mask = vk::ImageAspectFlagBits::eColor;
@@ -179,6 +189,10 @@ struct Image {
         SubresourceRange settled_range{};
         State settled_state{};
         bool settled = false;
+        /// Every part is in `settled_state`, not only those in `settled_range`: a read of any other
+        /// range in that state needs no walk either (a cube array sampled a few faces at a time by
+        /// ~230 draws a frame, 48 parts walked each).
+        bool settled_uniform = false;
         boost::container::small_vector<ImageViewInfo, 4> image_view_infos;
         boost::container::small_vector<ImageViewId, 4> image_view_ids;
         u32 last_view = 0; ///< index of the view FindView returned last
@@ -186,6 +200,9 @@ struct Image {
     };
     std::deque<BackingImage> backing_images;
     boost::container::static_vector<u64, 16> mip_hashes{};
+    /// The texture upload budget (TextureCache::RefreshImage): its levels below this one are not
+    /// uploaded yet, its sampled views start at it (min LOD). 0: all uploaded.
+    u8 resident_level = 0;
     u64 lru_id{};
     u64 hash{};
     u64 corner_hash{}; ///< bbport: diagnostics (TextureCache::RefreshImage)

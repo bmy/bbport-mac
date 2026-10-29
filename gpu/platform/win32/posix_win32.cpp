@@ -1,12 +1,20 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport Windows: the POSIX calls of the compatibility headers in include/ (sys/mman.h, dlfcn.h,
 // sys/resource.h, sys/uio.h, execinfo.h) over the Win32 API. Only what the GPU library uses.
 #include <windows.h>
+#include "shim/bb_env.h"
+#include <timeapi.h>
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
+#include <thread>
+#include <unordered_map>
+#include <vector>
+#include <psapi.h>
 
 #include <dlfcn.h>
 #include <execinfo.h>
@@ -243,9 +251,232 @@ int bb_guest_tls_slot(void) {
     return slot;
 }
 
+int bb_clock_nanosleep(clockid_t clock, int flags, const struct timespec* request,
+                       struct timespec* remain) {
+    long long ns = (long long)request->tv_sec * 1000000000ll + request->tv_nsec;
+    if (flags & TIMER_ABSTIME) {
+        struct timespec now{};
+        if (clock_gettime(clock, &now) != 0) {
+            return EINVAL;
+        }
+        ns -= (long long)now.tv_sec * 1000000000ll + now.tv_nsec;
+    }
+    if (remain) {
+        *remain = {};
+    }
+    if (ns <= 0) {
+        return 0;
+    }
+    // A timer per thread: high resolution (Windows 10 1803+), else the 1 ms period (timeBeginPeriod).
+    static thread_local HANDLE timer = [] {
+        HANDLE t = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                          TIMER_ALL_ACCESS);
+        return t ? t : CreateWaitableTimerExW(nullptr, nullptr, 0, TIMER_ALL_ACCESS);
+    }();
+    LARGE_INTEGER due{};
+    due.QuadPart = -std::max(1ll, ns / 100);
+    if (!timer || !SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE)) {
+        Sleep(DWORD((ns + 999999) / 1000000));
+        return 0;
+    }
+    WaitForSingleObject(timer, INFINITE);
+    return 0;
+}
+
+
+namespace {
+// BB_SAMPLE_THREAD=<name> (diagnostics, Windows): where that thread runs, sampled every 0.5 ms by
+// suspending it; every 10 s the top addresses as exe+offset (llvm-symbolizer on the unstripped
+// bb-probe.exe), with the share of samples outside the exe (system DLLs: drivers, ntdll).
+void SampleThread(HANDLE thread, std::string name) {
+    std::unordered_map<DWORD64, unsigned> counts;
+    std::unordered_map<DWORD64, unsigned> callers;
+    unsigned total = 0;
+    const auto base = reinterpret_cast<DWORD64>(GetModuleHandleW(nullptr));
+    MODULEINFO info{};
+    K32GetModuleInformation(GetCurrentProcess(), GetModuleHandleW(nullptr), &info, sizeof(info));
+    const DWORD64 end = base + info.SizeOfImage;
+    // Return addresses only in the code section (data holds function pointers that look alike).
+    DWORD64 text_lo = base, text_hi = end;
+    {
+        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
+        const auto* section = IMAGE_FIRST_SECTION(nt);
+        for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++section) {
+            if (std::memcmp(section->Name, ".text", 5) == 0) {
+                text_lo = base + section->VirtualAddress;
+                text_hi = text_lo + section->Misc.VirtualSize;
+            }
+        }
+    }
+    DWORD last = GetTickCount();
+    for (;;) {
+        const timespec pause{0, 500000};
+        bb_clock_nanosleep(CLOCK_MONOTONIC, 0, &pause, nullptr);
+        if (SuspendThread(thread) == DWORD(-1)) {
+            return;
+        }
+        CONTEXT context{};
+        context.ContextFlags = CONTEXT_CONTROL;
+        if (GetThreadContext(thread, &context)) {
+            if (context.Rip >= base && context.Rip < end) {
+                ++counts[context.Rip - base];
+            } else {
+                // Outside the exe: the module, and the exe code that called it (the first return
+                // address into the exe on the stack), as a key with bit 62 set.
+                ++counts[context.Rip];
+                const auto* stack = reinterpret_cast<const DWORD64*>(context.Rsp);
+                for (int i = 0; i < 512; ++i) {
+                    const DWORD64 value = stack[i];
+                    if (value >= text_lo && value < text_hi) {
+                        ++callers[value - base];
+                        break;
+                    }
+                }
+            }
+            ++total;
+        }
+        ResumeThread(thread);
+        if (GetTickCount() - last >= 10000 && total) {
+            last = GetTickCount();
+            std::vector<std::pair<unsigned, DWORD64>> top;
+            for (const auto& [rip, n] : counts) {
+                top.emplace_back(n, rip);
+            }
+            std::sort(top.rbegin(), top.rend());
+            std::printf("Thread samples %s (%u):", name.c_str(), total);
+            std::unordered_map<std::string, unsigned> modules; // outside the exe, by module
+            for (const auto& [n, rip] : top) {
+                if (rip < end - base) continue;
+                HMODULE module = nullptr;
+                char path[MAX_PATH] = "?";
+                if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                       reinterpret_cast<LPCSTR>(rip), &module)) {
+                    GetModuleFileNameA(module, path, MAX_PATH);
+                }
+                const char* slash = std::strrchr(path, '\\');
+                modules[slash ? slash + 1 : path] += n;
+            }
+            for (const auto& [module, n] : modules) {
+                std::printf(" [%s %.1f%%]", module.c_str(), 100.0 * n / total);
+            }
+            for (size_t i = 0, shown = 0; i < top.size() && shown < 40; ++i) {
+                if (top[i].second >= end - base) continue;
+                ++shown;
+                std::printf(" exe+%#llx %.1f%%", (unsigned long long)top[i].second, 100.0 * top[i].first / total);
+            }
+            std::vector<std::pair<unsigned, DWORD64>> top_callers;
+            for (const auto& [rip, n] : callers) {
+                top_callers.emplace_back(n, rip);
+            }
+            std::sort(top_callers.rbegin(), top_callers.rend());
+            std::printf(" | callers outside:");
+            for (size_t i = 0; i < top_callers.size() && i < 25; ++i) {
+                std::printf(" exe+%#llx %.1f%%", (unsigned long long)top_callers[i].second,
+                            100.0 * top_callers[i].first / total);
+            }
+            callers.clear();
+            std::printf("\n");
+            std::fflush(stdout);
+            counts.clear();
+            total = 0;
+        }
+    }
+}
+} // namespace
+void bb_win32_set_thread_name(const char* name) {
+    wchar_t wide[64];
+    const int n = MultiByteToWideChar(CP_UTF8, 0, name, -1, wide, 64);
+    if (n > 0) {
+        wide[63] = 0;
+        SetThreadDescription(GetCurrentThread(), wide);
+    }
+    static const char* sampled = bb_env("BB_SAMPLE_THREAD");
+    if (sampled && *sampled && std::strcmp(sampled, name) == 0) {
+        HANDLE self = nullptr;
+        if (DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &self,
+                            THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION,
+                            FALSE, 0)) {
+            std::printf("Runtime: sampling thread %s\n", name);
+            std::thread{SampleThread, self, std::string{name}}.detach();
+        }
+    }
+}
+
+void bb_win32_describe_address(const void* address, char* text, unsigned size) {
+    MEMORY_BASIC_INFORMATION mbi{};
+    if (!VirtualQuery(address, &mbi, sizeof(mbi))) {
+        std::snprintf(text, size, "VirtualQuery failed (%lu)", GetLastError());
+        return;
+    }
+    std::snprintf(text, size, "region %p+%#llx state %#lx protect %#lx type %#lx, allocation %p protect %#lx",
+                  mbi.BaseAddress, (unsigned long long)mbi.RegionSize, mbi.State, mbi.Protect, mbi.Type,
+                  mbi.AllocationBase, mbi.AllocationProtect);
+}
+
 void bb_guest_tls_set(void* tcb) {
     TlsSetValue(DWORD(bb_guest_tls_slot()), tcb);
 }
+
+} // extern "C"
+
+// The slot is taken while the process starts: the GPU driver and the libraries take TLS indices
+// as they load (NVIDIA's took the last of the 64 inline ones on a GTX 1050 laptop, Windows 10,
+// before the guest asked for its slot).
+namespace {
+[[maybe_unused]] const int early_guest_tls_slot = bb_guest_tls_slot();
+// Sleeps (libc++'s sleep_for, condition variable timeouts) in 1 ms steps, not 15.6 ms.
+[[maybe_unused]] const bool timer_period = timeBeginPeriod(1) == TIMERR_NOERROR;
+
+// The game first, the system not starved: the process a class above normal (the CPU goes to it
+// before the system's and other programs' normal-priority work; audio, input and the compositor
+// run higher anyway), no power throttling (EcoQoS: lower clocks, efficiency cores), and its GPU
+// work above the other processes'. The threads keep their order among themselves: raising some
+// alone (BB_STAGE_PRIORITY) had the game hand over half-written command buffers at loads.
+// BB_PROCESS_PRIORITY=normal|above|high (default above).
+bool RaiseProcessPriority() {
+    const char* env = bb_env("BB_PROCESS_PRIORITY");
+    const std::string level = env && *env ? env : "above";
+    if (level == "normal" || level == "0") {
+        return false;
+    }
+    const bool high = level == "high";
+    const HANDLE process = GetCurrentProcess();
+    const bool cpu =
+        SetPriorityClass(process, high ? HIGH_PRIORITY_CLASS : ABOVE_NORMAL_PRIORITY_CLASS);
+    PROCESS_POWER_THROTTLING_STATE throttling{
+        .Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+        .ControlMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED |
+                       PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION,
+        .StateMask = 0,
+    };
+    bool power =
+        SetProcessInformation(process, ProcessPowerThrottling, &throttling, sizeof(throttling));
+    if (!power) {
+        // Windows 10 refuses the timer resolution flag (Windows 11).
+        throttling.ControlMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED;
+        power =
+            SetProcessInformation(process, ProcessPowerThrottling, &throttling, sizeof(throttling));
+    }
+    // gdi32's D3DKMTSetProcessSchedulingPriorityClass: 3 above normal, 4 high.
+    using SetGpuPriority = LONG(WINAPI*)(HANDLE, int);
+    bool gpu = false;
+    if (const HMODULE gdi = LoadLibraryA("gdi32.dll")) {
+        const auto proc = GetProcAddress(gdi, "D3DKMTSetProcessSchedulingPriorityClass");
+        if (const auto set = reinterpret_cast<SetGpuPriority>(reinterpret_cast<void*>(proc))) {
+            gpu = set(process, high ? 4 : 3) == 0;
+        }
+    }
+    std::fprintf(stderr, "Process priority: %s (CPU %s, power throttling %s, GPU %s)\n",
+                 high ? "high" : "above normal", cpu ? "set" : "refused", power ? "off" : "kept",
+                 gpu ? "set" : "refused");
+    return cpu;
+}
+[[maybe_unused]] const bool process_priority = RaiseProcessPriority();
+}
+
+extern "C" {
 
 int gettid(void) {
     return int(GetCurrentThreadId());
@@ -273,6 +504,11 @@ unsigned bb_win32_available_cpus(void) {
 
 void bb_win32_background_thread(void) {
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_IDLE);
+}
+
+void bb_win32_critical_thread(int level) {
+    SetThreadPriority(GetCurrentThread(),
+                      level >= 2 ? THREAD_PRIORITY_HIGHEST : THREAD_PRIORITY_ABOVE_NORMAL);
 }
 
 int backtrace(void** buffer, int size) {

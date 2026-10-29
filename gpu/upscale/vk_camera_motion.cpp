@@ -1,5 +1,8 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "upscale/vk_camera_motion.h"
+#include "shim/bb_env.h"
+#include "upscale/camera_matrices.h"
 
 #include <chrono>
 #include <cmath>
@@ -76,9 +79,8 @@ std::array<float, 12> InverseAffine(const std::array<float, 12>& m) {
 CameraMotion::CameraMotion(const Instance& instance_, Scheduler& scheduler_,
                            VideoCore::TextureCache& texture_cache_, Runtime& runtime_)
     : instance{instance_}, scheduler{scheduler_}, texture_cache{texture_cache_}, runtime{runtime_} {
-    const char* env = std::getenv("BB_DEBUG_MOTION");
-    debug_overlay = env && env[0] == '1';
-    const char* upscaler = std::getenv("BB_UPSCALER");
+    debug_overlay = bb_env_on("BB_DEBUG_MOTION");
+    const char* upscaler = bb_env("BB_UPSCALER");
     // The upscaler can be switched on from the menu at any time: the camera is always tracked
     // unless BB_UPSCALER=none.
     for_upscaler = !(upscaler && std::strcmp(upscaler, "none") == 0);
@@ -226,6 +228,17 @@ void CameraMotion::PrintState(int frame) const {
     std::printf("\n");
 }
 
+bool CameraMotion::ClipTransforms(std::array<float, 16>& view_to_clip,
+                                  std::array<float, 16>& clip_to_prev_clip,
+                                  std::array<float, 16>& prev_clip_to_clip) const noexcept {
+    if (!current.valid || !previous.valid) {
+        return false;
+    }
+    return CameraMatrices::ClipTransforms(current.view, current.inv_view, current.proj,
+                                          previous.view, previous.inv_view, previous.proj,
+                                          view_to_clip, clip_to_prev_clip, prev_clip_to_clip);
+}
+
 std::array<std::array<float, 4>, 3> CameraMotion::TaaDepthParameters() const noexcept {
     const auto transform = Multiply(previous.view, current.inv_view);
     return {current.proj, previous.proj,
@@ -297,12 +310,12 @@ void CameraMotion::OnConstants(const float* data) {
     // bbport: the first constants of each G-buffer pass are its camera. A frame may have more
     // than one such pass (another camera before the main scene): the camera goes with the pass
     // whose depth the motion vectors use (CommitFrameCamera), not with the frame's first pass.
-    if (pass_has_camera) {
+    if (pass_has_camera || side_pass) {
         return;
     }
     // BB_CAMERA_FRAME_LOG=1 (diagnostics): the projection block of every G-buffer pass's camera, with
     // the GPU frame (one-frame anomalies: docs/Flicker_video_2026-10-17.ru.md).
-    static const bool frame_log = std::getenv("BB_CAMERA_FRAME_LOG") != nullptr;
+    static const bool frame_log = bb_env("BB_CAMERA_FRAME_LOG") != nullptr;
     if (frame_log) {
         std::string text = fmt::format("Camera frame {}:",
                                        BbStats::gpu_frames.load(std::memory_order_relaxed));
@@ -316,7 +329,7 @@ void CameraMotion::OnConstants(const float* data) {
     // bbport: BB_CAMERA_INVERSE=own: the inverse of the view matrix itself instead of the one the
     // game stores beside it (A/B; they agree to float precision). BB_CAMERA_LOG prints the gap.
     static const bool own_inverse = [] {
-        const char* env = std::getenv("BB_CAMERA_INVERSE");
+        const char* env = bb_env("BB_CAMERA_INVERSE");
         return env && std::strcmp(env, "own") == 0;
     }();
     const auto computed_inverse = InverseAffine(pass_camera.view);
@@ -330,7 +343,7 @@ void CameraMotion::OnConstants(const float* data) {
     }
     // bbport: BB_CAMERA_LOG=1 prints the camera position every 100 ms (scripted tests of how far
     // the player moves in a given time at different frame rates).
-    static const bool camera_log = std::getenv("BB_CAMERA_LOG") != nullptr;
+    static const bool camera_log = bb_env("BB_CAMERA_LOG") != nullptr;
     if (camera_log) {
         using Clock = std::chrono::steady_clock;
         static const auto start = Clock::now();
@@ -338,17 +351,17 @@ void CameraMotion::OnConstants(const float* data) {
         if (const auto now = Clock::now(); now >= next) {
             next = now + std::chrono::milliseconds(100);
             std::printf("Camera: %.3f s at %.3f %.3f %.3f (inverse of view: %.3f %.3f %.3f, largest "
-                        "difference %.4f)\n",
+                        "difference %.4f) forward %.4f %.4f %.4f\n",
                         std::chrono::duration<double>(now - start).count(), game_inverse[3],
                         game_inverse[7], game_inverse[11], computed_inverse[3], computed_inverse[7],
-                        computed_inverse[11], inverse_gap);
+                        computed_inverse[11], inverse_gap, game_inverse[2], game_inverse[6], game_inverse[10]);
         }
     }
     // bbport: the projection as the motion shaders use it: ndc +y down the screen. 0.2 assumed the
     // viewport flips y (ndc +y up, as at Yahar'gul: yscale -540), 0.3 that it does not; the
     // viewport of the frame's G-buffer pass decides (BB_CAMERA_Y=up/down forces one, for tests).
     static const float forced_y = [] {
-        const char* env = std::getenv("BB_CAMERA_Y");
+        const char* env = bb_env("BB_CAMERA_Y");
         return !env ? 0.0f : std::strcmp(env, "up") == 0 ? -1.0f : std::strcmp(env, "down") == 0 ? 1.0f : 0.0f;
     }();
     const float y_sign = (forced_y != 0.0f ? forced_y : gbuffer_y_sign) *
@@ -388,11 +401,24 @@ void CameraMotion::OnConstants(const float* data) {
 }
 
 void CameraMotion::OnGBufferPass(VideoCore::ImageId depth, float x_sign, float y_sign) {
-    if (depth != depth_id) {
-        // Another depth target: another G-buffer pass, with its own camera.
-        depth_id = depth;
-        pass_has_camera = false;
+    if (depth == depth_id) {
+        side_pass = false; // the scene's pass again (after a smaller one)
+    } else {
+        // Another depth target: another G-buffer pass, with its own camera. One smaller than the
+        // frame's pass so far is a side view (the sewers' water reflection, 320x200 after the
+        // 640x400 scene on the Deck): the scene's depth and camera stay. Taking the last pass
+        // gave the upscaler the reflection's camera and depth, and the reactive mask its color.
+        const auto& image = texture_cache.GetImage(depth);
+        const u64 area = u64(image.info.size.width) * image.info.size.height;
         ++frame_gbuffer_passes;
+        if (depth_id && area < frame_depth_area) {
+            side_pass = true;
+            return;
+        }
+        depth_id = depth;
+        frame_depth_area = area;
+        side_pass = false;
+        pass_has_camera = false;
     }
     gbuffer_x_sign = x_sign;
     gbuffer_y_sign = y_sign;
@@ -405,6 +431,20 @@ void CameraMotion::CommitFrameCamera() {
     previous = current;
     current = pass_camera;
     committed = true;
+    // BB_CAMLOG=1 (diagnostics, #325): the camera's yaw from the view matrix, when it changes.
+    static const bool camlog = bb_env("BB_CAMLOG") != nullptr;
+    if (camlog && current.valid) {
+        // The view's third row is the camera's back axis in world space.
+        const float yaw = std::atan2(current.view[8], current.view[10]);
+        static float last = 0.0f;
+        if (yaw != last) {
+            const auto us = std::chrono::duration_cast<std::chrono::microseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch())
+                                .count();
+            std::printf("Camlog %lld %.5f\n", (long long)us, yaw);
+            last = yaw;
+        }
+    }
 }
 
 void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
@@ -421,7 +461,7 @@ void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
                 std::printf(" (%.2f %.2f %.2f)", pass_positions[i][0], pass_positions[i][1],
                             pass_positions[i][2]);
             }
-            std::printf("; the last pass's camera goes with its depth\n");
+            std::printf("; the largest pass's camera goes with its depth\n");
         }
     }
     if (!frame_has_camera) InvalidateHistory();
@@ -430,6 +470,8 @@ void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
     committed = false;
     frame_gbuffer_passes = 0;
     depth_id = {};
+    frame_depth_area = 0;
+    side_pass = false;
 }
 
 void CameraMotion::Overlay(VideoCore::ImageId frame) {

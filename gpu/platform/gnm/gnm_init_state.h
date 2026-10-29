@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: the register state the Gnm driver gives the GPU before a game's first draw, by SDK
 // generation (the driver changed its defaults in 1.75, 2.00 and 3.50), and the state it resets a

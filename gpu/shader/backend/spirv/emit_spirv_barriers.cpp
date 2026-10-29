@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Barriers, LDS accesses and subgroup operations.
 #include "shader/backend/spirv/emit_spirv_instructions.h"

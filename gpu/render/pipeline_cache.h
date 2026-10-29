@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport render: the game's shader programs and the pipelines built from them. A program is a
 // guest shader (by the hash of its code) with its translated permutations; a pipeline is keyed by
@@ -13,6 +14,7 @@
 #include <functional>
 
 #include <array>
+#include <atomic>
 #include <memory>
 #include <optional>
 #include <shared_mutex>
@@ -121,9 +123,19 @@ class PipelineCompiler;
 
 class PipelineCache {
 public:
+    [[nodiscard]] const Instance& GetInstance() const noexcept {
+        return instance;
+    }
     explicit PipelineCache(const Instance& instance, Scheduler& scheduler,
                            BbCp::CommandProcessor* liverpool, u32 sparse_page_shift);
     ~PipelineCache();
+
+    /// Preloads the pipeline cache on disk: after the object motion buffers exist (their
+    /// addresses decide whether cached motion shaders are valid).
+    void Preload() {
+        WarmUp();
+        StartShaderImport();
+    }
 
     /// Closes the pipeline cache on disk (writes what is pending).
     void Sync();
@@ -193,7 +205,9 @@ private:
     void SaveProfile();
     void DropPreloaded();
     bool LoadComputePipeline(Serialization::Archive& ar);
-    bool LoadGraphicsPipeline(Serialization::Archive& ar);
+    /// A preloaded graphics pipeline still to create (WarmUp creates them on several threads).
+    using PreloadJob = std::pair<GraphicsPipelineKey, std::function<std::unique_ptr<GraphicsPipeline>()>>;
+    bool LoadGraphicsPipeline(Serialization::Archive& ar, std::vector<PreloadJob>& jobs);
     bool LoadPipelineStage(Serialization::Archive& ar, size_t stage);
 
     const Instance& instance;
@@ -241,6 +255,46 @@ private:
     u64 frame_start_draws = 0, last_frame_draws = 0;
     u32 stats_printed = 0;
     u64 async_started = 0, async_skipped = 0, async_waited = 0; ///< statistics
+    PipelineCompiler& Compiler();
+    /// The preloaded graphics pipelines, created in the background while the game starts (a cold
+    /// driver cache: about a minute on a 4-thread laptop with NVIDIA); a draw that needs one first
+    /// creates it itself (pending_graphics). BB_PRELOAD_BACKGROUND=0: before the game starts.
+    void QueuePreloaded(std::vector<PreloadJob>& jobs);
+    std::atomic<u32> preload_done{0};
+    u32 preload_total = 0;
+    std::chrono::steady_clock::time_point preload_start{};
+
+    /// Shader recipes (shader_rebuild.h, pipeline_store.cpp): the programs of the recorded game
+    /// translated for this GPU by a background process (bb-probe --import-shaders) at start,
+    /// then merged into this cache a few programs a frame, their pipelines created on the
+    /// compiler's threads.
+    struct ShaderImport;
+    void StartShaderImport();
+#ifdef _WIN32
+    static bool LaunchShaderImport(ShaderImport& state);
+#endif
+    /// GPU thread: merges what the import process wrote once it has finished.
+    void PollShaderImport() {
+        if (import_ready.load(std::memory_order_relaxed)) [[unlikely]] {
+            MergeShaderImport(false);
+        }
+    }
+    void MergeShaderImport(bool at_start);
+    // Its steps (pipeline_import.cpp): one program's files, the permutations of one the game
+    // translated meanwhile, one pipeline key and the pipeline it names.
+    void MergeImportedProgram(ShaderImport& state, size_t index);
+    void AdoptImportedProgram(ShaderImport& state, u64 hash, u64 perms);
+    void MergeImportedKey(ShaderImport& state, std::vector<u8>&& bytes);
+    void QueueImportedCompute(ShaderImport& state, Serialization::Archive& ar);
+    void QueueImportedGraphics(ShaderImport& state, Serialization::Archive& ar);
+    /// An imported permutation of a program the game translated meanwhile (programs_mutex held):
+    /// its index there, the one with its specialization or a new one appended (saved under it).
+    std::optional<size_t> AdoptImportedPermutation(std::vector<u8>&& meta, std::vector<u32>&& spv,
+                                                   std::vector<u8>&& input);
+    std::atomic<bool> import_ready{false};
+    std::unique_ptr<ShaderImport> import; ///< destroyed after the compiler (its jobs done)
+
+    std::unique_ptr<PipelineCompiler> preload_compiler; ///< QueuePreloaded's threads
     std::unique_ptr<PipelineCompiler> compiler; ///< last: its threads are joined first
 };
 

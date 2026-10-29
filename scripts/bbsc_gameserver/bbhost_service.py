@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 r"""bbhost players on a BBSC server (2026-10-12).
 
 bbhost (droogie's Bloodborne host, github.com/droogie/bbhost) runs the game's own online code and

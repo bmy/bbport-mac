@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport buffers: lists the pages shaders reached through device addresses the buffer cache does
 // not hold (their bits set in the fault buffer, one per page) and clears the bits. Output: a count

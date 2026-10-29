@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 #define _GNU_SOURCE
 #include "runtime.h"
 #include <stdlib.h>

@@ -1,5 +1,7 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "render/vk_frame_capture.h"
+#include "shim/bb_env.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -84,7 +86,7 @@ void AddShader(Entry& entry, u64 hash) {
 }
 
 void Write(VAddr presented) {
-    const char* dir = std::getenv("BB_CAPTURE_DIR");
+    const char* dir = bb_env("BB_CAPTURE_DIR");
     const std::string path =
         std::format("{}/frame_{}.txt", dir ? dir : ".", static_cast<long long>(std::time(nullptr)));
     FILE* f = std::fopen(path.c_str(), "w");
@@ -130,7 +132,7 @@ void Write(VAddr presented) {
 void FrameCapture::OnFlip(VAddr presented_address) {
     last_presented.store(presented_address, std::memory_order_relaxed);
     flips.fetch_add(1, std::memory_order_release);
-    static const char* trigger = std::getenv("BB_CAPTURE_TRIGGER");
+    static const char* trigger = bb_env("BB_CAPTURE_TRIGGER");
     if (trigger && state.load(std::memory_order_relaxed) == Idle &&
         std::filesystem::exists(trigger)) {
         std::error_code ec;
@@ -261,6 +263,12 @@ void FrameCapture::Buffer(u64 stage_hash, u32 slot, VAddr address, const void* d
 void FrameCapture::Sampled(const VideoCore::ImageInfo& info, bool storage) {
     if (pending_sampled.size() < 64) {
         pending_sampled.emplace_back(ToTarget(info), storage);
+    }
+}
+
+void FrameCapture::Pending(std::string text) {
+    if (pending_buffers.size() < 64) {
+        pending_buffers.push_back(std::move(text));
     }
 }
 

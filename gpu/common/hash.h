@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: combining hashes. The arithmetic is the usual golden-ratio mix (as boost's
 // hash_combine); it must not change: pipeline cache keys on disk are made with it.

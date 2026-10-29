@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Select Vulkan ICDs for the packaged port before starting GTK or the game.
 
@@ -142,6 +143,22 @@ def configure(env, manifest_dirs=MANIFEST_DIRS, library_dirs=LIBRARY_DIRS,
         vendors.sort(key=lambda p: "nvidia" not in p.name.lower())
         if any("nvidia" in p.name.lower() for p in vendors):
             env["__EGL_VENDOR_LIBRARY_FILENAMES"] = ":".join(str(p) for p in vendors)
+    # #181/#219/#229: on X11 (Xwayland, PRIME) NVIDIA's ICD presents through EGL and its X11
+    # platform (libnvidia-egl-xcb/-xlib), which needs a GBM device. The package's libgbm only
+    # looks in /run/opengl-driver/lib/gbm, so off NixOS it has no nvidia-drm backend, the X11
+    # platform fails, and the driver calls a null callback (eglcore +0xbb1819) at the first
+    # surface query. Only NVIDIA's backend is exposed: the host's dri_gbm.so is a host-Mesa build.
+    if not env.get("GBM_BACKENDS_PATH"):
+        backend = next((d / "gbm" / "nvidia-drm_gbm.so" for d in dict.fromkeys(
+            (driver.parent, *library_dirs)) if elf64(d / "gbm" / "nvidia-drm_gbm.so")), None)
+        if backend:
+            gbm = cache / "gbm"
+            gbm.mkdir(exist_ok=True)
+            try:
+                (gbm / backend.name).symlink_to(backend.resolve())
+            except FileExistsError:
+                pass
+            env["GBM_BACKENDS_PATH"] = f"{gbm}:/run/opengl-driver/lib/gbm"
     return f"Vulkan: host NVIDIA driver {driver}; bundled AMD/Intel also available"
 
 
@@ -215,7 +232,7 @@ def main():
         # Everything on stdout, with the summary: one file for an issue report (#107: the report
         # went to stderr and was missing from saved output).
         for key in ("VK_DRIVER_FILES", "VK_ICD_FILENAMES", "LD_LIBRARY_PATH",
-                    "__EGL_VENDOR_LIBRARY_FILENAMES"):
+                    "__EGL_VENDOR_LIBRARY_FILENAMES", "GBM_BACKENDS_PATH"):
             print(f"{key}={os.environ.get(key, '')}", flush=True)
         for line in nvidia_report(os.environ, tool):
             print(line, flush=True)

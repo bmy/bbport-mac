@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Before structurization: phis become register accesses again. A phi standing for a GCN register
 // reads that register; any other gets a virtual register each predecessor stores its value to.

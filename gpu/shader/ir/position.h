@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport shader translator IR: the exports to Position1..3, which carry system outputs (clip and
 // cull distances, point size, render target and viewport index) as the stage's output map says.

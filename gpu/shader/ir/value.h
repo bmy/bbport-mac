@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport shader translator IR: an operand: an instruction's result, a register, an attribute or
 // patch value, or an immediate. TypedValue restricts the types a function accepts.

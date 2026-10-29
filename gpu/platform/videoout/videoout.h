@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: libSceVideoOut, the display: display buffers the game registers, flips (now, or at the
 // end of a GPU frame), vblank and flip events, and the statuses games poll. One port (the main

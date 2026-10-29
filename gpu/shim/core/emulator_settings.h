@@ -1,7 +1,10 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: shadPS4 settings used by the video core, read once from BB_* environment
 // variables (defaults match shadPS4 except the pipeline cache, which is on).
 #pragma once
 #include <algorithm>
+#include "shim/bb_env.h"
 #include <cstdlib>
 #include <string>
 #include "common/types.h"
@@ -12,17 +15,17 @@ class EmulatorSettingsImpl {
 public:
     static EmulatorSettingsImpl* GetInstance() { static EmulatorSettingsImpl s; return &s; }
     static bool Flag(const char* name, bool fallback) {
-        const char* v = std::getenv(name);
+        const char* v = bb_env(name);
         return v ? (v[0] == '1' || v[0] == 'y' || v[0] == 't') : fallback;
     }
     static long Number(const char* name, long fallback) {
-        const char* v = std::getenv(name);
+        const char* v = bb_env(name);
         return v ? std::strtol(v, nullptr, 10) : fallback;
     }
     s32 GetGpuId() { static const auto value = s32(Number("BB_GPU_ID", -1)); return value; }
     u32 GetInternalScreenWidth() { static const auto value = u32(Number("BB_INTERNAL_WIDTH", 1920)); return value; }
     u32 GetInternalScreenHeight() { static const auto value = u32(Number("BB_INTERNAL_HEIGHT", 1080)); return value; }
-    std::string GetPresentMode() { const char* v = std::getenv("BB_PRESENT_MODE"); return v ? v : "Mailbox"; }
+    std::string GetPresentMode() { const char* v = bb_env("BB_PRESENT_MODE"); return v ? v : "Mailbox"; }
     // bbport: Relaxed by default: without readbacks FaceGen reads stale GPU-written vertices
     // (vertex explosions); in Hunter's Nightmare it costs no measurable frame rate.
     u32 GetReadbacksMode() { static const auto value = u32(Number("BB_READBACKS", GpuReadbacksMode::Relaxed)); return value; }

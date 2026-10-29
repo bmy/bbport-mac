@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // SOPP program flow: branches and waits are the CFG's (nothing to emit here); barriers, the PC
 // read, and geometry shader messages.

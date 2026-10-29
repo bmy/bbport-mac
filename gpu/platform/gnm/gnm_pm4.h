@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: writing PM4 packets the way the PS4's Gnm driver lays them out in a game's command
 // buffers. Two forms: Emit* write into a buffer at run time; the constexpr builders (Sh, Ctx, ...)

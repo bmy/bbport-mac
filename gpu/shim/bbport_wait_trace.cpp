@@ -1,5 +1,7 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "bbport_wait_trace.h"
+#include "shim/bb_env.h"
 
 #include <algorithm>
 #include <array>
@@ -59,10 +61,7 @@ std::string Describe(void* address) {
 } // namespace
 
 bool Enabled() {
-    static const bool enabled = [] {
-        const char* env = std::getenv("BB_WAIT_TRACE");
-        return env && env[0] == '1';
-    }();
+    static const bool enabled = bb_env_on("BB_WAIT_TRACE");
     return enabled;
 }
 

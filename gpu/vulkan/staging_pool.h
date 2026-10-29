@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport vulkan: staging memory for uploads (HostUncached), readbacks (HostCached) and device-local
 // scratch, per memory type:
@@ -61,6 +62,7 @@ private:
         u64 used = 0;      ///< bytes handed out since it was last empty
         u64 last_tick = 0; ///< the submission that used it last (0: none)
         u64 last_frame = 0;
+        u64 last_ms = 0;   ///< wall time of the last use (VRAM ones go by it: frames are slow while loading)
     };
     struct Segments {
         std::vector<Segment> list;
@@ -70,6 +72,7 @@ private:
         std::unique_ptr<VideoCore::Buffer> buffer;
         u64 last_tick = 0;
         u64 last_frame = 0;
+        u64 last_ms = 0;
         bool held = false; ///< deferred, not freed yet
     };
 

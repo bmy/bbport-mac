@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Image sampling, gathers, fetches, storage reads/writes and queries. The handle is the image
 // binding (low 16 bits) and the sampler binding (high 16 bits); integer images are read as

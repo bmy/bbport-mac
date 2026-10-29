@@ -1,0 +1,30 @@
+bbport — a native PC port of Bloodborne (CUSA03173, 1.09)
+https://github.com/deadinside28/bloodborne_pc
+
+Copyright 2026 bbport contributors (the authors of this repository's commits and merged pull
+requests). Licensed under the GNU General Public License, version 2 or (at your option) any later
+version: see LICENSE. No game code or data is part of this project.
+
+Files of this project carry, in their first lines,
+    SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+    SPDX-License-Identifier: GPL-2.0-or-later
+(or the license and copyright holders of the code they came from). The GPL requires these notices
+to be kept intact in copies and in works based on them (GPL-2.0, sections 1 and 2): if you reuse
+bbport's code — the runtime in src/, the GPU layer in gpu/, the scripts, the launchers — keep
+them, keep this file, and say in your own documentation that the code comes from bbport, with a
+link to the repository above. Code reused from a fork of bbport is bbport's code too.
+
+Code bbport is built on, with its own notices kept in its files:
+
+- shadPS4 (https://github.com/shadps4-emu/shadPS4, GPL-2.0-or-later, Copyright shadPS4 Emulator
+  Project): the GPU layer and the shader translator started from its video core and shader
+  recompiler and were rewritten part by part (gpu/VENDOR.txt). The online module keeps shadPS4
+  v0.20.0's network, NP and shadNet code (gpu/bbnet20/vendor/shadps4, gpu/bbnet20/SHADNET-PORT.md).
+- The online module's other parts (gpu/bbnet20: BBSC, The Hunter's Dream pool; GPL-3.0-or-later
+  where their files say so) keep their authors' copyright (gpu/bbnet20/SHADNET-PORT.md).
+- The DLSS bridge (gpu/dlss_bridge, MIT), adapted from IFreemz's shadPS4-Bloodborne-DLSS-FSR
+  (https://github.com/IFreemz/shadPS4-Bloodborne-DLSS-FSR).
+- AMD FidelityFX shaders and headers (MIT) in gpu/upscale/shaders/ffx, gpu/third_party and
+  tools/fsr4cap/ffx, with AMD's notices.
+- The libraries in gpu/third_party (sirit, imgui, half, httplib, fsr-vulkan and others), each under
+  its own license in its folder.

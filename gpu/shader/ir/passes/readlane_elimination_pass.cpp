@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // v_readlane of a constant lane after v_writelane to that lane (scalar values spilled into VGPR
 // lanes and read back) is the written value. Through control flow the read follows the phis:

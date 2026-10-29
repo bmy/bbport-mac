@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: nearest resample of a depth/stencil image between native and reduced scene
 // targets. Used where the format has no blit support (D32S8 on RADV).

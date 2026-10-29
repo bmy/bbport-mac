@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport shader translator: the tessellation constants buffer the PS4 driver binds for hull
 // and domain shaders (sizes and offsets of the control point and patch regions in LDS).

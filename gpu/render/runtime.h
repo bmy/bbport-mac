@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport render: transfers between buffers and images recorded on the draw scheduler, with the
 // barriers they need. Buffer accesses since the last barrier are tracked by range (a transfer
@@ -53,7 +54,7 @@ public:
                     std::span<const vk::BufferCopy> copies);
     void FillBuffer(const VideoCore::Buffer* dst, u64 offset, u64 size, u32 value);
     /// Copies from the game's memory itself (a guest memory chunk's buffer, written by the CPU)
-    /// into `dst`: uploads without a CPU copy (BB_GUEST_IN_PLACE).
+    /// into `dst`: uploads without a CPU copy.
     void CopyFromGuestChunk(vk::Buffer src, const VideoCore::Buffer* dst,
                             std::span<const vk::BufferCopy> copies);
     /// `data` written into `dst` by the GPU in stream order (vkCmdUpdateBuffer pieces).
@@ -110,9 +111,14 @@ public:
     /// BB_LAYER_MEMORY: a shader reached memory through the page table (any buffer of the
     /// game's memory). A write there makes every later access wait for a barrier.
     void AccessGlobal(vk::PipelineStageFlags2 stage, vk::AccessFlags2 access);
+    /// Whether any buffer write (tracked or through the page table) waits for a barrier: a read
+    /// of unknown range (a paged binding) needs one then, and only then.
+    bool HasPendingWrites() const {
+        return global_write || bool(pending_writes);
+    }
 
     /// Records the queued barriers (memory and image layouts).
-    void FlushBarriers();
+    [[gnu::noinline]] void FlushBarriers();
 
     /// Runs before this thread changes image state (layouts, pending image barriers): the
     /// rasterizer joins its texture binding helper there (BindHelper).

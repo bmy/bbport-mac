@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Typed buffer accesses (buffer_load_format, tbuffer_store and the like) become raw loads and
 // stores with the format's unpacking or packing done in the shader: the format comes from the

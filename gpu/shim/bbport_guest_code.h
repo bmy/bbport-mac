@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: machine code for the native detours in the game's code (bbport_guest_hooks,
 // bbport_frame_rate): a small x86-64 emitter for the stubs the detours jump to.

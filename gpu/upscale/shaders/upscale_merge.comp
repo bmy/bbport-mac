@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: writes the upscaler's color back into the game's scene color, keeping the game's alpha
 // (post-processing reads data from it). Debug modes: 1 shows the reactive mask in red,
@@ -12,7 +13,7 @@ layout(binding = 0, rgba16f) uniform readonly image2D upscaled;
 layout(binding = 1, rgba16f) uniform image2D scene;
 layout(binding = 2, r8) uniform readonly image2D reactive;
 layout(binding = 3) uniform texture2D motion;  // render size, pixels
-layout(binding = 4) uniform texture2D objects; // render size, b = object vector written
+layout(binding = 4) uniform utexture2D objects; // render size; y sign = object vector written (mode 2 only)
 
 layout(push_constant) uniform Params {
     uint mode;
@@ -33,7 +34,7 @@ void main() {
         const ivec2 source = min(pixel * size / imageSize(scene), size - 1);
         const vec2 mv = texelFetch(motion, source, 0).rg;
         const ivec2 object_size = textureSize(objects, 0);
-        const bool object = object_size == size && texelFetch(objects, source, 0).b > 0.99;
+        const bool object = object_size == size && (texelFetch(objects, source, 0).y & 0x80000000u) != 0u;
         const float luma = dot(min(color, vec3(1.0)), vec3(0.3, 0.6, 0.1));
         color = vec3(luma * 0.3) + vec3(clamp(abs(mv) / 8.0, 0.0, 1.0), object ? 0.6 : 0.0);
     }

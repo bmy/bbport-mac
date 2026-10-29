@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport buffers: the buffer cache: guest memory bound for the GPU. Ranges lie in sparse arenas
 // (one per 4 GiB of the address space, blocks bound on demand: VRAM copies uploaded from the
@@ -25,6 +26,7 @@ class DirtyTracker;
 #include <array>
 #include <memory>
 #include <optional>
+#include <source_location>
 #include <unordered_map>
 #include <boost/container/small_vector.hpp>
 
@@ -38,6 +40,10 @@ class DirtyTracker;
 
 namespace Core {
 class MemoryManager;
+}
+
+namespace BbLayer {
+struct MemorySource;
 }
 
 namespace Vulkan {
@@ -96,6 +102,11 @@ public:
     }
 
     /// Retrieves the device local DBA page table buffer.
+    /// The mirrors' share of the driver's VRAM budget the texture collector's mark does not take
+    /// (the collector lowers its marks while they hold less).
+    static u64 LayerMirrorFloor(u64 budget);
+    /// At most this much of the floor is kept free for the mirrors (LayerMirrorFloor).
+    static u64 LayerMirrorHeadroom(u64 budget);
     [[nodiscard]] Buffer* GetBdaPageTableBuffer() noexcept {
         return bda_pagetable_buffer.get();
     }
@@ -144,16 +155,37 @@ public:
     /// bbport: with force_writes_in_place, the bytes the bindings now resolved really write (the copy
     /// shader's control list, CopyShaderDestinations: address, size); null: all of each binding.
     const std::vector<std::pair<unsigned long long, unsigned long long>>* precise_writes = nullptr;
+    /// The game's copy shader (its control list, CopyShaderRanges): for a paged binding at one of
+    /// these bases only the blocks of its ranges get page table entries (and imports), not the
+    /// GiB it binds. Set around its binding, like precise_writes.
+    struct PagedRanges {
+        u64 base = 0;
+        const std::vector<std::pair<unsigned long long, unsigned long long>>* ranges = nullptr;
+    };
+    std::array<PagedRanges, 2> paged_ranges{};
 
     /// Finds a buffer for the specified region.
     [[nodiscard]] std::pair<const Buffer*, u64> ObtainBuffer(VAddr device_addr, u32 size,
                                                              bool is_written,
-                                                             bool is_texel_buffer = false);
+                                                             bool is_texel_buffer = false) {
+        const auto result = ObtainBufferImpl(device_addr, size, is_written, is_texel_buffer);
+        if (in_place_read_hook && result.first != &stream_buffer) {
+            in_place_read_hook(in_place_read_context, device_addr, size);
+        }
+        return result;
+    }
+    /// Called for every binding the GPU will read where it is (not a stream copy): the rasterizer
+    /// notes them so that a constant RAM dump over them waits for the GPU, and only those.
+    void (*in_place_read_hook)(void*, VAddr, u64) = nullptr;
+    void* in_place_read_context = nullptr;
+    [[nodiscard]] std::pair<const Buffer*, u64> ObtainBufferImpl(VAddr device_addr, u32 size,
+                                                                 bool is_written,
+                                                                 bool is_texel_buffer);
 
     /// Attempts to obtain a buffer without modifying the cache contents.
     [[nodiscard]] std::pair<const Buffer*, u64> ObtainBufferForImage(VAddr device_addr, u32 size);
 
-    /// bbport BB_GUEST_IN_PLACE: where a command processor write (WRITE_DATA) the GPU performs in
+    /// bbport: where a command processor write (WRITE_DATA) the GPU performs in
     /// stream order lands: the arena over the game's memory, if the range is bound there in place.
     /// Not counted as a GPU write of the block (those move blocks to VRAM): it is CPU data, as a PC
     /// game's constant updates. The range counts as GPU-modified until the GPU has done it, so no
@@ -170,6 +202,9 @@ public:
 
     /// Return true when a region is modified from the GPU
     [[nodiscard]] bool IsRegionGpuModified(VAddr addr, size_t size);
+    /// Diagnostics (BB_TRACE_CB): which check of IsRegionGpuModified holds: 1 the page tracker,
+    /// 2 bytes the GPU wrote into a VRAM copy, 3 a GPU write not done yet, 0 none.
+    [[nodiscard]] u32 GpuModifiedWhy(VAddr addr, size_t size);
 
     /// Processes the fault buffer.
     void ProcessFaultBuffer();
@@ -177,12 +212,6 @@ public:
     /// Synchronizes all buffers needed for DMA.
     void SynchronizeDmaBuffers();
 
-    /// bbport (BB_PREUPLOAD): notes a guest mapping or unmapping (Rasterizer::MapMemory): the
-    /// game's GPU memory (direct memory of type 3 with GPU access) is pre-uploaded.
-    void NotePreuploadMapping(VAddr addr, u64 size, bool mapped);
-    /// bbport (BB_PREUPLOAD): uploads up to `budget` bytes of that memory which the CPU changed and
-    /// then left alone for a few frames into the arena, ahead of its use (draw recording thread).
-    void Preupload(u64 budget);
     /// bbport (BB_GPU_WRITE_TWINS): forgets the twins of unmapped guest memory.
     void DropTwins(VAddr addr, u64 size);
 
@@ -191,12 +220,26 @@ public:
     /// bbport (GPU watchdog): prints how far the GPU got with the arena binds (vkQueueBindSparse).
     void ReportArenaBinds();
 
-    /// bbport BB_GUEST_IN_PLACE: the game unmapped [addr, addr + size) (a guest thread): arena
+    /// bbport: the game unmapped [addr, addr + size) (a guest thread): arena
     /// blocks bound to its memory there are unbound before the next binding (GPU side).
     void UnmapInPlace(VAddr addr, u64 size);
+    /// A game allocation [addr, addr + size) the game's profile knows (a heap block): VRAM copies
+    /// of data in it stay within it (one mirror per such domain, no merge across its edges).
+    void LayerDomainAdd(VAddr addr, u64 size);
+    /// The game freed it: its domain goes, and its whole blocks' VRAM copies with it (queued as an
+    /// unmap; the blocks it shares with neighbours stay).
+    void LayerDomainDead(VAddr addr, u64 size);
+    /// bbport: drops the images of ranges LayerDomainDead queued. Not under the texture cache's
+    /// mutex (Rasterizer::OnSubmit; Maintain runs inside texture lookups).
+    /// `started_stamp`: the highest submission stage A had started when this was queued; a range
+    /// freed before it (an image there may be the new allocation's already) counts as late.
+    void ProcessDeadImages(u64 started_stamp);
+    [[nodiscard]] bool DeadImagesPending() const noexcept {
+        return dead_images_pending.load(std::memory_order_acquire);
+    }
     /// Whether the range is bound to the game's own memory (no uploads, tracking or readbacks).
     [[nodiscard]] bool IsInPlace(VAddr addr, u64 size) const;
-    /// bbport BB_GUEST_IN_PLACE without write tracking: [addr, addr + size) gets data through a path
+    /// bbport: [addr, addr + size) gets data through a path
     /// the GPU side hears of (file reads, the game's resource loaders, DMA): its blocks may then
     /// keep a VRAM copy (any thread).
     void NoteAssetWrite(VAddr addr, u64 size);
@@ -210,7 +253,18 @@ public:
     bool UpdateGpuWritten(VAddr addr, std::span<const u8> data);
     /// bbport: copies of [addr, addr + size) in VRAM (ShadowCopy) are stale from here on in stream
     /// order: the GPU or the command processor wrote there (GPU side thread).
-    void DropShadows(VAddr addr, u64 size);
+    void DropShadows(VAddr addr, u64 size,
+                     std::source_location caller = std::source_location::current());
+    /// bbport BB_LAYER_MEMORY (GPU side thread, right after a dispatch, outside any render pass):
+    /// the small ranges it wrote in the game's memory are copied by the GPU into VRAM, and later
+    /// small read-only bindings of them in this submission read that copy instead of the game's
+    /// memory over PCIe (constants the game's copy shader writes: every wave of a G-buffer pass
+    /// read them across the bus, the GPU busy at low power). One copy after the writer, no render
+    /// pass cut. Off by default (no gain measured on AMD); BB_WRITE_SHADOWS=1 or experiment bit
+    /// 512: on.
+    void ShadowGpuWrites(std::span<const std::pair<unsigned long long, unsigned long long>> ranges);
+    /// A GPU write of unknown range (a paged binding): every ShadowGpuWrites copy may be stale.
+    void DropWriteShadows();
     /// bbport, without write tracking (any thread): the command processor wrote these bytes into the
     /// game's memory outside the command stream (labels, timestamps, occlusion results; through
     /// the backing mapping, which nothing sees). Where VRAM holds a copy of them it gets them too, at
@@ -272,7 +326,7 @@ public:
         if (LayerActive() && size != 0) {
             return !IsInVramLayer(addr, size); // bbport BB_LAYER_MEMORY: not all in one mirror
         }
-        return GuestInPlace() && size != 0 &&
+        return size != 0 &&
                in_place_blocks.Overlaps(addr >> block_shift, ((addr + size - 1) >> block_shift) + 1);
     }
     /// bbport BB_LAYER_MEMORY: [addr, addr + size) whole in one VRAM mirror.
@@ -298,7 +352,7 @@ private:
     /// image: a VRAM copy of it would only cost an upload).
     void EnsureResident(const Buffer* arena, u64 first_block, u64 last_block,
                         bool in_place = false);
-    /// BB_GUEST_IN_PLACE: binds the blocks of [start, end) that are direct memory in a guest memory
+    /// Binds the blocks of [start, end) that are direct memory in a guest memory
     /// chunk to that memory; the others are added to `rest` (VRAM, as before).
     struct ResidentBind {
         u64 start, end; ///< blocks
@@ -321,7 +375,7 @@ private:
         return TrackedIntervalList<Backing>::generation + TrackedIntervalList<>::generation;
     }
     void ProcessPendingUnmaps();
-    /// bbport BB_GUEST_IN_PLACE: a write fault (guest thread). Blocks the CPU keeps writing (faults in
+    /// bbport: a write fault (guest thread). Blocks the CPU keeps writing (faults in
     /// 3 frames of 60) move from VRAM to the game's memory in place: dynamic data, like an upload
     /// heap; static data stays in VRAM, like a default heap.
     void NoteCpuWrite(VAddr address, u64 guest_rip);
@@ -334,7 +388,7 @@ private:
     /// BB_FRAME_STATS: GPU-written bindings over 64 KiB, reported every 5 s (where they are bound,
     /// which images lie over them).
     void NoteLargeGpuWrite(VAddr addr, u64 size);
-    /// bbport BB_GUEST_IN_PLACE on a discrete GPU, BB_SHADOWS=1 (off by default: 85 copies, 20 MB a
+    /// bbport on a discrete GPU: BB_SHADOWS=1 (off by default: 85 copies, 20 MB a
     /// frame in Yahar'gul cost more than reading in place, 48 -> 44 FPS): a read-only binding of data the
     /// CPU writes in place is copied once per submission by the GPU into VRAM and bound there, as a
     /// PC game copies an upload heap into a default heap: one sequential copy over PCIe instead of
@@ -344,9 +398,39 @@ private:
         VAddr addr;
         u64 size, offset;
     };
+public:
+    /// Vertex data bound in place (the CPU writes it often: ~26 MB a frame in heavy views, read by
+    /// the depth, G-buffer and shadow passes over the bus each): copied by the CPU into the stream
+    /// buffer once per guest submission and bound there (no copy command: no pass break).
+    /// BB_HOT_VERTEX_COPY=1 or experiment bit 1024.
+    std::optional<std::pair<const Buffer*, u64>> HotVertexCopy(VAddr addr, u64 size);
+    static bool HotVertexCopyOn();
+    /// BB_VERTEX_READ_COPY=1 (experiment bit 2048 inverts it): of such a range [addr, addr+size)
+    /// only [lo, hi) is copied, the bytes the draw's vertex and instance range reads (~1/10 of
+    /// the bound bytes); the result is where addr would be (the rest there is never read).
+    std::optional<std::pair<const Buffer*, u64>> HotVertexCopySpan(VAddr addr, u64 size, u64 lo,
+                                                                   u64 hi);
+    static bool VertexReadCopyOn();
+    void ClearHotCopies() {
+        hot_copies.clear();
+    }
+private:
+    struct HotCopy {
+        VAddr addr;
+        u64 size, offset;
+    };
+    std::vector<HotCopy> hot_copies; ///< this guest submission's copies
     std::unique_ptr<StreamBuffer> shadow_buffer;
     std::vector<Shadow> shadows; ///< this submission's copies
     u64 shadow_tick = 0;
+    /// ShadowGpuWrites: the VRAM copy (in shadow_buffer) holding [addr, addr + size).
+    std::optional<std::pair<const Buffer*, u64>> GpuWriteShadow(VAddr addr, u64 size);
+    struct WriteShadow {
+        u64 size, offset;
+        u64 stamp; ///< write_shadow_reserved when made: valid until the ring comes round
+    };
+    std::map<VAddr, WriteShadow> write_shadows; ///< by address, never overlapping
+    u64 write_shadow_reserved = 0;              ///< bytes ShadowGpuWrites took from the ring
     /// BB_TRACE_SIZE=bytes (diagnostics): bindings over GPU-written buffers of that size, counted by
     /// the path they take, reported every 5 s.
     void TraceBinding(VAddr addr, u64 size, bool is_written, int kind);
@@ -366,7 +450,7 @@ private:
     /// Without write tracking: [addr, addr + size) is bound for GPU writes (GPU side thread).
     void NoteGpuWrite(VAddr addr, u64 size);
     /// Whether a block may keep a VRAM copy without write tracking: Garlic data only loaders wrote.
-    bool VramEligible(u64 block, bool garlic_known = false);
+    bool VramEligible(u64 block);
     /// Called as a submission goes out (its tick `submitted`): candidate blocks get VRAM for the next
     /// submission, bound once `submitted` is done on the GPU, filled from the game's memory there.
     /// Called as a submission goes out: blocks partly handed out again whose GPU data is in VRAM get
@@ -376,8 +460,7 @@ private:
     void QueuePromotions(u64 submitted);
     void ReportInPlaceBlocks(); ///< bbport BB_RESIDENCY_REPORT (diagnostics)
     /// Arena residency memory from the 64 MiB blocks: the memory and the byte offset in it.
-    /// `may_fail`: an empty memory when nothing can be allocated, instead of stopping.
-    std::pair<vk::DeviceMemory, u64> AllocateResidency(u64 bytes, bool may_fail = false);
+    std::pair<vk::DeviceMemory, u64> AllocateResidency(u64 bytes);
     /// bbport: BbStats::residency_unused_bytes after the free list or the current block changed.
     void NoteResidencyUnused();
     /// bbport: idle VRAM blocks (see group_use).
@@ -389,10 +472,6 @@ private:
     void ReleaseResidencySlot(vk::DeviceMemory memory, u64 offset);
     /// Unbinds a VRAM block of memory the game unmapped (uploaded again if mapped and used).
     void EvictVramBlock(u64 block);
-    /// bbport: the copies model (not in place): VRAM copies the GPU has not used for `idle_seconds`
-    /// and holds no GPU-written data in leave VRAM (at most `limit` blocks; uploaded again when
-    /// used). Returns how many left.
-    u64 EvictIdleCopies(u32 idle_seconds, u64 limit);
     /// bbport: chunks without blocks for 5 s, their rebinds long done: back to the driver.
     void FreeEmptyChunks(u32 now);
     [[nodiscard]] static u32 VramIdleSeconds();
@@ -438,6 +517,16 @@ private:
                                                            bool may_promote = true);
     /// Whether a block may get a VRAM copy (all of it loaded data, in a guest chunk).
     bool LayerEligible(u64 block);
+public:
+    /// BB_VERTEX_IN_PLACE=1 (diagnostics): vertex ranges bound in place, unique blocks per frame
+    /// by why they have no VRAM copy, every 2 s.
+    void NoteVertexInPlace(VAddr address, u64 size);
+    /// BB_COPY_WHERE=1 (diagnostics): where the copy shader's sources and destinations are.
+    void NoteCopyWhere(const std::vector<std::pair<unsigned long long, unsigned long long>>& src,
+                       const std::vector<std::pair<unsigned long long, unsigned long long>>& dst,
+                       u32 groups);
+    void NoteCopyGap(u64 gap);
+private:
     /// BB_LAYER_WATCH: whether a block with unannounced bytes may get a watched VRAM copy.
     bool LayerWatchable(u64 block);
     static bool LayerWatchEnabled();
@@ -493,15 +582,13 @@ private:
     /// VRAM past BB_VRAM_PROMOTE_PERCENT of the budget, or within PromoteCriticalMargin of the
     /// texture collector's critical mark: no new copies of loaded blocks for now.
     bool VramPromotionsPaused();
-    /// Headroom below the texture collector's critical mark: copies stop at it, and past
-    /// ShrinkCriticalMargin idle mirrors go back in place (LayerProcessIdle).
-    static constexpr u64 PromoteCriticalMargin = 384_MB;
+    /// Headroom below the texture collector's critical mark: copies stop at it, and idle mirrors
+    /// go back in place past it (LayerYieldToImages). 384 MiB, at most 1/12 of the VRAM budget:
+    /// on a 2 GB card (budget 1646 MiB) 384 MiB held the usage at ~1 GB (GTX 1050 laptop).
+    u64 PromoteCriticalMargin() const;
     /// Freed beyond the pause mark when stale mirrors go (LayerYieldToImages): room for the
-    /// copies waiting.
-    static constexpr u64 StaleHeadroom = 256_MB;
-    /// The mirrors' share of the driver's VRAM budget the texture collector's mark does not take.
-    static u64 LayerMirrorFloor(u64 budget);
-    static constexpr u64 ShrinkCriticalMargin = 128_MB;
+    /// copies waiting. 256 MiB, at most 1/16 of the budget.
+    u64 StaleHeadroom() const;
 
     const Vulkan::Instance& instance;
     Vulkan::Scheduler& scheduler;
@@ -529,17 +616,50 @@ private:
     std::array<const Buffer*, NUM_ARENA_PAGES> address_space{};
     std::deque<Buffer> arenas;
     std::vector<ArenaBinds> pending_binds;
-    std::mutex preupload_mutex;               ///< the map hooks come from guest threads
-    std::map<VAddr, VAddr> preupload_ranges; ///< start -> end of pre-uploaded guest memory
-    VAddr preupload_cursor = 0;
-    u64 preupload_first_bytes = 0, preupload_again_bytes = 0; ///< BB_FRAME_STATS report
     Vulkan::Semaphore memory_semaphore;
     /// bbport BB_LAYER_MEMORY: mirrors by start address, retired ones with the tick to wait for.
     std::map<VAddr, std::unique_ptr<Buffer>> layer_mirrors;
+    /// LayerDomainAdd's domains: start -> end (bytes), under layer_domains_mutex.
+    std::map<VAddr, VAddr> layer_domains;
+    std::mutex layer_domains_mutex;
+    /// The domain holding blocks [first, end) whole: its blocks [lo, hi) (edges rounded in).
+    std::optional<std::pair<u64, u64>> LayerDomainOf(u64 first, u64 end);
+    /// BB_LAYER_DOMAINS: mirrors over [first, end), all of it valid in VRAM, merged into one.
+    bool LayerMergeAcross(u64 first, u64 end);
+    /// LayerPromoteRun for a run within one domain at most.
+    u64 LayerPromoteOne(u64 first, u64 end, bool domains_on);
+    /// LayerPromoteRun's second half: the run [first, end) into a mirror over [lo, hi) made of
+    /// `touching` (the one there when it is exactly that, else a new one they are copied into).
+    u64 LayerPromoteInto(u64 first, u64 end, u64 lo, u64 hi,
+                         const std::vector<BbLayer::MemorySource>& touching);
     std::vector<std::pair<std::unique_ptr<Buffer>, u64>> layer_retired;
+    /// A mirror over [start, start + bytes): a pooled one of its size class, else a new one.
+    std::unique_ptr<Buffer> LayerNewMirror(VAddr start, u64 bytes);
+    /// Whether a new mirror of `bytes` fits in what the GPU has left (our device memory live now,
+    /// not the driver's once-a-second reading): else the run waits, read in place meanwhile.
+    bool LayerRoomFor(u64 bytes);
+    /// A retired mirror the GPU is done with: kept for LayerNewMirror (BB_MIRROR_POOL_MB) or freed.
+    void LayerReleaseMirror(std::unique_ptr<Buffer> mirror);
+    /// Pool memory over `keep` bytes, and entries older than a minute, freed (oldest first).
+    void LayerTrimMirrorPool(u64 keep);
+    /// When each mirror was made (by its start): young ones are not compacted (LayerCompactMirrors).
+    std::unordered_map<VAddr, u32> layer_mirror_born;
+    std::multimap<u64, std::pair<std::unique_ptr<Buffer>, u32>> mirror_pool; ///< by allocation size; second it came
+    u64 mirror_pool_bytes = 0;
+    u64 mirror_pool_reuses = 0, mirror_pool_misses = 0;
+    /// Retired mirrors to free, a few a frame (LayerDrainMirrorFrees).
+    std::deque<std::unique_ptr<Buffer>> mirror_free_queue;
+    void LayerDrainMirrorFrees();
     u64 layer_generation = 0;
     u64 layer_copied_back_bytes = 0; ///< statistics
     IntervalList<> layer_published; ///< blocks whose page table entries are written
+    /// BB_PAGED_VERIFY=1 (diagnostics): the current-view entries as written (block -> address).
+    std::unordered_map<u64, u64> layer_shadow;
+    void LayerVerifyPaged(VAddr address, u64 size, bool is_written);
+    /// A read binding not whole in one import of lazy guest memory: its pieces copied by the GPU,
+    /// in stream order, into the stream buffer (fresh at every binding); empty when a piece is in
+    /// no import or it is too large.
+    std::optional<std::pair<const Buffer*, u64>> LayerStitch(VAddr address, u64 size);
     std::mutex layer_uploads_mutex;
     std::vector<std::pair<VAddr, u64>> layer_pending_uploads;
     /// CPU writes the GPU side heard of: their bytes lose their GPU-modified marks (LayerForgetGpuData).
@@ -547,6 +667,8 @@ private:
     std::atomic<bool> layer_cpu_written_pending{false};
     std::atomic<bool> layer_uploads_pending{false};
     std::unique_ptr<Buffer> layer_trash; ///< where paged accesses out of range go
+    /// What read-only paged bindings read where nothing is mapped (memory never written: zeros).
+    std::unique_ptr<Buffer> layer_zeros;
     /// Blocks with bytes nobody announced (an edge shared with other data, padding between
     /// images) in a mirror only so that the rest of a reading binding's range can be there:
     /// refreshed from the game's memory for every binding over them. Paged bindings and the
@@ -555,6 +677,15 @@ private:
     /// Blocks the CPU wrote since they were handed out (traps, announced writes): GPU writes there
     /// stay in place (LayerGpuWriteToVram).
     IntervalList<> layer_cpu_blocks;
+    /// When each block of layer_cpu_blocks was last marked (BbStats::coarse_second). A mark the
+    /// CPU has not renewed for BB_LAYER_CPU_MARK_SECONDS goes once the GPU writes the whole block
+    /// (LayerExpireCpuMarks): the game reused the memory without an allocation we hear of.
+    std::unordered_map<u64, u32> layer_cpu_mark_second;
+    /// When GPU writes over a mixed range made blocks dynamic (layer_write_bounces, not the CPU's):
+    /// such marks expire as the CPU's do (LayerExpireCpuMarks).
+    std::unordered_map<u64, u32> layer_dynamic_second;
+    void LayerMarkCpuBlocks(u64 first, u64 end);
+    void LayerExpireCpuMarks(VAddr address, u64 size);
     /// Blocks with bytes the CPU wrote unannounced, in a mirror for reading bindings anyway
     /// (BB_LAYER_WATCH, LayerWatchable): a write trap catches the CPU's next write, the block is
     /// uploaded again before the next binding and the trap set again. The GPU never writes them
@@ -622,12 +753,20 @@ private:
         }
     };
     TrackedIntervalList<Backing> resident_ranges;
-    /// bbport BB_GUEST_IN_PLACE: blocks bound to the game's own memory, and guest unmaps to apply.
+    /// bbport: blocks bound to the game's own memory, and guest unmaps to apply.
     TrackedIntervalList<> in_place_blocks;
     std::mutex pending_unmaps_mutex;
     std::vector<std::pair<VAddr, u64>> pending_unmaps;
     std::atomic<bool> unmaps_pending{false};
     std::atomic<u64> unmaps_queued{0}; ///< every UnmapInPlace (LayerInPlace's memo)
+    /// bbport: ranges the game's allocator freed (LayerDomainDead): their images go (ProcessDeadImages).
+    struct DeadRange {
+        VAddr addr;
+        u64 size;
+        u64 stamp; ///< BbStats::guest_submit_stamp when freed
+    };
+    std::vector<DeadRange> dead_image_ranges;
+    std::atomic<bool> dead_images_pending{false};
     std::mutex dynamic_mutex;
     std::unordered_map<u64, std::pair<u32, u32>> cpu_write_frames; ///< block -> last frame, frames
     std::unordered_map<u64, std::pair<u32, u32>> gpu_write_frames; ///< written range -> last frame, frames
@@ -666,7 +805,7 @@ private:
     std::vector<std::pair<VAddr, u64>> precise_uploads;
     std::atomic<bool> late_writes_pending{false};
     u64 bind_wait_tick = 0;                            ///< the next arena binds wait for it
-    std::array<std::unique_ptr<Buffer>, 256> chunk_buffers{}; ///< per guest memory chunk (Chunk::index)
+    std::array<std::unique_ptr<Buffer>, 4096> chunk_buffers{}; ///< per guest memory chunk (Chunk::index)
 
     u32 arena_memory_type_index{};
     /// bbport: system memory for residency when VRAM is full (4 GB cards), if sparse binding takes it
@@ -681,6 +820,17 @@ private:
     /// go back to the driver (ProcessIdleBlocks). Blocks of unmapped memory leave VRAM too.
     static constexpr u64 USE_GROUP_BITS = 21;
     std::vector<u32> group_use;
+    /// Per block of mirrored data, by 2 MiB group (allocated when first used): the second a binding
+    /// last named it (its promotion counts). Blocks promoted with their neighbours and not bound
+    /// go back in place (LayerProcessIdle, BB_MIRROR_UNBOUND_SECONDS).
+    std::vector<std::unique_ptr<u32[]>> block_bound;
+    /// Per 2 MiB group: the second blocks there last left VRAM for being idle, yielding to images
+    /// or unbound; they are not promoted again for BB_MIRROR_REPROMOTE_SECONDS (15): on a 2 GB card
+    /// the same data went out and back in, gigabytes a session over PCIe (2026-10-24).
+    std::vector<u32> group_demoted_second;
+    bool LayerRecentlyDemoted(u64 first, u64 end) const;
+    void NoteBlocksBound(u64 first, u64 end);
+    u32 BlockBoundSecond(u64 block) const;
     /// Groups with blocks moved in place for idleness, and those blocks: bound again, they get a
     /// VRAM copy again (QueuePromotions). Else the GPU kept reading them over PCIe (FPS 90 -> 55).
     std::vector<u8> group_demoted;

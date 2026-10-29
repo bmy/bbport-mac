@@ -1,12 +1,17 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "render/vk_button_prompts.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 
+#include "bbgpu/shaders/atlas_decode_comp.h"
 #include "bbport_button_prompts.h"
 #include "buffers/buffer_cache.h"
 #include "vulkan/instance.h"
+#include "vulkan/platform.h"
+#include "vulkan/shader_module.h"
 #include "render/runtime.h"
 #include "render/scheduler.h"
 #include "textures/image_view.h"
@@ -182,12 +187,17 @@ vk::ImageView ButtonPrompts::AtlasView(Runtime& runtime, VideoCore::Image& image
     if (std::none_of(cells.begin(), cells.end(), is_drawn)) {
         return {};
     }
-    // A blit decodes the game's (BC7: a blit source on every device with BC textures).
+    // The game's atlas (BC7) is decoded by a compute pass sampling it through an UNORM view (its
+    // stored values), the port's icons copied into the cells after. A blit from the BC7 image
+    // decoded it on RADV but left the HUD's other icons (vials, bullets, frames) out on AMD's
+    // Windows driver (2026-10-27); a blit from an sRGB format into a UNORM one also converts to
+    // linear light, which the sRGB view then took again.
     const vk::Format source_format = image.backing->image.image_ci.format;
-    if (source_format != vk::Format::eBc7UnormBlock && source_format != vk::Format::eBc7SrgbBlock) {
+    const u32 width = image.info.size.width, height = image.info.size.height;
+    if ((source_format != vk::Format::eBc7UnormBlock && source_format != vk::Format::eBc7SrgbBlock) ||
+        !DecodePipeline()) {
         return {};
     }
-    const u32 width = image.info.size.width, height = image.info.size.height;
     Atlas& atlas = atlases[image.image_uid];
     if (!atlas.image) {
         atlas.image = VideoCore::HostImage{instance.GetDevice(), instance.GetAllocator()};
@@ -200,10 +210,40 @@ vk::ImageView ButtonPrompts::AtlasView(Runtime& runtime, VideoCore::Image& image
             .arrayLayers = 1,
             .samples = vk::SampleCountFlagBits::e1,
             .tiling = vk::ImageTiling::eOptimal,
-            .usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst,
+            .usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst |
+                     vk::ImageUsageFlagBits::eStorage,
             .sharingMode = vk::SharingMode::eExclusive,
             .initialLayout = vk::ImageLayout::eUndefined,
         });
+        auto [result, created] = instance.GetDevice().createImageViewUnique(vk::ImageViewCreateInfo{
+            .image = atlas.image.image,
+            .viewType = vk::ImageViewType::e2D,
+            .format = vk::Format::eR8G8B8A8Unorm,
+            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+        });
+        if (result != vk::Result::eSuccess) {
+            std::printf("Button prompts: no atlas storage view (%s)\n", vk::to_string(result).c_str());
+            atlases.erase(image.image_uid);
+            return {};
+        }
+        atlas.storage_view = std::move(created);
+    }
+    if (atlas.source != image.GetImage()) {
+        const vk::ImageViewUsageCreateInfo sampled{.usage = vk::ImageUsageFlagBits::eSampled};
+        auto [result, created] = instance.GetDevice().createImageViewUnique(vk::ImageViewCreateInfo{
+            .pNext = &sampled,
+            .image = image.GetImage(),
+            .viewType = vk::ImageViewType::e2D,
+            .format = vk::Format::eBc7UnormBlock,
+            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+        });
+        if (result != vk::Result::eSuccess) {
+            std::printf("Button prompts: no atlas source view (%s)\n", vk::to_string(result).c_str());
+            return {};
+        }
+        atlas.source = image.GetImage();
+        atlas.source_view = std::move(created);
+        atlas.upload = ~0u; // decoded again from this image
     }
     if (atlas.upload != image.prompt_upload || atlas.generation != generation) {
         atlas.upload = image.prompt_upload;
@@ -230,46 +270,54 @@ vk::ImageView ButtonPrompts::AtlasView(Runtime& runtime, VideoCore::Image& image
             copy.bufferOffset += offset;
         }
         scheduler.EndRendering();
-        runtime.Transit(&image, vk::ImageLayout::eTransferSrcOptimal, vk::PipelineStageFlagBits2::eBlit,
-                        vk::AccessFlagBits2::eTransferRead);
+        runtime.Transit(&image, vk::ImageLayout::eShaderReadOnlyOptimal,
+                        vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderSampledRead);
         runtime.FlushBarriers();
-        scheduler.Record([source = image.GetImage(), target = vk::Image{atlas.image.image},
-                          buffer = stream.Handle(), copies = std::move(copies), width,
+        scheduler.Record([target = vk::Image{atlas.image.image}, target_view = *atlas.storage_view,
+                          source_view = *atlas.source_view, pipeline = *decode_pipeline,
+                          layout = *decode_layout, buffer = stream.Handle(), copies = std::move(copies), width,
                           height](vk::CommandBuffer cmdbuf) {
             const vk::ImageSubresourceRange range{vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-            const vk::ImageMemoryBarrier2 to_blit{
+            const vk::ImageMemoryBarrier2 to_decode{
                 .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
                 .srcAccessMask = vk::AccessFlagBits2::eShaderRead,
-                .dstStageMask = vk::PipelineStageFlagBits2::eBlit,
-                .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+                .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+                .dstAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
                 .oldLayout = vk::ImageLayout::eUndefined,
-                .newLayout = vk::ImageLayout::eTransferDstOptimal,
+                .newLayout = vk::ImageLayout::eGeneral,
                 .image = target,
                 .subresourceRange = range,
             };
             cmdbuf.pipelineBarrier2(vk::DependencyInfo{.imageMemoryBarrierCount = 1,
-                                                       .pImageMemoryBarriers = &to_blit});
-            const vk::ImageBlit blit{
-                .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
-                .srcOffsets = std::array{vk::Offset3D{0, 0, 0}, vk::Offset3D{s32(width), s32(height), 1}},
-                .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
-                .dstOffsets = std::array{vk::Offset3D{0, 0, 0}, vk::Offset3D{s32(width), s32(height), 1}},
-            };
-            cmdbuf.blitImage(source, vk::ImageLayout::eTransferSrcOptimal, target,
-                             vk::ImageLayout::eTransferDstOptimal, blit, vk::Filter::eNearest);
+                                                       .pImageMemoryBarriers = &to_decode});
+            const vk::DescriptorImageInfo source_info{.imageView = source_view,
+                                                      .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal};
+            const vk::DescriptorImageInfo target_info{.imageView = target_view,
+                                                      .imageLayout = vk::ImageLayout::eGeneral};
+            const std::array<vk::WriteDescriptorSet, 2> writes{{
+                {.dstBinding = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eSampledImage,
+                 .pImageInfo = &source_info},
+                {.dstBinding = 1, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageImage,
+                 .pImageInfo = &target_info},
+            }};
+            cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline);
+            cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute, layout, 0, writes);
+            cmdbuf.dispatch((width + 7) / 8, (height + 7) / 8, 1);
             const vk::ImageMemoryBarrier2 to_copy{
-                .srcStageMask = vk::PipelineStageFlagBits2::eBlit,
-                .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+                .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+                .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
                 .dstStageMask = vk::PipelineStageFlagBits2::eCopy,
                 .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
-                .oldLayout = vk::ImageLayout::eTransferDstOptimal,
+                .oldLayout = vk::ImageLayout::eGeneral,
                 .newLayout = vk::ImageLayout::eTransferDstOptimal,
                 .image = target,
                 .subresourceRange = range,
             };
             cmdbuf.pipelineBarrier2(vk::DependencyInfo{.imageMemoryBarrierCount = 1,
                                                        .pImageMemoryBarriers = &to_copy});
-            cmdbuf.copyBufferToImage(buffer, target, vk::ImageLayout::eTransferDstOptimal, copies);
+            if (!copies.empty()) {
+                cmdbuf.copyBufferToImage(buffer, target, vk::ImageLayout::eTransferDstOptimal, copies);
+            }
             const vk::ImageMemoryBarrier2 to_sample{
                 .srcStageMask = vk::PipelineStageFlagBits2::eCopy,
                 .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
@@ -289,7 +337,10 @@ vk::ImageView ButtonPrompts::AtlasView(Runtime& runtime, VideoCore::Image& image
                         u32(info.mapping.a) << 24;
     auto& view = atlas.views[{srgb, false, mapping}];
     if (!view) {
+        // Sampled only (the copy is a storage image for the decode; sRGB views cannot be).
+        const vk::ImageViewUsageCreateInfo sampled{.usage = vk::ImageUsageFlagBits::eSampled};
         auto [result, created] = instance.GetDevice().createImageViewUnique(vk::ImageViewCreateInfo{
+            .pNext = &sampled,
             .image = atlas.image.image,
             .viewType = vk::ImageViewType::e2D,
             .format = srgb ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm,
@@ -303,6 +354,33 @@ vk::ImageView ButtonPrompts::AtlasView(Runtime& runtime, VideoCore::Image& image
         view = std::move(created);
     }
     return *view;
+}
+
+bool ButtonPrompts::DecodePipeline() {
+    if (decode_pipeline || decode_failed) {
+        return bool(decode_pipeline);
+    }
+    decode_failed = true; // made once; a failure keeps the game's own atlas
+    const auto device = instance.GetDevice();
+    const std::array<vk::DescriptorSetLayoutBinding, 2> bindings{{
+        {.binding = 0, .descriptorType = vk::DescriptorType::eSampledImage, .descriptorCount = 1,
+         .stageFlags = vk::ShaderStageFlagBits::eCompute},
+        {.binding = 1, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1,
+         .stageFlags = vk::ShaderStageFlagBits::eCompute},
+    }};
+    decode_set_layout = Check(device.createDescriptorSetLayoutUnique(
+        {.flags = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
+         .bindingCount = u32(bindings.size()),
+         .pBindings = bindings.data()}));
+    decode_layout = Check(device.createPipelineLayoutUnique({.setLayoutCount = 1, .pSetLayouts = &*decode_set_layout}));
+    const auto module = CompileSPV(ATLAS_DECODE_COMP, device);
+    decode_pipeline = Check(device.createComputePipelineUnique(
+        {}, vk::ComputePipelineCreateInfo{
+                .stage = {.stage = vk::ShaderStageFlagBits::eCompute, .module = module, .pName = "main"},
+                .layout = *decode_layout}));
+    device.destroyShaderModule(module);
+    decode_failed = !decode_pipeline;
+    return bool(decode_pipeline);
 }
 
 } // namespace Vulkan

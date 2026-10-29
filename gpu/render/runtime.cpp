@@ -1,5 +1,7 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "render/runtime.h"
+#include "shim/bb_env.h"
 
 #include <bit>
 #include <algorithm>
@@ -153,7 +155,18 @@ void Runtime::FlushBarriers() {
     if (!memory && image_barriers.empty()) {
         return;
     }
+    static const bool trace = bb_env_on("BB_PASS_BREAK_TRACE");
+    const bool was_rendering = scheduler.IsRendering();
     scheduler.EndRendering();
+    if (trace && was_rendering) {
+        scheduler.SetPassEndCaller(__builtin_return_address(0));
+        static std::atomic<u64> with_memory{0}, images_only{0};
+        if ((memory ? with_memory : images_only).fetch_add(1) % 20000 == 0) {
+            std::printf("FlushBarriers in a pass: %llu with memory (writes %#llx from stages %#llx), %llu images only\n",
+                        (unsigned long long)with_memory.load(), (unsigned long long)u64(pending_writes),
+                        (unsigned long long)u64(pending_stages), (unsigned long long)images_only.load());
+        }
+    }
     scheduler.Record([barrier = vk::MemoryBarrier2{
                           .srcStageMask = pending_stages,
                           .srcAccessMask = pending_writes,
@@ -512,9 +525,14 @@ void Runtime::CopyColorAndDepth(VideoCore::Image* src, VideoCore::Image* dst) {
             CopyImage(src, dst);
             return;
         }
-        // Depth and color images cannot be copied into each other without maintenance8.
-        constexpr size_t CopyBufferSize = 128_MB;
-        const auto staging = staging_pool.Request(CopyBufferSize, VideoCore::MemoryType::DeviceLocal);
+        // Depth and color images cannot be copied into each other without maintenance8: through a
+        // VRAM buffer of the image's size (a fixed 128 MiB one was 7 % of a 2 GB card).
+        // Room for 8 bytes a texel too (a host depth/stencil format may take more than the guest's).
+        const auto& extent = src->info.size;
+        const size_t texels = size_t(extent.width) * extent.height * extent.depth * src->info.resources.layers;
+        const size_t copy_size = Common::AlignUp(
+            std::max<size_t>({src->info.guest_size, dst->info.guest_size, texels * 8, 1_MB}), 1_MB);
+        const auto staging = staging_pool.Request(copy_size, VideoCore::MemoryType::DeviceLocal);
         CopyImageThroughBuffer(src, dst, staging.buffer, staging.offset);
         return;
     }

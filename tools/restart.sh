@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 # tools/restart.sh [run.sh args]: restarts the game with frame stats, BB_PAD_FILE and
 # BB_TOGGLE_FILE (out/pad, out/toggles) and enters the level (title: cross; the port's own
 # skip of the online/offline choice is on: one cross is Continue; BB_SKIP_NETWORK_CHOICE=0 shows
@@ -28,6 +30,8 @@ for pid in $(pgrep -x bb-probe); do
 done
 $T/stop_own.sh; sleep 1
 : > out/pad; echo ${BASE_MASK:-0} > out/toggles
+# SDL drops gamepad presses while the window lacks focus: test runs press the virtual pad unattended.
+export SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=${SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS:-1}
 # BB_FRAME_STATS=0: measured as players run the game (no statistics; its timers are in the draw
 # path), with only the present rate (BB_FPS_PRINT) and a fixed wait for the level.
 stats=${BB_FRAME_STATS:-1}

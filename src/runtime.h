@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 #ifndef BB_RUNTIME_H
 #define BB_RUNTIME_H
 #include <string.h>
@@ -116,6 +118,10 @@ void runtime_thread_keys_cleanup(void);
 int32_t runtime_guest_errno(int host_errno);
 void *runtime_low_map(size_t size, int prot);
 void *runtime_low_map_high(size_t size, int prot); /* macOS low heap: top of the low region */
+/* bbport: the loader changed the protection of part of the low region (mmap PROT_ bits). */
+void runtime_low_protect(uintptr_t start, size_t size, int prot);
+/* bbport: the low region's mapping holding address: 1 with its PS4 protection bits and end. */
+int runtime_memory_low_info(uintptr_t address, int *prot, uintptr_t *end);
 uintptr_t runtime_ajm_resolve(const char *name);
 void runtime_ajm_report(void);
 uintptr_t runtime_audio_resolve(const char *name);
@@ -124,20 +130,20 @@ uintptr_t runtime_pad_resolve(const char *name);
 void runtime_pad_report(void);
 uintptr_t runtime_rtc_resolve(const char *name);
 const char *runtime_file_user_dir(void);
+/* A guest path ("/app0/...") as the host file it maps to: 0, or an errno. */
+int runtime_file_host_path(const char *guest,char *out,size_t size);
+/* runtime_remote.c: the game's files fetched from a phone over adb on first open (BB_APP0_ADB). */
+void runtime_remote_configure(const char *app0);
+int runtime_remote_fetch(const char *host);
+int runtime_remote_size(const char *host,int64_t *size);
+/* The character save the game uses: its slot (userdataNNNN, 0..9) and host folder; -1 before any. */
+int runtime_savedata_active_slot(char *dir, size_t size);
 void runtime_savedata_configure(const char *title);
 uintptr_t runtime_savedata_resolve(const char *name);
 void runtime_savedata_report(void);
 void runtime_thread_attach_host(const char *name);
 /* The game's libc.prx where it was linked (image + module base), 0 before or without it. */
 extern uintptr_t runtime_libc_base;
-/* What other games need beyond Bloodborne's set (runtime_compat.c). */
+/* Calls that need no work here (runtime_compat.c). */
 uintptr_t runtime_compat_resolve(const char *name);
-void runtime_compat_report(void);
-/* NGS2 voices mixed to the game's render buffers (runtime_ngs2.c). */
-uintptr_t runtime_ngs2_resolve(const char *name);
-void runtime_ngs2_report(void);
-/* The USB toy pad behind sceUsbd (runtime_toypad.c). */
-uintptr_t runtime_toypad_resolve(const char *name);
-void runtime_toypad_lights(uint32_t out[3]);
-void runtime_toypad_report(void);
 #endif

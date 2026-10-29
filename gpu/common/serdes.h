@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: the byte format of the pipeline cache's entries. A value is its bytes; a container is
 // its element count (size_t) followed by its elements; a string is its length (size_t) followed

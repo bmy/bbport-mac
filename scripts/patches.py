@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Compile selected shadPS4/GoldHEN XML patches into out/patches.bin for the loader.
 
 Patch addresses are PS4 virtual addresses (eboot base 0x400000); the loader's
@@ -55,6 +57,8 @@ EFFECTS={
 # PS4's AMD CPU, so a block the game gates on a computed flag never runs. The community fix runs
 # it always; on by default on Intel. BB_INTEL_TONEMAP_FIX=0/1 forces it off or on.
 INTEL_TONEMAP='Intel Black Tonemap Fix'
+# The game's AA step forced to FXAA2_GS (anti_aliasing=fxaa); the engine writes it live unless BB_HOT_EFFECTS=0.
+FORCE_FXAA='FXAA2_GS'
 
 
 def intel_cpu(cpuinfo='/proc/cpuinfo'):
@@ -62,7 +66,8 @@ def intel_cpu(cpuinfo='/proc/cpuinfo'):
         with open(cpuinfo) as f:
             return any(line.startswith('vendor_id') and 'GenuineIntel' in line for line in f)
     except OSError:
-        return False
+        # Windows: "Intel64 Family 6 Model 151 Stepping 2, GenuineIntel".
+        return 'GenuineIntel' in os.environ.get('PROCESSOR_IDENTIFIER', '')
 
 
 # The title's PLAY ONLINE / PLAY OFFLINE dialog: the port has no PSN, the game goes straight to the
@@ -80,6 +85,18 @@ GX_COMMAND_HEAP='Larger GX Per-Frame Command Heap'
 
 def gx_command_heap(env=os.environ):
     return env.get('BB_GX_COMMAND_HEAP','1')!='0'
+
+
+# The community patch that grows the game's two graphics heaps (2287 and 886 MiB) to 3952 and
+# 2560 MiB (the fallback of graphics_heap_writes below).
+GRAPHICS_HEAP_PATCH='Increased Graphics Heap Sizes'
+
+
+def graphics_heaps(size, large_heaps):
+    """Whether larger graphics heaps go in: a scene above 1080p (sized for it), or a texture pack
+    (--large-heaps from run.sh / run.py: game_check.texture_pack, #240; the patch's full sizes:
+    upscaled map textures fill the retail heap whatever the scene)."""
+    return large_heaps or bool(size and size[0]*size[1]>OUTPUT_SIZE[0]*OUTPUT_SIZE[1])
 
 
 def intel_tonemap_fix(env=os.environ, cpuinfo='/proc/cpuinfo'):
@@ -149,7 +166,7 @@ def validate_patch_requirements(names, game):
     return names
 
 
-# Effects the engine switches live (gpu/shim bbport_guest_hooks.cpp, "game effects switched live"):
+# Effects the engine switches live (gpu/games/bloodborne/hooks_effects.cpp, "game effects switched live"):
 # they get no startup patch, the engine writes the same bytes from the settings (and again on
 # every change in the menu). BB_HOT_EFFECTS=0: the patches at start, as before.
 HOT_EFFECTS={'effect_chromatic_aberration','effect_dof','effect_motion_blur','effect_ssao',
@@ -159,9 +176,23 @@ HOT_EFFECTS={'effect_chromatic_aberration','effect_dof','effect_motion_blur','ef
 # the complete community patch before construction, and require a restart.
 
 
+def anti_aliasing(settings):
+    """(the game's own AA on, its AA step forced to FXAA2_GS) of bbport.ini anti_aliasing
+    (BbSettings::SyncAntiAliasing): auto = the game's own without an upscaler; game; fxaa (FXAA2_GS,
+    the AA step on); off; smaa (the port's SMAA, the game's AA off). Without the key
+    (older settings) effect_game_aa as it is."""
+    mode=settings.get('anti_aliasing')
+    if mode is None: return settings.get('effect_game_aa','1')=='1',False
+    upscaling=settings.get('upscaler','fsr3')!='off'
+    return mode in ('game','fxaa') or (mode=='auto' and not upscaling),mode=='fxaa'
+
+
 def effect_patches(settings, env=os.environ):
     names=[]
     hot=env.get('BB_HOT_EFFECTS','1')!='0'
+    game_aa,fxaa=anti_aliasing(settings)
+    settings=dict(settings,effect_game_aa='1' if game_aa else '0')
+    if fxaa and not hot: names.append(FORCE_FXAA)
     for key,(off,on) in EFFECTS.items():
         if key not in settings: continue
         if hot and key in HOT_EFFECTS: continue
@@ -174,6 +205,48 @@ SCENE_WIDTH=0x02196A6B-EBOOT_BASE
 SCENE_HEIGHT=0x02196A7A-EBOOT_BASE
 UI_WIDTH=0x02358554-EBOOT_BASE
 UI_HEIGHT=0x0235855D-EBOOT_BASE
+
+
+# Issue #269: the game's text and voice language whatever the copy's sell region allows (the EU
+# release shows English for Chinese and Korean and plays English voices for Japanese, though the
+# files are there; a save keeps the language it was made with). CSLocalizeLang (+0x1fb6cf0) and
+# the save's language (+0x14ef0..) map the wanted language through the sell region's tables (one
+# per region: game language -> shown language); the patches rewrite those tables: every language
+# as itself (voices: those with voice files), or every one as the chosen language.
+# Game language numbers (the order of the game's codes jajp, engb, ... zhcn).
+GAME_LANGUAGES=['jajp','engb','frfr','itit','dede','eses','esar','ptbr','enus','nlnl','plpl',
+                'ruru','dadk','nono','fifi','svse','trtr','ptpt','zhtw','kokr','zhcn']
+VOICE_COUNT=8  # jajp .. ptbr have voice files (sound/*_jaj|eng|frf|iti|ded|ese|esa|ptb.fsb)
+ENGLISH=1
+# The six regions' tables (21 int32 each), text and voice; region 2's text table as a check.
+TEXT_TABLES=(0x47366b0,0x4736720,0x47367c0,0x4736830,0x4736890,0x4736950)
+VOICE_TABLES=(0x47369b0,0x4736a20,0x4736a80,0x4736ae0,0x4736b40,0x4736ba0)
+EU_TEXT_TABLE=(0x47367c0,[1,1,2,3,4,5,5,17,1,9,10,11,12,13,14,15,16,17,1,1,1])
+
+
+def language_writes(settings, elf):
+    """The sell regions' language tables for bbport.ini game_text_language and
+    game_voice_language (a code of GAME_LANGUAGES; auto or none: the game's own choice, without
+    the region's limits)."""
+    site,expected=EU_TEXT_TABLE
+    if len(elf)<0x4000+site+84 or list(struct.unpack_from('<21i',elf,0x4000+site))!=expected:
+        print('Patches: game languages: this eboot\'s tables differ; left as they are')
+        return []
+    text=settings.get('game_text_language','auto')
+    voice=settings.get('game_voice_language','auto')
+    if text!='auto' and text not in GAME_LANGUAGES:
+        print(f'Patches: game_text_language={text} is not one of the game\'s languages')
+        text='auto'
+    if voice!='auto' and (voice not in GAME_LANGUAGES or GAME_LANGUAGES.index(voice)>=VOICE_COUNT):
+        print(f'Patches: game_voice_language={voice} has no voice files')
+        voice='auto'
+    text_map=[GAME_LANGUAGES.index(text)]*21 if text!='auto' else list(range(21))
+    voice_map=([GAME_LANGUAGES.index(voice)]*21 if voice!='auto'
+               else [i if i<VOICE_COUNT else ENGLISH for i in range(21)])
+    writes=[(site,struct.pack('<21i',*text_map)) for site in TEXT_TABLES]
+    writes+=[(site,struct.pack('<21i',*voice_map)) for site in VOICE_TABLES]
+    print(f'Patches: game languages: text {text}, voice {voice} (any sell region)')
+    return writes
 
 
 def read_settings(path):
@@ -199,29 +272,43 @@ def render_size(settings,override=''):
 
 
 def output_size(settings):
-    """Output (UI) size from bbport.ini output_res, e.g. 3840x2160; 1920x1080 by default."""
+    """Output (UI) size from bbport.ini output_res, e.g. 3840x2160. auto (and no key: the
+    default): the monitor's (BB_MONITOR_SIZE, found by run.sh), else 1920x1080."""
+    value=settings.get('output_res','auto').lower()
+    if value=='auto': value=os.environ.get('BB_MONITOR_SIZE','')
     try:
-        w,h=(int(v) for v in settings.get('output_res','').lower().split('x'))
-        if w>0 and h>0: return (w,h)
+        w,h=(int(v) for v in value.split('x'))
+        if w>0 and h>0: return (min(w,7680),min(h,4320))
     except ValueError:
         pass
     return OUTPUT_SIZE
 
 
-def scaled_sizes(settings):
+def scaled_sizes(settings,align=2):
     """(render, output) for an output other than 1080p (above it, or 720p for the Steam Deck):
     the game renders at output / preset scale (or at the output size without upscaler) and the
     upscaler fills the output. None at 1080p and for TAA (native, live host targets only)."""
     out=output_size(settings)
-    if out==OUTPUT_SIZE or settings.get('upscaler')=='taa': return None
+    # 1080p: the game's own size; only live presets over the startup patch (align 8) patch it,
+    # and only for a scene smaller than it.
+    if settings.get('upscaler')=='taa' or (out==OUTPUT_SIZE and align!=8): return None
     scale=1.0
     if settings.get('upscaler','fsr3')!='off':
         preset=int(settings.get('preset','0') or 0)
         scale=PRESET_SCALES[max(0,min(preset,len(PRESET_SCALES)-1))]
-    render=tuple(max(2,round(v/scale/2)*2) for v in out)
+    # align 8 (live presets over the startup patch): the game rounds its targets up to 8 pixels;
+    # a scene of exactly their size keeps the proxies' scale the targets' own (854x534 in 856x536
+    # targets drew live presets misplaced and blocky on the Steam Deck).
+    render=tuple(max(align,round(v/scale/align)*align) for v in out)
     # A scene of exactly 1920x1080 (4K Performance) is indistinguishable from the game's UI
     # coordinate space, which the port's UI composition recognizes by that size.
-    if render==OUTPUT_SIZE: render=(1916,1078)
+    if render==OUTPUT_SIZE:
+        # Frame generation runs on the scaled path only (TemporalUpscaler::RunScaled): with it on, a
+        # native 1080p session is scaled too, from the size the 4K case uses (a GTX 1060 user's
+        # FSR 3.1 frame generation never started at 1080p Native AA, 2026-10-21).
+        frame_generation=settings.get('frame_generation','off') not in ('off','0','')
+        if out==OUTPUT_SIZE and not frame_generation: return None
+        render=(1912,1072) if align==8 else (1916,1078)
     return render,out
 
 
@@ -244,6 +331,42 @@ def resolution_writes(xml,size,app_version,segments,ui=OUTPUT_SIZE):
     if seen!=replacements.keys():
         raise ValueError('resolution patch is missing scene/UI viewport instructions')
     return out
+
+
+# The game's direct memory heap sizes (u64 bytes, a table in its data): the two graphics heaps,
+# 2287 and 886 MiB. The community patch "Increased Graphics Heap Sizes" sets 3952 and 2560 MiB,
+# sized for 4K. With the GPU using the game's memory in place, all of a heap is resident in RAM:
+# at 2560x1080 those sizes left 3.7 GiB more RAM in use, while the game used about what it uses
+# at 1080p (1.1 and 0.6 GiB, measured in a heavy area). The heaps grow with the scene instead:
+# by (pixels / 1080p - 1) / 3 of the patch's increase, all of it at 4K.
+GRAPHICS_HEAPS=((0x04b36dd8,0x8ef00000,0xf7000000),(0x04b36de0,0x37600000,0xa0000000))
+
+
+def elf_read(elf, vaddr, size):
+    """Bytes at a virtual address of the ELF image (its PT_LOAD file contents), or None."""
+    phoff,=struct.unpack_from('<Q',elf,0x20)
+    phentsize,phnum=struct.unpack_from('<HH',elf,0x36)
+    for i in range(phnum):
+        kind,_,offset,start,_,filesz,_,_=struct.unpack_from('<IIQQQQQQ',elf,phoff+i*phentsize)
+        if kind==1 and start<=vaddr and vaddr+size<=start+filesz:
+            return elf[offset+vaddr-start:offset+vaddr-start+size]
+    return None
+
+
+def graphics_heap_writes(elf, size, full=False):
+    """The graphics heaps sized for the scene `size` (`full`: the patch's sizes, a texture pack),
+    or None when the eboot's table differs."""
+    scale=1.0 if full else min(1.0,max(0.0,(size[0]*size[1]/(OUTPUT_SIZE[0]*OUTPUT_SIZE[1])-1)/3))
+    writes=[]
+    for address,original,full in GRAPHICS_HEAPS:
+        offset=address-EBOOT_BASE
+        current=elf_read(elf,offset,8)
+        if current is None or struct.unpack('<Q',current)[0]!=original:
+            return None
+        granule=16<<20
+        grown=original+-(-int((full-original)*scale)//granule)*granule
+        writes.append((offset,struct.pack('<Q',min(grown,full))))
+    return writes
 
 
 def eboot_segments(elf):
@@ -357,11 +480,14 @@ def main():
     p.add_argument('--render-res',default='',help='render resolution WxH (overrides the preset)')
     p.add_argument('--print-preset-size',action='store_true',help='print the selected preset size, if reduced')
     p.add_argument('--output-res',default='',help='output resolution WxH (the upscaler\'s; the UI stays 1920x1080)')
+    p.add_argument('--large-heaps',choices=('0','1'),default='0',
+                   help='1: the full graphics heaps whatever the resolution (a texture pack, #240)')
     p.add_argument('--print-scaled',action='store_true',
                    help='print "RENDER OUTPUT" (WxH) when bbport.ini selects an output other than 1080p')
+    p.add_argument('--align',type=int,default=2,help='--print-scaled: the scene size\'s multiple (8: live presets)')
     a=p.parse_args()
     if a.print_scaled:
-        sizes=scaled_sizes(read_settings(a.settings))
+        sizes=scaled_sizes(read_settings(a.settings),a.align)
         if sizes: print(f'{sizes[0][0]}x{sizes[0][1]} {sizes[1][0]}x{sizes[1][1]}')
         return
     if a.print_preset_size:
@@ -382,8 +508,10 @@ def main():
     if gx_command_heap() and GX_COMMAND_HEAP not in names:
         names.append(GX_COMMAND_HEAP)
     names=validate_patch_requirements(names,a.game_dir)
-    segments=eboot_segments((a.out/'eboot.elf').read_bytes())
+    elf=(a.out/'eboot.elf').read_bytes()
+    segments=eboot_segments(elf)
     writes=compile_patches(a.xml,names,a.app_version,segments)
+    writes+=language_writes(read_settings(a.settings),elf)
     size=render_size(read_settings(a.settings),a.render_res) if a.render_res else None
     # The UI keeps the game's 1920x1080 coordinates even for a larger output: the port draws
     # it into the output-size image with a viewport scaled by output / 1920
@@ -391,10 +519,19 @@ def main():
     ui=OUTPUT_SIZE
     if size:
         writes+=resolution_writes(a.xml,size,a.app_version,segments,ui)
-        if size[0]*size[1]>OUTPUT_SIZE[0]*OUTPUT_SIZE[1]:
-            heap='Increased Graphics Heap Sizes'
-            writes+=compile_patches(a.xml,[heap],a.app_version,segments)
-            names.append(heap)
+    large=a.large_heaps=='1'
+    # BB_PATCHES may name the heap patch already: its writes go in once.
+    if graphics_heaps(size,large) and GRAPHICS_HEAP_PATCH not in names:
+        heaps=graphics_heap_writes(elf,size,full=large)
+        if heaps:
+            writes+=heaps
+            print('Patches: graphics heaps '+', '.join(
+                f'{struct.unpack("<Q",data)[0]>>20} MiB' for _,data in heaps)+
+                (' (texture pack)' if large else ' for the scene'))
+        else:
+            writes+=compile_patches(a.xml,[GRAPHICS_HEAP_PATCH],a.app_version,segments)
+            names.append(GRAPHICS_HEAP_PATCH)
+    if size:
         print(f'Patches: scene {size[0]}x{size[1]}; UI {ui[0]}x{ui[1]}')
     if a.patches_dir:
         # After the built-in ones: an external patch of the same bytes wins.

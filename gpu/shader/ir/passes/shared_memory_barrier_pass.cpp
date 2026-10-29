@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Compute shaders of exactly one GCN wave (64 invocations) synchronize shared memory implicitly
 // on the console; where the host's subgroups are smaller (NVIDIA: 32) barriers are inserted:

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport render: the command stream of a queue. Commands are recorded in order, by default on
 // recording threads (closures handed over in chunks, segments recorded in parallel into their
@@ -7,6 +8,7 @@
 #pragma once
 
 #include <array>
+#include "shim/bb_env.h"
 #include <atomic>
 #include <bit>
 #include <condition_variable>
@@ -80,6 +82,9 @@ struct SubmitInfo {
     vk::Fence fence{};
     u32 num_wait_semas = 0;
     u32 num_signal_semas = 0;
+    /// Low latency (render/vk_low_latency): the frame this submission draws or presents, for
+    /// the driver (VK_NV_low_latency2); 0: none. The draw scheduler fills it in itself.
+    u64 present_id = 0;
     /// Queue operations that go out right before the submission, in queue order (sparse
     /// binds): with BB_ASYNC_SUBMIT the submission itself goes out later, on a recording thread.
     std::vector<std::function<void()>> before_submit;
@@ -117,6 +122,12 @@ public:
     explicit Scheduler(const Instance& instance, bool threaded_recording = false);
     ~Scheduler();
 
+    /// Low latency: this scheduler's submissions draw the game's frames (the presenter's draw
+    /// scheduler): they carry the frame's ID and mark the frame's first submission.
+    void SetRendersFrames(bool on) {
+        renders_frames = on;
+    }
+
     /// Submits what was recorded (it signals the current tick, with `info`'s waits and
     /// signals); the next commands belong to the next tick.
     void Flush(SubmitInfo& info);
@@ -146,6 +157,10 @@ public:
 
     /// Closes the open render pass, if any.
     [[gnu::noinline]] void EndRendering();
+    /// BB_PASS_BREAK_TRACE: names the caller of the code that just ended the pass instead.
+    void SetPassEndCaller(void* caller) noexcept {
+        pass_end_caller = caller;
+    }
     /// BB_PASS_BREAK_TRACE=1 (diagnostics): who ended a render pass that began again with the same
     /// state (a break: its attachments stored and loaded again), every 5 s. bbport: the caller and
     /// the callers above it (what ended it: a buffer copy alone does not say why it was made).
@@ -202,10 +217,7 @@ public:
         /// BB_PRODUCER_CHECK=1 (the launcher's crash diagnostics); off otherwise, the check
         /// costs an atomic exchange per recorded command.
         static bool ProducerCheck() noexcept {
-            static const bool enabled = [] {
-                const char* env = std::getenv("BB_PRODUCER_CHECK");
-                return env && env[0] == '1';
-            }();
+            static const bool enabled = bb_env_on("BB_PRODUCER_CHECK");
             return enabled;
         }
         ProducerScope(const ProducerScope&) = delete;
@@ -335,7 +347,6 @@ public:
     void SetCarriedScope(CarriedScope* scope) {
         carried_scope = scope;
     }
-
     /// Waits until every recorded command is in the command buffer.
     void SyncRecording();
 
@@ -354,8 +365,8 @@ public:
     /// earlier draws either).
     void WaitHostCopiesFor(u64 address, u64 size);
 
-    /// Runs `copy` on a recording thread in order with the commands, the other host copies and
-    /// the signals of SignalAfterHostCopies (the threads spin for work anyway, so small copies cost no wakeup);
+    /// Runs `copy` on a recording thread in order with the commands and the other host copies
+    /// (the threads spin for work anyway, so small copies cost no wakeup);
     /// WaitHostCopies() covers it.
     template <typename Func>
     void RecordHostCopy(Func&& copy) {
@@ -364,17 +375,6 @@ public:
             host_copies_done.store(seq, std::memory_order_release);
         });
     }
-
-    /// Runs `signal` once the guest memory copies issued so far are done, without
-    /// waiting here: the recording thread reaches it after the copies queued before it and hands
-    /// it to the copy threads' completion (BbCopy::AfterCopies).
-    void SignalAfterHostCopies(std::function<void()> signal);
-
-    /// Before a guest-visible write that is not deferred (WriteData, end-of-shader
-    /// fences, flip): waits until every signal handed to SignalAfterHostCopies ran, so that
-    /// the write cannot overtake an earlier fence. Otherwise the guest, seeing the later value,
-    /// may free memory the earlier fence then writes into (corrupted heap, guest fault).
-    void WaitDeferredSignals();
 
     /// Whether a render pass with exactly this state is open.
     /// A render pass instance is open in the command stream.
@@ -565,6 +565,7 @@ private:
     CommandPool command_pool;
     DynamicState dynamic_state;
     SubmitFunc on_submit{};
+    bool renders_frames = false;
     vk::CommandBuffer current_cmdbuf;
     struct PendingOp {
         Common::UniqueFunction<void> callback;
@@ -645,11 +646,8 @@ private:
     u64 host_copy_source_seq = 0;
     u64 host_copy_sources_done = 0;  ///< notes up to this one are copied
     u64 host_copy_big_seq = 0;       ///< last note too large for the table (counts as everywhere)
-    std::atomic<u64> deferred_signals_issued{0}; ///< by the thread recording (A or B)
     std::atomic<u32> producer_tid{0};                 ///< ProducerScope: the thread inside
     std::atomic<const char*> producer_where{nullptr}; ///< and where
-    std::shared_ptr<std::atomic<u64>> deferred_signals_done =
-        std::make_shared<std::atomic<u64>>(0);
 };
 
 } // namespace Vulkan

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport Windows: the POSIX file and time calls of the runtime (src/, C) with Linux semantics
 // (posix_win32.cpp): struct stat with st_mtim/st_blocks, dirent with d_type, directory fds
@@ -143,6 +144,10 @@ void bb_thread_stack(uintptr_t* low, uintptr_t* high);
 /// Guest TLS (runtime_thread.c): the loader rewrote the game's `mov r64, fs:[0]` to read a TEB
 /// TLS slot (gs:[0x1480 + 8 * slot]); each guest thread stores its TCB there.
 int bb_guest_tls_slot(void);
+/* bbport: the calling thread's name for Windows tools (SetThreadDescription; winpthreads keeps it to itself). */
+void bb_win32_set_thread_name(const char* name);
+/* bbport (diagnostics): VirtualQuery of an address as text: state, protection, type, allocation. */
+void bb_win32_describe_address(const void* address, char* text, unsigned size);
 void bb_guest_tls_set(void* tcb);
 
 /// getrandom (sys/random.h): from the system's generator.

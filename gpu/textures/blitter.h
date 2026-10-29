@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport textures: copies between images that Vulkan cannot copy directly, drawn with a
 // full-screen triangle: a color image holding one sample per channel into a multisampled depth

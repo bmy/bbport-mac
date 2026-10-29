@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Driver discovery at the AppImage's GTK/game entry point, without a GPU."""
 from paths import ROOT
 import importlib.util
@@ -113,6 +115,28 @@ class PackagedVulkanTests(unittest.TestCase):
         self.configure()
         self.assertEqual(self.env["__EGL_VENDOR_LIBRARY_FILENAMES"],
                          f"{self.egl / '10_nvidia.json'}:{self.egl / '50_mesa.json'}")
+
+    def test_nvidia_gbm_backend_is_exposed(self):
+        # #181/#219/#229: the package's libgbm finds no nvidia-drm backend off NixOS, and NVIDIA's
+        # X11 EGL platform then leaves the driver calling a null callback.
+        self.nvidia_host()
+        (self.libs / "gbm").mkdir()
+        allocator = self.library("libnvidia-allocator.so.1")
+        (self.libs / "gbm" / "nvidia-drm_gbm.so").symlink_to("../" + allocator.name)
+        self.library("gbm/dri_gbm.so")  # the host Mesa's backend stays out
+        self.configure()
+        gbm = Path(self.env["GBM_BACKENDS_PATH"].split(":")[0])
+        self.assertEqual((gbm / "nvidia-drm_gbm.so").resolve(), allocator)
+        self.assertFalse((gbm / "dri_gbm.so").exists())
+        self.assertTrue(self.env["GBM_BACKENDS_PATH"].endswith(":/run/opengl-driver/lib/gbm"))
+        # The user's own path wins; no backend on the host leaves it unset.
+        self.env = {"BB_DATA_DIR": self.env["BB_DATA_DIR"], "GBM_BACKENDS_PATH": "/user/gbm"}
+        self.configure()
+        self.assertEqual(self.env["GBM_BACKENDS_PATH"], "/user/gbm")
+        (self.libs / "gbm" / "nvidia-drm_gbm.so").unlink()
+        self.env = {"BB_DATA_DIR": self.env["BB_DATA_DIR"]}
+        self.configure()
+        self.assertNotIn("GBM_BACKENDS_PATH", self.env)
 
     def test_egl_vendors_left_alone_without_nvidia_or_when_set(self):
         (self.egl / "10_nvidia.json").write_text("{}")

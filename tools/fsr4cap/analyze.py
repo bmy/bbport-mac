@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 # bbport: summarizes an fsr4cap capture (capture/trace.txt): per dispatch of one frame the shader
 # name (from the DXIL), groups, bindings and the first words of its constant buffer.
 #   analyze.py <capture dir> [frame] [words]

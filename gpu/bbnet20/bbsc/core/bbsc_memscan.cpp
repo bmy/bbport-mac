@@ -13,6 +13,7 @@
 #ifndef _WIN32
 #include <sys/uio.h>
 #include <unistd.h>
+#include "core/bbport_bbsc_kit.h" // Teefpyre (SrShadowy fork)
 #endif
 
 namespace Core::Bbsc {
@@ -21,12 +22,26 @@ namespace {
 
 #ifdef _WIN32
 // One region. The emulator changes page protection all the time (GPU tracking), so a page that was
-// readable a moment ago may fault now: the search runs under SEH and a fault just ends the region.
+// readable a moment ago may fault now. bbport: clang/mingw has no __try, so the region is read in
+// chunks with ReadProcessMemory (a chunk that no longer reads ends the region, no fault); chunks
+// overlap by length - 1 bytes so a match across a boundary is found once.
 void SearchRegion(const std::uint8_t* start, std::size_t size, const std::uint8_t* needle,
                   std::size_t length, std::vector<std::uint64_t>& hits, std::size_t max_hits) {
-    __try {
-        const std::uint8_t* end = start + size;
-        const std::uint8_t* at = start;
+    constexpr std::size_t Chunk = 1u << 20;
+    if (size < length) {
+        return;
+    }
+    std::vector<std::uint8_t> buffer(std::min(size, Chunk + length - 1));
+    std::size_t offset = 0;
+    while (hits.size() < max_hits && size - offset >= length) {
+        const std::size_t want = std::min(buffer.size(), size - offset);
+        SIZE_T read = 0;
+        if (!ReadProcessMemory(GetCurrentProcess(), start + offset, buffer.data(), want, &read) ||
+            read != want) {
+            return;
+        }
+        const std::uint8_t* end = buffer.data() + want;
+        const std::uint8_t* at = buffer.data();
         while (hits.size() < max_hits && end - at >= static_cast<std::ptrdiff_t>(length)) {
             at = static_cast<const std::uint8_t*>(
                 std::memchr(at, needle[0], static_cast<std::size_t>(end - at) - length + 1));
@@ -34,11 +49,14 @@ void SearchRegion(const std::uint8_t* start, std::size_t size, const std::uint8_
                 break;
             }
             if (std::memcmp(at, needle, length) == 0) {
-                hits.push_back(reinterpret_cast<std::uint64_t>(at));
+                hits.push_back(reinterpret_cast<std::uint64_t>(start + offset + (at - buffer.data())));
             }
             ++at;
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (want < buffer.size()) {
+            break;
+        }
+        offset += want - (length - 1);
     }
 }
 #endif
@@ -73,52 +91,8 @@ std::vector<std::uint64_t> FindInMemory(std::span<const std::uint8_t> needle, st
         at = end;
     }
 #else
-    // bbport (Linux): readable mappings from /proc/self/maps, copied in pieces with
-    // process_vm_readv on this process: a page the port protects meanwhile (its write and read
-    // traps) only fails that copy instead of faulting.
-    if (needle.empty()) {
-        return hits;
-    }
-    FILE* maps = std::fopen("/proc/self/maps", "r");
-    if (!maps) {
-        return hits;
-    }
-    constexpr std::size_t Piece = 1u << 20;
-    std::vector<std::uint8_t> buffer(Piece + needle.size());
-    char line[512];
-    while (hits.size() < max_hits && std::fgets(line, sizeof(line), maps)) {
-        unsigned long long start = 0, end = 0;
-        char perms[5] = {};
-        if (std::sscanf(line, "%llx-%llx %4s", &start, &end, perms) != 3 || perms[0] != 'r') {
-            continue;
-        }
-        start = std::max<unsigned long long>(start, lo);
-        end = std::min<unsigned long long>(end, hi);
-        for (std::uint64_t at = start; at < end && hits.size() < max_hits; at += Piece) {
-            const std::size_t want =
-                std::size_t(std::min<std::uint64_t>(end - at, Piece + needle.size() - 1));
-            iovec local{buffer.data(), want};
-            iovec remote{reinterpret_cast<void*>(at), want};
-            const ssize_t got = process_vm_readv(getpid(), &local, 1, &remote, 1, 0);
-            if (got < ssize_t(needle.size())) {
-                continue;
-            }
-            const std::uint8_t* data = buffer.data();
-            const std::uint8_t* last = data + got - needle.size();
-            for (const std::uint8_t* p = data; p <= last && hits.size() < max_hits; ++p) {
-                p = static_cast<const std::uint8_t*>(
-                    std::memchr(p, needle[0], std::size_t(last - p) + 1));
-                if (!p) {
-                    break;
-                }
-                // A match starting past this piece's own bytes is found by the next piece.
-                if (std::size_t(p - data) < Piece && std::memcmp(p, needle.data(), needle.size()) == 0) {
-                    hits.push_back(at + std::uint64_t(p - data));
-                }
-            }
-        }
-    }
-    std::fclose(maps);
+    extra_bbsc_find_in_memory(needle.data(), needle.size(), lo, hi, max_hits, &hits); // [extra: Teefpyre]
+    return hits; // [extra: Teefpyre]
 #endif
     return hits;
 }

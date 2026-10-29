@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: prints a serialized D3D12 root signature (fsr4cap capture).
 #define COBJMACROS

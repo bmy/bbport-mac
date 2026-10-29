@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport shader translator IR: a program being translated: the decoded GCN instructions, the
 // blocks (and their post order), the structured form, and the shader info it fills.

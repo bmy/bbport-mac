@@ -1,6 +1,6 @@
 # Native shadNet bridge
 
-The network-only source in `gpu/bbnet/vendor/shadps4/` is shadPS4's own, unchanged except
+The network-only source in `gpu/bbnet20/vendor/shadps4/` is shadPS4's own, unchanged except
 where marked `bbport`:
 https://github.com/shadps4-emu/shadPS4/tree/v.0.20.0
 (529ceb32f5546b820588f194b903cc39d08015fe): `src/core/libraries/net`, `network`, `np`

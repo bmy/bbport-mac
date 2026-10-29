@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: what a SIGSEGV handler needs from its ucontext (x86-64 Linux; x86-64 macOS under
 // Rosetta 2, where the registers live in the Darwin thread state; arm64 macOS, the native GPU

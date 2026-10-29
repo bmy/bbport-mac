@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 """The launcher's GPU choice: kept by name, passed to the game as its index (BB_GPU_ID)."""
 from paths import ROOT
 import importlib.util
@@ -12,6 +14,10 @@ from unittest import mock
 gi = types.ModuleType("gi")
 gi.require_version = lambda *_args: None
 gi.repository = mock.MagicMock()
+# Real classes for the window's bases: LauncherWindow also inherits the page mixins
+# (bbport_launcher_*.py), and a mock base next to them is a metaclass conflict.
+gi.repository.Adw.ApplicationWindow = type("ApplicationWindow", (), {})
+gi.repository.Adw.Application = type("Application", (), {})
 sys.modules.setdefault("gi", gi)
 sys.modules.setdefault("gi.repository", gi.repository)
 sys.path.insert(0, str(ROOT / "launcher"))

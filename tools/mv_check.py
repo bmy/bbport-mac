@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Checks camera motion vectors against the GPU's object vectors in an upscaler dump.
 
     nix-shell -p "python3.withPackages (p: [p.numpy])" --run "python3 tools/mv_check.py out/dump_x out/ab_x.log"

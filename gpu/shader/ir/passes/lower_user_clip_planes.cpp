@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // The fixed-function user clip planes (PA_CL_UCP_*, enabled by PA_CL_CLIP_CNTL's UCP_ENA bits)
 // as clip distances of the vertex shader: the plane equations change per draw and come from a

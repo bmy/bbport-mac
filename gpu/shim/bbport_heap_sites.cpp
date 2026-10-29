@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport BB_HEAP_SITES=1 (diagnostics): the game's malloc replacement (the pointers libc.prx calls
 // through, libc+0xba190: malloc, free, calloc, realloc, memalign, posix_memalign) is wrapped, and
@@ -5,6 +6,7 @@
 // its code on the stack). Report() prints the sites whose live bytes grew since the last report:
 // what leaks when the guest heap runs out.
 #include "common/types.h"
+#include "shim/bb_env.h"
 #include "game_profile.h"
 #include "bbport_cpu.h"
 #include "bbport_heap_sites.h"
@@ -219,10 +221,7 @@ bool InGame(u64 v) {
 
 namespace {
 void InstallWrappers(bool counters) {
-    static const bool wanted = [] {
-        const char* env = std::getenv("BB_HEAP_SITES");
-        return env && env[0] == '1';
-    }();
+    static const bool wanted = bb_env_on("BB_HEAP_SITES");
     static bool done = false;
     // Bloodborne's libc.prx (its slots at its link address): other games have none here.
     if ((!wanted && !counters) || done || !Game::Active()) {

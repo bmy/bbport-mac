@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT
 #
 # bbport_dlss (libbbport_dlss.so / bbport_dlss.dll) links the NVIDIA DLSS SDK and is built
-# separately from the port. Linux: build.sh builds it when DLSS_SDK_ROOT is set. Windows (MSVC):
+# separately from the port. DLSS Super Resolution and DLSS Frame Generation: the SDK must have
+# the Frame Generation headers (nvsdk_ngx_helpers_dlssg_vk.h, DLSS SDK 310.7 or newer). Linux: build.sh builds it when DLSS_SDK_ROOT is set. Windows (MSVC):
 #   cmake -S gpu/dlss_bridge -B out/dlss-bridge -G "Visual Studio 17 2022" -A x64 \
 #         -DDLSS_SDK_ROOT=<github.com/NVIDIA/DLSS checkout> -DVULKAN_INCLUDE=<Vulkan-Headers include>
 #   cmake --build out/dlss-bridge --config Release
@@ -19,6 +20,9 @@ endif()
 if (NOT EXISTS "${DLSS_SDK_ROOT}/include/nvsdk_ngx_vk.h")
     message(FATAL_ERROR "Set DLSS_SDK_ROOT to the NVIDIA DLSS SDK (github.com/NVIDIA/DLSS)")
 endif()
+if (NOT EXISTS "${DLSS_SDK_ROOT}/include/nvsdk_ngx_helpers_dlssg_vk.h")
+    message(FATAL_ERROR "This DLSS SDK predates Frame Generation: check out github.com/NVIDIA/DLSS 310.7 or newer")
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -26,6 +30,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
 
 add_library(bbport_dlss SHARED bbport_dlss_bridge.cpp bbport_dlss_bridge.h)
+# The Vulkan headers: VULKAN_INCLUDE (build.sh passes them), else the system's (#231: a build on
+# Debian without it found no vulkan/vulkan.h). Only the headers: the bridge gets Vulkan's
+# functions from the port, it does not link the loader.
+if (NOT VULKAN_INCLUDE)
+    find_package(Vulkan QUIET)
+    if (Vulkan_FOUND)
+        set(VULKAN_INCLUDE ${Vulkan_INCLUDE_DIRS})
+    endif()
+endif()
 target_include_directories(bbport_dlss PRIVATE "${DLSS_SDK_ROOT}/include" ${VULKAN_INCLUDE})
 if (WIN32)
     target_link_libraries(bbport_dlss PRIVATE "${DLSS_SDK_ROOT}/lib/Windows_x86_64/x64/nvsdk_ngx_s.lib")

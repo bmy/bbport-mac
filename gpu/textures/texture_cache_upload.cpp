@@ -1,6 +1,8 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // The texture cache: uploads of images the guest (or the GPU, through buffers) changed.
 #include <cstring>
+#include "shim/bb_env.h"
 #include "textures/texture_cache.h"
 
 #include <algorithm>
@@ -18,19 +20,96 @@
 #include "buffers/buffer_cache.h"
 #include "render/runtime.h"
 #include "render/scheduler.h"
+#include "vulkan/instance.h"
 
 namespace VideoCore {
 
 namespace {
 
-bool EnvFlag(const char* name) {
-    const char* env = std::getenv(name);
-    return env && env[0] == '1';
+/// BB_TEXTURE_UPLOAD_MB_PER_FRAME (32; 0: off): the image bytes uploaded a frame before new
+/// textures start with their small levels only, the large ones following in later frames
+/// (SrShadowy's suggestion; the GTX 1050 laptop uploaded 100-230 MB of textures in one frame on
+/// entering an area, 150-500 ms frames). Their views start at the levels there (min LOD) meanwhile.
+u64 UploadBudgetBytes() {
+    static const u64 bytes = [] {
+        const char* env = bb_env("BB_TEXTURE_UPLOAD_MB_PER_FRAME");
+        return u64(env && *env ? std::strtoull(env, nullptr, 10) : 32) << 20;
+    }();
+    return bytes;
+}
+
+/// This frame's image upload bytes (RefreshImage runs under the texture cache's lock).
+struct UploadBudget {
+    u64 frame = ~0ull;
+    u64 spent = 0;
+    void Roll() {
+        const u64 now = BbStats::gpu_frames.load(std::memory_order_relaxed);
+        if (now != frame) {
+            frame = now;
+            spent = 0;
+        }
+    }
+    u64 Remaining() const {
+        return spent >= UploadBudgetBytes() ? 0 : UploadBudgetBytes() - spent;
+    }
+};
+UploadBudget upload_budget;
+
+/// Partial uploads: started, completed, bytes left for later (Texture uploads lines).
+std::atomic<u64> partial_started{0}, partial_completed{0}, partial_deferred_bytes{0};
+u64 partial_started_total = 0, partial_completed_total = 0;
+
+} // namespace
+
+void ReportPartialUploads() {
+    static std::atomic<u32> printed{0};
+    const u32 now = BbStats::coarse_second.load(std::memory_order_relaxed);
+    if (now - printed.load(std::memory_order_relaxed) < 10 ||
+        (partial_started.load() == 0 && partial_completed.load() == 0)) {
+        return;
+    }
+    printed.store(now, std::memory_order_relaxed);
+    const u64 started = partial_started.exchange(0), completed = partial_completed.exchange(0);
+    partial_started_total += started;
+    partial_completed_total += completed;
+    std::printf("Texture uploads (10 s): %llu textures started with their small levels, %llu "
+                "completed (%llu and %llu in all), %llu MiB of large levels left for later "
+                "frames (budget %llu MiB a frame)\n",
+                (unsigned long long)started, (unsigned long long)completed,
+                (unsigned long long)partial_started_total,
+                (unsigned long long)partial_completed_total,
+                (unsigned long long)(partial_deferred_bytes.exchange(0) >> 20),
+                (unsigned long long)(UploadBudgetBytes() >> 20));
+}
+
+namespace {
+
+/// The copy of one level of `image` from its guest layout.
+vk::BufferImageCopy LevelCopy(const Image& image, u32 level) {
+    const ImageInfo& info = image.info;
+    const auto& layout = info.mips_layout[level];
+    const u32 width = std::max(info.size.width >> level, 1u);
+    const u32 height = std::max(info.size.height >> level, 1u);
+    const u32 depth = info.props.is_volume ? std::max(info.size.depth >> level, 1u) : 1u;
+    return {
+        .bufferOffset = layout.offset,
+        .bufferRowLength = layout.pitch,
+        .bufferImageHeight = layout.height,
+        .imageSubresource{
+            .aspectMask = image.aspect_mask & ~vk::ImageAspectFlagBits::eStencil,
+            .mipLevel = level,
+            .baseArrayLayer = 0,
+            .layerCount = info.resources.layers,
+        },
+        .imageOffset = {0, 0, 0},
+        .imageExtent = {layout.pitch ? std::min(layout.pitch, width) : width,
+                        layout.height ? std::min(layout.height, height) : height, depth},
+    };
 }
 
 /// BB_PROMPT_TRACE=1: the small images the game uploads (which are its key guide icons).
 void TracePromptCandidate(const Image& image) {
-    static const bool trace = EnvFlag("BB_PROMPT_TRACE");
+    static const bool trace = bb_env_on("BB_PROMPT_TRACE");
     if (!trace) {
         return;
     }
@@ -91,7 +170,7 @@ void TracePromptCandidate(const Image& image) {
 
 /// BB_IMAGE_SYNC_LOG: the images refreshed most per 5 s (any reason), with their flags.
 void NoteRefresh(const Image& image) {
-    static const bool log = std::getenv("BB_IMAGE_SYNC_LOG") != nullptr;
+    static const bool log = bb_env("BB_IMAGE_SYNC_LOG") != nullptr;
     if (!log) {
         return;
     }
@@ -151,8 +230,121 @@ void NoteRefresh(const Image& image) {
 
 } // namespace
 
-void TextureCache::RefreshImage(Image& image) {
+u32 TextureCache::PartialUploadStart(const Image& image) {
+    const ImageInfo& info = image.info;
+    const u32 levels = info.resources.levels;
+    // Sampled color textures with levels to leave out, the view clamp there to keep them unseen.
+    if (UploadBudgetBytes() == 0 || !instance.IsImageViewMinLodSupported() || levels < 2 ||
+        levels > 15 || info.num_samples > 1 || info.props.is_depth || image.usage.render_target ||
+        image.usage.depth_target || image.usage.storage || info.guest_size < (64u << 10)) {
+        return 0;
+    }
+    upload_budget.Roll();
+    const u64 remaining = upload_budget.Remaining();
+    u64 total = 0;
+    for (u32 level = 0; level < levels; ++level) {
+        total += info.mips_layout[level].size;
+    }
+    if (static const bool trace = bb_env("BB_PARTIAL_TRACE") != nullptr; trace) {
+        static std::atomic<u32> n{0};
+        if (n.fetch_add(1) < 60) {
+            std::printf("Partial budget: frame %llu spent %llu KiB total %llu KiB\n",
+                        (unsigned long long)upload_budget.frame,
+                        (unsigned long long)(upload_budget.spent >> 10),
+                        (unsigned long long)(total >> 10));
+        }
+    }
+    if (total <= remaining) {
+        return 0;
+    }
+    // The smallest levels that fit what is left of the budget (16 KiB at least, the smallest
+    // level always).
+    const u64 allowance = std::max<u64>(remaining, 16u << 10);
+    u64 bytes = 0;
+    u32 first = levels;
+    while (first > 0 && bytes + info.mips_layout[first - 1].size <= allowance) {
+        bytes += info.mips_layout[--first].size;
+    }
+    return std::min(first, levels - 1);
+}
+
+void TextureCache::UploadRemainingLevels(Image& image, bool partial_ok) {
+    const ImageInfo& info = image.info;
+    const u32 to = std::min<u32>(image.resident_level, info.resources.levels);
+    u32 from = 0;
+    if (partial_ok) {
+        upload_budget.Roll();
+        const u64 remaining = upload_budget.Remaining();
+        if (remaining == 0) {
+            return; // next frame
+        }
+        // As many of the next larger levels as fit (the next one at least, unless others took
+        // part of the budget already and it does not fit).
+        u64 bytes = 0;
+        from = to;
+        while (from > 0 && (bytes + info.mips_layout[from - 1].size <= remaining ||
+                            (from == to && upload_budget.spent == 0))) {
+            bytes += info.mips_layout[--from].size;
+        }
+        if (from == to) {
+            return;
+        }
+    }
+    boost::container::small_vector<vk::BufferImageCopy, 14> copies;
+    for (u32 level = from; level < to; ++level) {
+        copies.push_back(LevelCopy(image, level));
+    }
+    WatchImage(image, "refresh: more levels of a partial upload");
+    UploadImageLevels(image, from, copies);
+    image.resident_level = u8(from);
+    ++registry_generation; // bindings find the view of the levels there now
+    if (from == 0) {
+        partial_completed.fetch_add(1, std::memory_order_relaxed);
+    }
+    ReportPartialUploads();
+}
+
+void TextureCache::UploadImageLevels(Image& image, u32 first_level,
+                                     std::span<vk::BufferImageCopy> copies) {
+    const ImageInfo& info = image.info;
+    u64 bytes = 0;
+    for (const auto& copy : copies) {
+        bytes += info.mips_layout[copy.imageSubresource.mipLevel].size;
+    }
+    upload_budget.Roll();
+    upload_budget.spent += bytes;
+    BbStats::image_upload_bytes.fetch_add(bytes, std::memory_order_relaxed);
+
+    scheduler.EndRendering();
+    const auto [source, source_offset] =
+        buffer_cache.ObtainBufferForImage(info.guest_address, info.guest_size);
+    // The guest's whole description (texture_quality: `info` may leave its largest levels out):
+    // those levels are not detiled, nor read over the bus (BB_DETILE_SKIPPED=1: they are, as
+    // before), nor the ones a partial upload leaves for later. The staging copy then starts at
+    // the first level detiled.
+    static const bool detile_skipped = bb_env_on("BB_DETILE_SKIPPED");
+    const u32 guest_first = detile_skipped && first_level == 0 ? 0u
+                                                                : u32(info.skip_levels) + first_level;
+    const auto [linear, linear_offset] =
+        detiler.DetileImage(source, source_offset, image.guest_info, guest_first);
+    const u64 skipped = image.guest_info.props.is_tiled && guest_first != 0
+                            ? image.guest_info.mips_layout[guest_first].offset
+                            : 0;
+    for (auto& copy : copies) {
+        copy.bufferOffset += linear_offset;
+        copy.bufferOffset -= skipped;
+    }
+    runtime.UploadImage(&image, linear, copies);
+    ReportPartialUploads();
+}
+
+void TextureCache::RefreshImage(Image& image, bool partial_ok) {
     WatchImage(image, "refresh entered");
+    // The rest of a partial upload (the guest's copy unchanged since).
+    if (False(image.flags & ImageFlagBits::Dirty) && image.resident_level != 0) {
+        UploadRemainingLevels(image, partial_ok);
+        return;
+    }
     if (False(image.flags & ImageFlagBits::Dirty) || image.info.num_samples > 1) {
         return;
     }
@@ -193,8 +385,6 @@ void TextureCache::RefreshImage(Image& image) {
     }
     TracePromptCandidate(image);
     NoteRefresh(image);
-    BbStats::image_upload_bytes.fetch_add(info.guest_size, std::memory_order_relaxed);
-
     // A GPU-written image is reuploaded only where the guest's copy changed (by level hashes):
     // not over what the GPU rendered with a stale copy.
     // Every upload of such an image keeps the hashes, the first one too (a new image is
@@ -203,8 +393,11 @@ void TextureCache::RefreshImage(Image& image) {
     // creator's exposure (1x1, written by a compute shader) went to 0: no character (#178).
     const bool gpu_modified = True(image.flags & ImageFlagBits::GpuModified);
     const bool gpu_written = gpu_modified && False(image.flags & ImageFlagBits::GpuDirty);
+    // Past the frame's upload budget a sampled texture starts with its small levels.
+    const u32 first = !gpu_modified && partial_ok ? PartialUploadStart(image) : 0u;
+    const bool was_partial = image.resident_level != 0;
     boost::container::small_vector<vk::BufferImageCopy, 14> copies;
-    for (u32 level = 0; level < levels; ++level) {
+    for (u32 level = first; level < levels; ++level) {
         const auto& layout = info.mips_layout[level];
         if (gpu_modified) {
             const u64 hash = XXH3_64bits(
@@ -214,38 +407,28 @@ void TextureCache::RefreshImage(Image& image) {
             }
             image.mip_hashes[level] = hash;
         }
-        const u32 width = std::max(info.size.width >> level, 1u);
-        const u32 height = std::max(info.size.height >> level, 1u);
-        const u32 depth = info.props.is_volume ? std::max(info.size.depth >> level, 1u) : 1u;
-        copies.push_back({
-            .bufferOffset = layout.offset,
-            .bufferRowLength = layout.pitch,
-            .bufferImageHeight = layout.height,
-            .imageSubresource{
-                .aspectMask = image.aspect_mask & ~vk::ImageAspectFlagBits::eStencil,
-                .mipLevel = level,
-                .baseArrayLayer = 0,
-                .layerCount = layers,
-            },
-            .imageOffset = {0, 0, 0},
-            .imageExtent = {layout.pitch ? std::min(layout.pitch, width) : width,
-                            layout.height ? std::min(layout.height, height) : height, depth},
-        });
+        copies.push_back(LevelCopy(image, level));
     }
     WatchImage(image, copies.empty() ? "refresh: nothing to copy" : "refresh: uploading");
     if (copies.empty()) {
         image.flags &= ~ImageFlagBits::Dirty;
+        image.resident_level = 0;
         return;
     }
-
-    scheduler.EndRendering();
-    const auto [source, source_offset] =
-        buffer_cache.ObtainBufferForImage(info.guest_address, info.guest_size);
-    const auto [linear, linear_offset] = detiler.DetileImage(source, source_offset, info);
-    for (auto& copy : copies) {
-        copy.bufferOffset += linear_offset;
+    UploadImageLevels(image, first, copies);
+    image.resident_level = u8(first);
+    if (first != 0) {
+        u64 deferred = 0;
+        for (u32 level = 0; level < first; ++level) {
+            deferred += info.mips_layout[level].size;
+        }
+        partial_started.fetch_add(1, std::memory_order_relaxed);
+        partial_deferred_bytes.fetch_add(deferred, std::memory_order_relaxed);
+        ReportPartialUploads();
     }
-    runtime.UploadImage(&image, linear, copies);
+    if ((first != 0) != was_partial) {
+        ++registry_generation; // bindings find the view of the levels there now
+    }
 }
 
 } // namespace VideoCore

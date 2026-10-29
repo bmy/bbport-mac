@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: the command processor's GPU clock (end-of-pipe timestamps, COPY_DATA from the clock) as
 // Vulkan timestamps, written by the GPU in stream order.

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 # bbport: rewrites the FSR 4.1.1 postpass (spirv-dis text of dxil-spirv output) so that its image
 # stores go through workgroup memory, like tools/fsr4_post_lds.pl does for FSR 4 v07.
 #

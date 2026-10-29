@@ -1,13 +1,18 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "buffers/buffer.h"
+#include "shim/bb_env.h"
 
 #include <array>
+#include <chrono>
+#include <cstdlib>
 #include <cstdio>
 #include <numeric>
 
 #include <vk_mem_alloc.h>
 
 #include "bbport_guest_memory.h"
+#include "bbport_toggles.h"
 #include "common/alignment.h"
 #include "common/assert.h"
 #include "vulkan/instance.h"
@@ -24,20 +29,33 @@ const char* TypeName(MemoryType type) {
     return u32(type) < std::size(names) ? names[u32(type)] : "Invalid";
 }
 
+/// VramOnlyScope (BufferCache mirrors): device-local memory or nothing.
+thread_local bool vram_only = false;
+
 /// VMA's view of a memory type: where it should live and how the host touches it.
-VmaAllocationCreateInfo AllocationInfo(MemoryType type, bool device_address) {
+VmaAllocationCreateInfo AllocationInfo(MemoryType type, bool device_address, u64 size) {
     VmaAllocationCreateInfo info{
         .flags = VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT,
         .usage = VMA_MEMORY_USAGE_UNKNOWN,
         .preferredFlags = type != MemoryType::DeviceLocal ? VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
                                                           : VkMemoryPropertyFlags{},
     };
-    if (device_address) {
+    // Buffers with device addresses: their own allocation (BB_BDA_DEDICATED_MB=N: only from N MiB
+    // up, smaller ones in VMA's blocks). Mirrors in blocks fragmented them on the 2 GB laptop: the
+    // blocks held 1.4-1.7 GB with 0.55-1 GB used, VRAM past the budget, the GPU paging (2026-10-25).
+    static const u64 dedicated_from = [] {
+        const char* env = bb_env("BB_BDA_DEDICATED_MB");
+        return u64(env && *env ? std::strtoull(env, nullptr, 10) : 0) << 20;
+    }();
+    if (device_address && size >= dedicated_from) {
         info.flags |= VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
     }
     switch (type) {
     case MemoryType::DeviceLocal:
         info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        if (vram_only) {
+            info.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+        }
         break;
     case MemoryType::Stream:
         info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
@@ -61,46 +79,44 @@ VmaAllocationCreateInfo AllocationInfo(MemoryType type, bool device_address) {
 }
 
 /// Sparse arenas take exported guest memory chunks (in place) as well as VRAM blocks: created
-/// for external memory when the driver lets such a buffer take VRAM too, else in place is off.
+/// for external memory; a driver that cannot do that, or not with VRAM too, stops the game.
 vk::Buffer CreateArena(vk::Device device, VmaAllocator allocator,
                        vk::BufferCreateInfo& create_info) {
     create_info.flags |=
         vk::BufferCreateFlagBits::eSparseBinding | vk::BufferCreateFlagBits::eSparseResidency;
-    if (GuestInPlace()) {
-        const vk::ExternalMemoryBufferCreateInfo external{
-            .handleTypes = BbGuestMemory::HandleType(),
-        };
-        create_info.pNext = &external;
-        const auto [result, buffer] = device.createBuffer(create_info);
-        create_info.pNext = nullptr;
-        if (result != vk::Result::eSuccess) {
-            std::printf("Guest memory: the arena cannot take exported memory (%s); the GPU "
-                        "uses copies in VRAM as before\n",
-                        vk::to_string(result).c_str());
-            DisableGuestInPlace();
-        } else {
-            const auto requirements = device.getBufferMemoryRequirements(buffer);
-            const VkPhysicalDeviceMemoryProperties* properties = nullptr;
-            vmaGetMemoryProperties(allocator, &properties);
-            bool takes_vram = false;
-            for (u32 i = 0; i < properties->memoryTypeCount; ++i) {
-                takes_vram |= (requirements.memoryTypeBits >> i & 1) &&
-                              (properties->memoryTypes[i].propertyFlags &
-                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-            }
-            if (takes_vram) {
-                return buffer;
-            }
-            std::printf("Guest memory: the arena for guest memory cannot take VRAM; the GPU "
-                        "uses copies in VRAM as before\n");
-            device.destroyBuffer(buffer);
-            DisableGuestInPlace();
+    const vk::ExternalMemoryBufferCreateInfo external{
+        .handleTypes = BbGuestMemory::HandleType(),
+    };
+    create_info.pNext = &external;
+    const auto [result, buffer] = device.createBuffer(create_info);
+    create_info.pNext = nullptr;
+    if (result != vk::Result::eSuccess) {
+        std::printf("Guest memory: the arena cannot take exported memory (%s)\n",
+                    vk::to_string(result).c_str());
+        GuestMemoryUnusable("the sparse arena cannot take exported memory (BB_LAYER_MEMORY=0)");
+    }
+    const auto requirements = device.getBufferMemoryRequirements(buffer);
+    const VkPhysicalDeviceMemoryProperties* properties = nullptr;
+    vmaGetMemoryProperties(allocator, &properties);
+    for (u32 i = 0; i < properties->memoryTypeCount; ++i) {
+        if ((requirements.memoryTypeBits >> i & 1) &&
+            (properties->memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
+            return buffer;
         }
     }
-    return Vulkan::Check(device.createBuffer(create_info));
+    device.destroyBuffer(buffer);
+    GuestMemoryUnusable("the sparse arena for guest memory cannot take VRAM (BB_LAYER_MEMORY=0)");
 }
 
 } // namespace
+
+VramOnlyScope::VramOnlyScope() : previous{vram_only} {
+    vram_only = true;
+}
+
+VramOnlyScope::~VramOnlyScope() {
+    vram_only = previous;
+}
 
 BufferAllocation::BufferAllocation(vk::Device device_, VmaAllocator allocator_)
     : device{device_}, allocator{allocator_} {}
@@ -129,6 +145,7 @@ BufferAllocation& BufferAllocation::operator=(BufferAllocation&& other) noexcept
 
 void BufferAllocation::Destroy() {
     if (allocation) {
+        BbStats::VkMemTimer timer{BbStats::t_vk_free, BbStats::n_vk_free};
         vmaDestroyBuffer(allocator, buffer, allocation);
     } else if (buffer) {
         device.destroyBuffer(buffer);
@@ -145,11 +162,16 @@ void BufferAllocation::Create(vk::BufferCreateInfo& create_info, MemoryType type
     if (type == MemoryType::Sparse) {
         buffer = CreateArena(device, allocator, create_info);
     } else {
-        const VmaAllocationCreateInfo alloc_info = AllocationInfo(type, device_address);
+        const VmaAllocationCreateInfo alloc_info = AllocationInfo(type, device_address, create_info.size);
         const VkBufferCreateInfo vk_info = create_info;
         VkBuffer handle{};
+        BbStats::VkMemTimer timer{BbStats::t_vk_alloc, BbStats::n_vk_alloc};
         const VkResult result =
             vmaCreateBuffer(allocator, &vk_info, &alloc_info, &handle, &allocation, out_info);
+        if (result != VK_SUCCESS && vram_only) {
+            allocation = VK_NULL_HANDLE; // no room in VRAM: the caller does without (Buffer::Valid)
+            return;
+        }
         ASSERT_MSG(result == VK_SUCCESS, "buffer allocation: {}",
                    vk::to_string(vk::Result{result}));
         buffer = handle;
@@ -179,6 +201,9 @@ Buffer::Buffer(const Vulkan::Instance& instance, VAddr cpu_addr_, u64 size_bytes
     }
     VmaAllocationInfo alloc_info{};
     buffer.Create(create_info, type, &alloc_info);
+    if (!buffer.buffer) {
+        return; // VramOnlyScope and no room: !Valid()
+    }
 
     const auto device = instance.GetDevice();
     if (debug_name.empty()) {
@@ -193,6 +218,12 @@ Buffer::Buffer(const Vulkan::Instance& instance, VAddr cpu_addr_, u64 size_bytes
             mapped_data = {static_cast<u8*>(alloc_info.pMappedData), size_bytes};
         }
         is_coherent = flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        // Big ones by name (what the port keeps in VRAM: 2 GB cards run short).
+        if (size_bytes >= (u64{16} << 20)) {
+            std::printf("Buffer: %.*s %llu MiB, %s\n", int(debug_name.size()), debug_name.data(),
+                        (unsigned long long)(size_bytes >> 20),
+                        (flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ? "VRAM" : "system memory");
+        }
     }
 }
 
@@ -280,6 +311,24 @@ bool StreamBuffer::Prepare(u64 size, u64 alignment, bool allow_wait) {
     }
     if (wraps) {
         claimed = 0;
+        // BB_STREAM_STATS=1 (diagnostics): what a frame streams, for the ring's size.
+        static const bool stats = bb_env_on("BB_STREAM_STATS");
+        if (stats) {
+            static u64 laps = 0, frame0 = 0;
+            static auto since = std::chrono::steady_clock::now();
+            ++laps;
+            const auto now = std::chrono::steady_clock::now();
+            if (now - since >= std::chrono::seconds(10)) {
+                const u64 frames = BbStats::frame_number.load(std::memory_order_relaxed) - frame0;
+                std::printf("Stream buffer %s (%llu MiB): %llu laps in 10 s, %.1f MiB a frame\n",
+                            TypeName(mem_type), (unsigned long long)(size_bytes >> 20),
+                            (unsigned long long)laps,
+                            frames ? double(laps * size_bytes) / frames / 1048576.0 : 0.0);
+                laps = 0;
+                frame0 = BbStats::frame_number.load(std::memory_order_relaxed);
+                since = now;
+            }
+        }
     }
     claimed = std::max<u32>(claimed, std::min<u32>(last + 1, Sections));
     pending_offset = offset;

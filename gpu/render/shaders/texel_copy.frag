@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: copies the source texel under each fragment (MSAA_SOURCE: the same sample), for
 // copies between images Vulkan cannot copy directly (sample counts, depth and color).

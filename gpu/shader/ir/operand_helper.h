@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport shader translator IR: argument positions of buffer instructions, and the parts of their
 // address (index, vector offset, scalar offset: a U32x3 until resources are resolved).

@@ -1,9 +1,11 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: observers in a game's own code (bbport_guest_code_hooks.h). The trampoline follows
 // shadPS4's InstallGuestCodeHook (core/cpu_patches.cpp of the shadp2p/BBSC forks, GPL-2.0+); the
 // trampoline memory and the patching are the port's: the game's code is mapped read and execute
 // here, so the jump is written under a short write permission.
 
+#include "bbport_map_near.h"
 #include "bbport_guest_code_hooks.h"
 
 #include <algorithm>
@@ -69,24 +71,10 @@ struct Area {
 std::vector<Area> areas;
 
 std::uintptr_t MapNear(std::uintptr_t code) {
-    const long page = sysconf(_SC_PAGESIZE);
     // Below the code first (the port maps the game's image at 0x800000000 with room under it),
-    // then above, in 64 MiB steps.
-    for (std::int64_t step = 1; step * (64ll << 20) < JumpReach; ++step) {
-        for (const std::int64_t sign : {-1ll, 1ll}) {
-            const std::int64_t at = std::int64_t(code) + sign * step * (64ll << 20);
-            if (at <= 0) {
-                continue;
-            }
-            void* p = mmap(reinterpret_cast<void*>(at & ~std::int64_t(page - 1)), AreaSize,
-                           PROT_READ | PROT_WRITE | PROT_EXEC,
-                           MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
-            if (p != MAP_FAILED) {
-                return reinterpret_cast<std::uintptr_t>(p);
-            }
-        }
-    }
-    return 0;
+    // then above, in 64 MiB steps; else the runtime's low region (bbport_map_near.h).
+    return reinterpret_cast<std::uintptr_t>(BbMapNear::Map(
+        code, code + 64, AreaSize, PROT_READ | PROT_WRITE | PROT_EXEC, 64ull << 20, "Guest code hooks"));
 }
 
 Xbyak::CodeGenerator* AreaFor(std::uintptr_t code) {

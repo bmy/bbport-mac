@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport shader backend: tessellation shaders that draw GCN's rect and quad lists (Vulkan has
 // no such primitives): rects are triangles with the fourth vertex interpolated, quads pass

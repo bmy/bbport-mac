@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport shader translator: the byte layout of translated shaders' metadata in the pipeline
 // cache (render/pipeline_store.h). Info is stored as its persistent prefix, the flattened user

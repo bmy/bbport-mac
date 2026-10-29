@@ -19,7 +19,7 @@ unwind и граф переходов → выбранные целочисле�
 
 ## Какой именно бинарник разобран
 
-- Источник: `/home/deadinside/Games/bloodborne/game_files/CUSA03173/eboot.bin`.
+- Источник: `game_files/CUSA03173/eboot.bin`.
 - Издание: `CUSA03173`, APP_VER `01.09`.
 - SHA-256 исходного SELF: `d65f0b4f01d59166aed16f8604196d8b7dd805abbf0758b356e8f1354c9429f9`.
 - SHA-256 загружаемого образа: `071df19c8880086d97182dbc057bc8cb37badaca57d9112683836b24a0444c0a`.

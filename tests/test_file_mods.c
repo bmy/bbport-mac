@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* Exercise actual guest file operations on a linked overlay and writable saves. */
 #include "../src/runtime_file.c"
 #include <assert.h>
@@ -6,6 +8,8 @@ int32_t *runtime_errno(void) { return &guest_errno; }
 int32_t runtime_guest_errno(int e) { return e; }
 /* Reads into guest memory tell the GPU side (runtime_memory.c); nothing to tell here. */
 void runtime_memory_note_write(uintptr_t address, uint64_t size) { (void)address; (void)size; }
+void runtime_memory_note_cpu_write(uintptr_t address, uint64_t size) { (void)address; (void)size; }
+void runtime_memory_prepare_cpu_write(uintptr_t address, uint64_t size) { (void)address; (void)size; }
 uintptr_t runtime_lookup(const RuntimeExport *table,size_t n,const char *name) {
     for (size_t i=0;i<n;++i) if (!strcmp(table[i].name,name)) return (uintptr_t)table[i].function;
     return 0;

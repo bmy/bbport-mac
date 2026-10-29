@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The Windows launcher (Bloodborne.exe): WPF with the system's Fluent theme, built from Linux by
+       packaging/windows/package.sh (dotnet publish; EnableWindowsTargeting). It shows the settings of
+       ../settings_schema.json and starts the game through "bbport-run.exe play" (the frozen
+       launcher/bbport_launcher_win.py, which runs run.py). -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Bloodborne</AssemblyName>
+    <RootNamespace>BbportLauncher</RootNamespace>
+    <ApplicationIcon>../../packaging/bbport.ico</ApplicationIcon>
+    <!-- ThemeMode (the Fluent theme) is marked experimental in .NET 9. -->
+    <NoWarn>WPF0001</NoWarn>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <SatelliteResourceLanguages>en;ru</SatelliteResourceLanguages>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="../settings_schema.json" LogicalName="settings_schema.json" />
+    <Resource Include="../../packaging/bbport.png" Link="bloodborne.png" />
+  </ItemGroup>
+</Project>

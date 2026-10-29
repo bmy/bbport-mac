@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: speculative draw preparation on worker threads (docs/parallel_gpu.md, steps 1-2).
 //

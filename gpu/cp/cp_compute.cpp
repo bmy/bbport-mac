@@ -1,9 +1,11 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport cp: compute queues. A submission is the part of a ring the game wrote since the last
 // one (sceGnmDingDong); the read pointer moves as packets are done. A packet the ring's end cut in
 // two waits in the queue for the rest, which the next submission brings.
 
 #include <algorithm>
+#include "shim/bb_env.h"
 #include <cstring>
 
 #include <fmt/format.h>
@@ -29,11 +31,8 @@ constexpr u32 ComputeWords = sizeof(ComputeProgram) / 4;
 constexpr u32 DispatchDimsBytes = 3 * sizeof(u32);
 
 bool MemSemaphoreInOrder() {
-    static const bool on = [] {
-        const char* env = std::getenv("BB_MEM_SEMAPHORE_ORDER");
-        return !(env && env[0] == '0');
-    }();
-    return on && Vulkan::Rasterizer::HonestLabels();
+    static const bool on = !bb_env_off("BB_MEM_SEMAPHORE_ORDER");
+    return on;
 }
 
 /// RELEASE_MEM's write and interrupt (`rasterizer` copies GDS words; null on the GPU's signal).
@@ -75,7 +74,7 @@ struct ReleaseTask {
     u32 pipe_id;
 };
 
-/// BB_HONEST_LABELS: the release in stream order on the recording thread, as graphics
+/// The release in stream order on the recording thread, as graphics
 /// end-of-pipe events: a timestamp or a label without an interrupt written by the GPU itself, the
 /// rest once the GPU has finished the work before it.
 void ReleaseMemTask(Vulkan::Rasterizer& rasterizer, const u8* data) {
@@ -110,8 +109,7 @@ void ReleaseMemTask(Vulkan::Rasterizer& rasterizer, const u8* data) {
 bool Pipelined(Op op, const u32* body) {
     switch (op) {
     case Op::ReleaseMem:
-        return Vulkan::Rasterizer::HonestLabels() &&
-               ReleaseMem::From(body).Data() != DataSel::GdsStore;
+        return ReleaseMem::From(body).Data() != DataSel::GdsStore;
     case Op::Nop:
     case Op::AcquireMem:
     case Op::EventWrite:
@@ -279,6 +277,7 @@ CommandProcessor::Step CommandProcessor::Compute(Work& work, Level& level, const
         } else {
             std::memcpy(&regs.reg_array[Bank::Sh + offset], body + 1, bytes);
             pipe_dirty.Mark(Bank::Sh + offset, bytes / sizeof(u32)); // the recording thread's copy
+            gfx_touched.Mark(Bank::Sh + offset, bytes / sizeof(u32));
             // It interleaves with the graphics stream at an unpredictable point, so the draw
             // preparation workers cannot reproduce it: their checksums must differ.
             gfx_reg_checksum = HashRegisterPacket(gfx_reg_checksum ^ 0xA5C0A5C0A5C0ull, packet,
@@ -380,7 +379,7 @@ CommandProcessor::Step CommandProcessor::Compute(Work& work, Level& level, const
                 rasterizer->DrainDrawPipe(Vulkan::DrawPipe::ReasonCompute);
                 continue;
             }
-            // BB_HONEST_LABELS: the value may come from a fence waiting for work not submitted.
+            // The value may come from a fence waiting for work not submitted.
             if (rasterizer && rasterizer->HasUnsubmittedSignals()) {
                 rasterizer->Flush();
             }
@@ -406,10 +405,7 @@ CommandProcessor::Step CommandProcessor::Compute(Work& work, Level& level, const
             // The game polls these from the CPU (another game: its main thread spun 56% of the time
             // on a compute context's counter). The work before it goes to the GPU now instead of
             // with the rest of the frame (BB_COMPUTE_RELEASE_FLUSH=0: as before).
-            static const bool flush = [] {
-                const char* env = std::getenv("BB_COMPUTE_RELEASE_FLUSH");
-                return !(env && env[0] == '0');
-            }();
+            static const bool flush = !bb_env_off("BB_COMPUTE_RELEASE_FLUSH");
             if (flush && release.Data() != DataSel::None && rasterizer->PipeSignals()) {
                 rasterizer->RequestSignalFlush();
             }
@@ -427,9 +423,9 @@ CommandProcessor::Step CommandProcessor::Compute(Work& work, Level& level, const
 void CommandProcessor::ReleaseMemory(const ReleaseMem& release, u32 pipe_id) {
     const auto irq = [pipe_id] { BbIrq::Raise(static_cast<BbIrq::Line>(pipe_id)); };
     const bool interrupts = release.Int() != IntSel::None;
-    // BB_HONEST_LABELS: written once the GPU has finished the work before it (a GDS store needs
+    // Written once the GPU has finished the work before it (a GDS store needs
     // the GPU copy recorded here instead).
-    if (rasterizer && Vulkan::Rasterizer::HonestLabels() && release.Data() != DataSel::GdsStore) {
+    if (rasterizer && release.Data() != DataSel::GdsStore) {
         rasterizer->ProcessDownloadImages();
         if (release.Data() == DataSel::GpuClock64 && !interrupts &&
             rasterizer->WriteTimestampOnGpu(release.Address(), true)) {
@@ -454,7 +450,6 @@ void CommandProcessor::ReleaseMemory(const ReleaseMem& release, u32 pipe_id) {
     // Copies and graphics fences deferred to the recording thread precede writes the guest sees.
     if (rasterizer) {
         rasterizer->WaitHostCopies();
-        rasterizer->WaitDeferredSignals();
     }
     if (release.Data() != DataSel::None && release.Data() != DataSel::GdsStore) {
         const u64 value = release.Value64();

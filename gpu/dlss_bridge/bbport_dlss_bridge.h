@@ -3,8 +3,9 @@
 //
 // C interface between bbport and the DLSS bridge (libbbport_dlss.so / bbport_dlss.dll). The port
 // contains no NVIDIA code: it loads the bridge at run time when it is present (next to bb-probe,
-// with NVIDIA's libnvidia-ngx-dlss.so.<version> / nvngx_dlss.dll) and keeps
-// its other upscalers when it is absent. Adapted from IFreemz/shadPS4-Bloodborne-DLSS-FSR.
+// with NVIDIA's libnvidia-ngx-dlss.so.<version> / nvngx_dlss.dll, and for Frame Generation
+// libnvidia-ngx-dlssg.so.<version> / nvngx_dlssg.dll) and keeps its other upscalers when it is
+// absent. Adapted from IFreemz/shadPS4-Bloodborne-DLSS-FSR.
 
 #pragma once
 
@@ -15,7 +16,9 @@
 extern "C" {
 #endif
 
-#define BBPORT_DLSS_BRIDGE_ABI 1
+// 1: DLSS Super Resolution. 2: adds DLSS Frame Generation (the FrameGen* members and
+// ConfigureDirectories); the port accepts both.
+#define BBPORT_DLSS_BRIDGE_ABI 2
 
 typedef void (*BbDlssLogFn)(int warning, const char* message);
 
@@ -51,13 +54,53 @@ typedef struct BbDlssEvaluate {
     float sharpness; // 0..1; 0 leaves the output unsharpened
 } BbDlssEvaluate;
 
+// DLSS Frame Generation (libnvidia-ngx-dlssg.so / nvngx_dlssg.dll): frames between two finished
+// frames of the game.
+typedef struct BbDlssgFeature {
+    uint32_t width; // the finished frame: input and output colour
+    uint32_t height;
+    VkFormat format;       // of the finished frame and the generated ones
+    uint32_t render_width; // depth and motion vectors
+    uint32_t render_height;
+} BbDlssgFeature;
+
+typedef struct BbDlssgEvaluate {
+    BbDlssImage backbuffer; // sampled, general layout: the finished frame (UI included)
+    BbDlssImage depth;      // sampled, hardware depth (a depth image, depth aspect, or R32F)
+    BbDlssImage motion;     // sampled, render-resolution pixels, current to previous
+    BbDlssImage output;     // storage, general layout: the generated frame
+    BbDlssImage hudless;    // sampled: the frame before its UI; image null when there is none
+    float jitter_x;         // render pixels, the sign DLSS Super Resolution gets
+    float jitter_y;
+    float camera_near;
+    float camera_far;
+    float camera_fov; // vertical, radians
+    // The camera in the world: position and axes (forward the way it looks).
+    float camera_position[3];
+    float camera_up[3];
+    float camera_right[3];
+    float camera_forward[3];
+    int32_t depth_inverted;
+    int32_t reset;              // the previous frame is unrelated (a cut, a load)
+    uint32_t multi_frame_count; // frames generated for this pair (1: 2x .. 3: 4x)
+    uint32_t multi_frame_index; // 1 .. multi_frame_count, in order
+    // Row-major, row vectors (v * m), D3D clip space (y up, depth 0 at the near plane): the
+    // projection, current clip to previous clip and back. has_matrices 0: a camera that stood
+    // still and a projection from camera_fov is assumed.
+    int32_t has_matrices;
+    float view_to_clip[4][4];
+    float clip_to_prev_clip[4][4];
+    float prev_clip_to_clip[4][4];
+} BbDlssgEvaluate;
+
 typedef struct BbDlssApi {
     uint32_t abi;
     // wchar_t paths (NGX's type): the directory with NVIDIA's DLSS library, and a writable data
     // directory.
     int32_t (*Configure)(const wchar_t* dll_directory, const wchar_t* data_directory,
                          BbDlssLogFn log);
-    // Vulkan extensions NGX needs. The arrays stay valid until Shutdown.
+    // Vulkan extensions NGX needs (DLSS Super Resolution, and Frame Generation when this GPU and
+    // driver have it). The arrays stay valid until Shutdown.
     int32_t (*InstanceExtensions)(uint32_t* count, const VkExtensionProperties** extensions);
     int32_t (*DeviceExtensions)(VkInstance instance, VkPhysicalDevice physical, uint32_t* count,
                                 const VkExtensionProperties** extensions);
@@ -69,6 +112,20 @@ typedef struct BbDlssApi {
     // The caller must have waited for the GPU work that used the feature.
     void (*ReleaseFeature)(void);
     void (*Shutdown)(void);
+
+    // ABI 2. As Configure, with several directories NGX searches for NVIDIA's libraries, in
+    // order (the player's own folder first, then the package's).
+    int32_t (*ConfigureDirectories)(const wchar_t* const* dll_directories, uint32_t count,
+                                    const wchar_t* data_directory, BbDlssLogFn log);
+    // Frames Frame Generation can make per pair of rendered frames, after Initialize: 0 when
+    // unavailable (no library, GeForce RTX 30 or older, an old driver), 1 (2x), 3 (up to 4x,
+    // GeForce RTX 50).
+    int32_t (*FrameGenMaxCount)(void);
+    int32_t (*FrameGenCreate)(VkCommandBuffer command, const BbDlssgFeature* feature);
+    // Called multi_frame_count times per rendered frame, multi_frame_index 1, 2, ...
+    int32_t (*FrameGenEvaluate)(VkCommandBuffer command, const BbDlssgEvaluate* evaluate);
+    // The caller must have waited for the GPU work that used the feature.
+    void (*FrameGenRelease)(void);
 } BbDlssApi;
 
 typedef const BbDlssApi* (*BbDlssGetApiFn)(void);

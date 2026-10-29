@@ -50,4 +50,9 @@ void MarkRead();
 void Register();
 void Unregister();
 
+// bbport: Info notices also show for a while on the port's overlay line (bbgpu_overlay_banner).
+// Another user of that line (BBSC's loading screen) calls this first, so that a notice timing
+// out does not clear its text.
+void OverlayLineTaken();
+
 } // namespace ImGui::ShadNetNotify

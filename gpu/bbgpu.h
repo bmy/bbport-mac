@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* C interface of the GPU library (gpu/): the command processor and Vulkan renderer,
  * GnmDriver, VideoOut and kernel event queues, adapted to the native loader. */
 #ifndef BBGPU_H
@@ -56,6 +58,13 @@ void bbgpu_add_event_filter(BbGpuEventFilter filter);
 /* A module's menu pointer: nonzero while the game shows a menu the mouse points into. The window
  * then lets the mouse go and shows the cursor, and takes the mouse back after (as it had it).
  * Up to 4; pointer_wanted: any of them says so. */
+/* A video (AvPlayer) playing now; bbgpu_video_skip stops it (1 when one was stopped). */
+int bbgpu_video_active(void);
+/* The game shows its world (not a loading screen): the clock of pad recordings runs. */
+int bbgpu_world_active(void);
+/* Microseconds the world has been shown (the pad recording clock). */
+unsigned long long bbgpu_world_us(void);
+int bbgpu_video_skip(void);
 typedef int (*BbGpuPointerQuery)(void);
 void bbgpu_add_pointer_query(BbGpuPointerQuery query);
 int bbgpu_pointer_wanted(void);
@@ -68,10 +77,33 @@ void bbgpu_filter_pad(uint32_t *buttons, const uint8_t *sticks);
 float bbgpu_frame_aspect(void);
 /* A line of text over the game, near the bottom, until called with NULL (any thread). */
 void bbgpu_overlay_banner(const char *utf8);
+/* Trophies (gpu/shim/bbport_trophies.cpp): setup takes the game's sce_sys folder and the user
+ * folder (once); unlock keeps the trophy and announces it over the frame the first time, and
+ * returns the platinum unlocked along with it, else -1. */
+void bbgpu_trophy_setup(const char *sce_sys_host_dir, const char *user_dir);
+int bbgpu_trophy_unlock(int id);
 /* Native mouse look: turns the game's camera (radians, applied at its next update); 0 when the
  * camera hook is not in (another game version, BB_NATIVE_MOUSE=0) or the camera does not take the
  * turns now (lock-on, menus): drive the right stick then. */
 int bbgpu_camera_look(float yaw, float pitch);
+/* The pipeline caches written by an earlier build, translated again for this one; called before
+ * the runtime reserves the guest's memory (render/shader_rebuild.h). */
+int bbgpu_rebuild_shader_caches(void);
+/* One cache directory (RebuildCaches' child where there is no fork: bb-probe --rebuild-shader-cache). */
+int bbgpu_rebuild_shader_cache(const char *dir);
+int bbgpu_predict_shaders_test(const char *cache_dir, const char *pack, const char *game_dir,
+                               const char *out_dir, int jobs);
+int bbgpu_merge_shader_metas(const char *cache_dir, const char *pack, const char *game_dir,
+                             const char *meta_dir, const char *out_pack, const char *work_dir, int jobs);
+int bbgpu_meta_reconstruct_test(const char *cache_dir, const char *pack, const char *game_dir);
+int bbgpu_merge_shader_packs(const char *cache_dir, const char *pack_a, const char *pack_b,
+                             const char *game_dir, const char *out_pack, const char *work_dir, int jobs);
+/* Shader recipes (render/shader_rebuild.h): bb-probe --export-shader-recipes CACHE_DIR GAME_DIR OUT
+ * and --import-shaders CACHE_DIR PACK GAME_DIR MOTION_PARAMS MOTION_POSITIONS (run by the GPU
+ * library itself, before the guest's memory exists in that process). */
+int bbgpu_export_shader_recipes(const char *cache_dir, const char *game_dir, const char *out_path);
+int bbgpu_import_shader_recipes(const char *cache_dir, const char *pack, const char *game_dir,
+                                unsigned long long motion_params, unsigned long long motion_positions);
 /* 1 while the free camera (the community patch) is on: the mouse drives it through the right stick. */
 int bbgpu_free_camera(void);
 /* The game's current camera state (its projection parameters at +0x50), 0 until known. */

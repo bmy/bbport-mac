@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport vulkan: buffer ranges read and written by commands recorded since the last barrier.
 // A transfer touching a range written before (or writing one read before) needs a barrier first.

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport shader translator IR: what an instruction's result stands for (a GCN register, a goto
 // variable of the structurizer, a virtual register), and the per-block values of the registers

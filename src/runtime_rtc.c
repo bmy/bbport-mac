@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* libSceRtc: calendar time. A tick is one microsecond since 0001-01-01 00:00
  * (proleptic Gregorian), the PS4 convention; the host clock supplies "now"
  * and the host time zone supplies local time. */

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 # tools/shot.sh FILE.png: captures only the game window (bb-probe) with grim, by its Hyprland
 # geometry (hyprctl clients: at, size, pid per window block).
 pid=$(pgrep -x bb-probe | head -1)

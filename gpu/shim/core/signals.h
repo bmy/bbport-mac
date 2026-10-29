@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: fault-handler registry. The C loader's SIGSEGV handler calls
 // bbgpu_handle_fault() first; registered handlers run in priority order.
 #pragma once

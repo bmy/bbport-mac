@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport vulkan: the window's swapchain: its surface, format (SDR or HDR10 PQ), present mode,
 // images with views, and the semaphores of acquire and present. Recreated on resizes; a
@@ -28,8 +29,9 @@ public:
     void Recreate(u32 width, u32 height);
     /// Acquires the next image; false when the swapchain has to be recreated first.
     bool AcquireNextImage();
-    /// Presents the acquired image; false when the swapchain has to be recreated.
-    bool Present();
+    /// Presents the acquired image; false when the swapchain has to be recreated. `present_id`:
+    /// the frame's ID for the driver (VK_KHR_present_id, low latency), 0 for none; increasing.
+    bool Present(u64 present_id = 0);
 
     /// Switches the images to HDR10 (PQ) or back, when the surface supports it.
     void SetHDR(bool hdr);

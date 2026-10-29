@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Turns the discovered resource uses into bindings: each distinct sharp (with its post
 // operation) becomes a buffer, image or sampler resource of the shader, and the instructions

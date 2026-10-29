@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 """PM4 opcode and GCN (CIK/Liverpool) register names used by the RE scripts."""
 OPCODES = {0x10:'NOP',0x11:'SET_BASE',0x12:'CLEAR_STATE',0x13:'INDEX_BUFFER_SIZE',0x15:'DISPATCH_DIRECT',
  0x16:'DISPATCH_INDIRECT',0x20:'SET_PREDICATION',0x22:'COND_EXEC',0x23:'PRED_EXEC',0x24:'DRAW_INDIRECT',

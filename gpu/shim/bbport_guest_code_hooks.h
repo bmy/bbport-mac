@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: observers in a game's own code (any game). At a byte-checked run of whole instructions
 // (at least 5 bytes, nothing relative to the instruction pointer) a jump goes to a trampoline that

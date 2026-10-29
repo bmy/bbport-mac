@@ -1,9 +1,14 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport cp: graphics submissions: the draw command buffer with the indirect buffers it calls,
 // and the constant engine's buffer beside it.
 
 #include <chrono>
+#include "shim/bb_env.h"
 #include <thread>
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include <sys/resource.h>
@@ -46,12 +51,13 @@ constexpr u32 ComputeWords = sizeof(ComputeProgram) / 4;
 
 
 bool MemSemaphoreInOrder() {
-    static const bool on = [] {
-        const char* env = std::getenv("BB_MEM_SEMAPHORE_ORDER");
-        return !(env && env[0] == '0');
-    }();
-    return on && Vulkan::Rasterizer::HonestLabels();
+    static const bool on = !bb_env_off("BB_MEM_SEMAPHORE_ORDER");
+    return on;
 }
+
+/// The command buffer this thread walks was repaired: its draws and dispatches are skipped
+/// (CommandProcessor::Graphics).
+thread_local bool skip_repaired_work = false;
 
 bool Pipelined(Op op) {
     switch (op) {
@@ -101,7 +107,7 @@ namespace {
 /// BB_CE_WATCH=addr (diagnostics): constant RAM dumps and WRITE_DATA packets over that address.
 void WatchCommandWrite(const char* what, VAddr address, u64 bytes, const void* data) {
     static const VAddr watched = [] {
-        const char* env = std::getenv("BB_CE_WATCH");
+        const char* env = bb_env("BB_CE_WATCH");
         return env ? VAddr(std::strtoull(env, nullptr, 16)) : VAddr{0};
     }();
     static std::atomic<u32> printed{0};
@@ -224,7 +230,7 @@ CommandProcessor::Status CommandProcessor::RunGraphics(Work& work) {
             // bad is reported as before, with the time it was waited.
             {
                 static const long wait_us = [] {
-                    const char* env = std::getenv("BB_PM4_WAIT_US");
+                    const char* env = bb_env("BB_PM4_WAIT_US");
                     return env ? std::atol(env) : 20000L;
                 }();
                 const auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(wait_us);
@@ -242,10 +248,7 @@ CommandProcessor::Status CommandProcessor::RunGraphics(Work& work) {
             // it again after (or while) we read it, the tail of its body counted as the next packets.
             // A register-setting packet is walked again with the header as it is now (setting them
             // twice is the same as once). BB_PM4_RECOVER=0: stop as before.
-            static const bool recover = [] {
-                const char* env = std::getenv("BB_PM4_RECOVER");
-                return !(env && env[0] == '0');
-            }();
+            static const bool recover = !bb_env_off("BB_PM4_RECOVER");
             if (recover && level.prev_at && level.recoveries < 4 && *level.prev_at != level.prev_header) {
                 const Op prev_op = Header{level.prev_header}.Opcode();
                 if (prev_op == Op::SetShReg || prev_op == Op::SetContextReg ||
@@ -294,15 +297,22 @@ CommandProcessor::Step CommandProcessor::Graphics(Work& work, Level& level, cons
     const u32 header = packet[0];
     const u32* body = packet + 1;
     const Op op = Header{header}.Opcode();
+    // A repaired command buffer (RepairSubmittedCopy) draws and dispatches nothing: the corrupt
+    // packets left registers with garbage (laptop: right after a repair a full-screen draw wrote to
+    // address 0 and the device was lost, 2026-10-25). A frame misses some of its work instead.
+    // BB_REPAIRED_DRAWS=1: they run.
+    static const bool repaired_draws = bb_env_on("BB_REPAIRED_DRAWS");
+    skip_repaired_work = work.copy && work.copy->repaired && !repaired_draws;
     // A packet that waited is tried again: its registers and drain are done already.
     const bool retry = work.waiting_at == packet;
     if (!retry) {
-        ApplyGraphicsRegisterPacket(regs, packet, gfx_reg_checksum, &pipe_dirty);
+        // The checksum only matters to prepared draws (none without preparation workers).
+        ApplyGraphicsRegisterPacket(regs, packet, gfx_reg_checksum, &pipe_dirty, &gfx_touched,
+                                    rasterizer && rasterizer->GetDrawPreparation().Enabled());
         // Not before earlier fences either: these may write guest memory.
         if (rasterizer && !Pipelined(op) &&
             !(op == Op::DmaData && DmaData::From(body).DstLow() == 0x3022C)) {
             rasterizer->DrainDrawPipe(u32(op));
-            rasterizer->WaitDeferredSignals();
         }
     }
     work.waiting_at = nullptr;
@@ -403,7 +413,7 @@ CommandProcessor::Step CommandProcessor::Graphics(Work& work, Level& level, cons
         Draw(level, op, packet, body_words);
         break;
     case Op::DispatchDirect: {
-        if (PredicationSkips(header)) {
+        if (PredicationSkips(header) || skip_repaired_work) {
             break;
         }
         auto& cs = GetCsRegs();
@@ -419,7 +429,7 @@ CommandProcessor::Step CommandProcessor::Graphics(Work& work, Level& level, cons
         break;
     }
     case Op::DispatchIndirect: {
-        if (PredicationSkips(header)) {
+        if (PredicationSkips(header) || skip_repaired_work) {
             break;
         }
         if (rasterizer && (GetCsRegs().dispatch_initiator & 1)) {
@@ -593,7 +603,7 @@ CommandProcessor::Step CommandProcessor::Graphics(Work& work, Level& level, cons
         // BB_CE_WAIT_LOG=1 (diagnostics): a wait the constant engine did not satisfy (its buffer
         // ended or never started): the draws after it read constants not dumped for them.
         if (cblock.ce_count <= cblock.de_count) {
-            static const bool log = std::getenv("BB_CE_WAIT_LOG") != nullptr;
+            static const bool log = bb_env("BB_CE_WAIT_LOG") != nullptr;
             static std::atomic<u32> printed{0};
             if (log && printed.fetch_add(1, std::memory_order_relaxed) < 2000) {
                 std::printf("CE wait unmet: gpu frame %llu ce %u de %u started %d done %d ccb %zu\n",
@@ -620,7 +630,7 @@ CommandProcessor::Step CommandProcessor::Graphics(Work& work, Level& level, cons
         // The condition as the command processor reads it when it gets here: a fence the
         // recording thread has yet to write (in stream order), else once the GPU has done the
         // work before this packet (this thread decodes ahead of it).
-        if (rasterizer && VideoCore::GuestInPlace()) {
+        if (rasterizer) {
             u32 value = 0;
             if (!PendingFenceValue(cond.Address(), value)) {
                 SyncForCpuRead(cond.Address(), sizeof(u32));
@@ -685,7 +695,7 @@ void CommandProcessor::Draw(Level& level, Op op, const u32* packet, u32 body_wor
         // The submission's own draws were prepared ahead (taken even when skipped).
         const auto* prepared =
             level.prepared ? rasterizer->GetDrawPreparation().NextDraw() : nullptr;
-        if (PredicationSkips(header)) {
+        if (PredicationSkips(header) || skip_repaired_work) {
             return;
         }
         switch (op) {
@@ -704,7 +714,7 @@ void CommandProcessor::Draw(Level& level, Op op, const u32* packet, u32 body_wor
         }
         return;
     }
-    if (PredicationSkips(header) || !rasterizer) {
+    if (PredicationSkips(header) || skip_repaired_work || !rasterizer) {
         return;
     }
     const auto draw = DrawIndirect::From(body, body_words);
@@ -729,6 +739,17 @@ void CommandProcessor::Draw(Level& level, Op op, const u32* packet, u32 body_wor
 bool CommandProcessor::WaitRegMemGraphics(Work& work, const u32* body, bool retry) {
     const auto wait = WaitRegMem::From(body);
     const bool stats = Diagnostics::DcbStatsEnabled();
+    // An address past any guest mapping (bits above 40) is a malformed packet the submit-time
+    // repair did not catch (laptop: the next packet's NOP marker 0x68750004 as its high half):
+    // passed instead of a fault reading it.
+    if (wait.Memory() && (u64(wait.Address()) >> 40) != 0) {
+        static std::atomic<u32> reported{0};
+        if (reported.fetch_add(1, std::memory_order_relaxed) < 8) {
+            std::fprintf(stderr, "WAIT_REG_MEM on a garbage address %#llx: passed\n",
+                         (unsigned long long)u64(wait.Address()));
+        }
+        return true;
+    }
     // Display buffer labels: written when the flip is done. With nothing else to run, this
     // thread sleeps until then instead of spinning.
     if (wait.Memory() && vo_port && vo_port->IsVoLabel(reinterpret_cast<const u64*>(wait.Address())) &&
@@ -758,6 +779,31 @@ bool CommandProcessor::WaitRegMemGraphics(Work& work, const u32* body, bool retr
         work.wait_start = std::chrono::steady_clock::now();
         work.wait_met_at_once = wait.Test(regs.reg_array.data());
     }
+    // A repaired buffer (RepairSubmittedCopy) may hold a wait made of a cut packet's remains,
+    // waiting for a value that never comes (laptop: the queue stood still for good): it is passed
+    // after BB_REPAIRED_WAIT_MS (500).
+    // Likewise within 30 s of a corrupt end-of-pipe packet skipped (the label it should have
+    // written never comes: the game stood still, 2026-10-26).
+    const auto bad_eop_ms = BbCp::g_bad_eop_at_ms.load(std::memory_order_relaxed);
+    const bool bad_eop_recent =
+        bad_eop_ms != 0 &&
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count() + 1 - bad_eop_ms < 30000;
+    if (((work.copy && work.copy->repaired) || bad_eop_recent) &&
+        !wait.Test(regs.reg_array.data())) {
+        static const auto limit = std::chrono::milliseconds([] {
+            const char* env = bb_env("BB_REPAIRED_WAIT_MS");
+            return env && *env ? std::atoi(env) : 500;
+        }());
+        if (std::chrono::steady_clock::now() - work.wait_start > limit) {
+            static std::atomic<u32> told{0};
+            if (told.fetch_add(1, std::memory_order_relaxed) < 8) {
+                std::fprintf(stderr, "WAIT_REG_MEM in a repaired command buffer gave up after %lld ms\n",
+                             static_cast<long long>(limit.count()));
+            }
+            return true;
+        }
+    }
     while (!wait.Test(regs.reg_array.data())) {
         // The value may come from a fence the recording thread has yet to write: let it catch up
         // before yielding to the other queues.
@@ -765,7 +811,7 @@ bool CommandProcessor::WaitRegMemGraphics(Work& work, const u32* body, bool retr
             rasterizer->DrainDrawPipe(u32(Op::WaitRegMem));
             continue;
         }
-        // BB_HONEST_LABELS: a fence from another queue may wait for work not submitted yet.
+        // A fence from another queue may wait for work not submitted yet.
         if (rasterizer && rasterizer->HasUnsubmittedSignals()) {
             rasterizer->Flush();
         }
@@ -808,8 +854,7 @@ void CommandProcessor::CopyData(const u32* body) {
     default:
         break;
     }
-    if (src == BbCp::CopyData::SrcClock && rasterizer && to_memory && bytes == 8 &&
-        Vulkan::Rasterizer::HonestLabels()) {
+    if (src == BbCp::CopyData::SrcClock && rasterizer && to_memory && bytes == 8) {
         const VAddr target = copy.DstAddress();
         if (rasterizer->RunInOrder(&Tasks::GpuClockCopyTask, &target, sizeof(target),
                                    BbToggle::PipelinedMemoryWrites, false)) {
@@ -961,8 +1006,8 @@ CommandProcessor::Status CommandProcessor::RunConstantEngine(Work& work) {
             WatchCommandWrite("DumpConstRam", address, bytes, from);
             BbFreeCheck::Check(address, bytes, from, BbFreeCheck::ConstRam);
             std::memcpy(reinterpret_cast<void*>(address), from, bytes);
-            // No write tracking: the caches hear of it (in order, on the recording thread).
-            if (rasterizer && !VideoCore::WriteTracking()) {
+            // The caches hear of it (in order, on the recording thread).
+            if (rasterizer) {
                 rasterizer->NoteCommandWriteInOrder(address, from, bytes);
             }
             break;
@@ -1040,9 +1085,9 @@ bool CommandProcessor::PendingFenceValue(VAddr address, u32& value) {
             return true;
         }
     }
-    // BB_HONEST_LABELS: past the recording thread, a fence waits for the GPU to finish the work
+    // Past the recording thread, a fence waits for the GPU to finish the work
     // before it; in stream order it is met already.
-    if (Vulkan::Rasterizer::HonestLabels() && rasterizer) {
+    if (rasterizer) {
         u64 data = 0;
         if (rasterizer->PendingSignalValue(address, data)) {
             value = u32(data);

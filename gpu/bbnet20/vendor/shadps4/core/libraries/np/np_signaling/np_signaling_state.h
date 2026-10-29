@@ -61,8 +61,11 @@ enum class SignalingPacketType : u8 {
     // the host's world state (bosses, doors, shortcuts). 0x21 is taken (Matching2 frames, see
     // ClassifySignaling in net_p2p.cpp).
     BbscWorldFlags = 0x22,
+    // BBSC: Duel Bell PvP state. The host broadcasts its state and a guest requests a toggle.
+    BbscPvp = 0x25,
 };
 static_assert(static_cast<u8>(SignalingPacketType::BbscWorldFlags) == kSignalingBbscWorldFlagsType);
+static_assert(static_cast<u8>(SignalingPacketType::BbscPvp) == kSignalingBbscPvpType);
 
 #pragma pack(push, 1)
 struct SignalingEchoPing {

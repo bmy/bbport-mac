@@ -1,10 +1,16 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "vulkan/instance.h"
+#include "shim/bb_env.h"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
+#include <string_view>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <execinfo.h>
 
 #include <fmt/ranges.h>
 #include <vk_mem_alloc.h>
@@ -29,7 +35,7 @@ namespace {
 /// (a 6 GB GTX 1660 Ti reports ~5600). Allocations themselves are not limited.
 u64 VramLimit() {
     static const u64 limit = [] {
-        const char* env = std::getenv("BB_VRAM_LIMIT_MB");
+        const char* env = bb_env("BB_VRAM_LIMIT_MB");
         const u64 mib = env && *env ? std::strtoull(env, nullptr, 10) : 0;
         if (mib != 0) {
             std::printf("GPU: VRAM budget limited to %llu MiB (BB_VRAM_LIMIT_MB)\n",
@@ -38,6 +44,70 @@ u64 VramLimit() {
         return mib << 20;
     }();
     return limit;
+}
+
+/// BB_IMITATE_NVIDIA=1 (tests on AMD): the port takes this GPU for NVIDIA's (a Pascal GTX 1060,
+/// driver 5xx/6xx) wherever its code asks what the GPU can do: NVIDIA's driver ID (the shader
+/// profile's NVIDIA paths), without the AMD extensions NVIDIA lacks and the barycentrics Pascal
+/// lacks, NVIDIA's buffer offset alignments and format features, and unless set otherwise
+/// BB_GUEST_UNCACHED=1 (the GPU reads the game's memory past its caches, as NVIDIA's imported
+/// host memory), BB_VRAM_LIMIT_MB=5600 (a 6 GB card) and BB_BREADCRUMB_READS=1. The game's memory
+/// stays in dma-bufs (NVIDIA imports host memory: on amdgpu its userptr revalidates every page at
+/// each submission, ~0.4 FPS).
+bool ImitateNvidia() {
+    static const bool on = [] {
+        const char* env = bb_env("BB_IMITATE_NVIDIA");
+        if (!env || env[0] != '1') {
+            return false;
+        }
+        setenv("BB_GUEST_UNCACHED", "1", 0);
+        setenv("BB_VRAM_LIMIT_MB", "5600", 0);
+        setenv("BB_BREADCRUMB_READS", "1", 0);
+        std::printf("GPU: imitating NVIDIA (GTX 1060, Pascal): driver ID, extensions, alignments, "
+                    "formats; guest memory uncached for the GPU (BB_IMITATE_NVIDIA)\n");
+        return true;
+    }();
+    return on;
+}
+
+/// Extensions NVIDIA's driver does not have (a GTX 1060/RTX 4050 log: "Extension ... unavailable"),
+/// and the barycentrics Pascal has not.
+constexpr std::array<std::string_view, 8> NvidiaMissingExtensions = {
+    VK_AMD_SHADER_EXPLICIT_VERTEX_PARAMETER_EXTENSION_NAME, VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME,
+    VK_AMD_SHADER_IMAGE_LOAD_STORE_LOD_EXTENSION_NAME,      VK_AMD_GCN_SHADER_EXTENSION_NAME,
+    VK_AMD_SHADER_TRINARY_MINMAX_EXTENSION_NAME,            VK_AMD_MIXED_ATTACHMENT_SAMPLES_EXTENSION_NAME,
+    VK_EXT_SHADER_ATOMIC_FLOAT_2_EXTENSION_NAME,            VK_KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME,
+};
+
+/// Format features NVIDIA's driver lacks (the same log's "lacks { ... }" warnings).
+vk::FormatFeatureFlags2 NvidiaMissingFeatures(vk::Format format) {
+    using F = vk::FormatFeatureFlagBits2;
+    const vk::FormatFeatureFlags2 storage =
+        F::eStorageImage | F::eStorageReadWithoutFormat | F::eStorageWriteWithoutFormat;
+    const vk::FormatFeatureFlags2 copy = F::eTransferSrc | F::eTransferDst;
+    switch (format) {
+    case vk::Format::eR8Srgb:
+        return F::eColorAttachment;
+    case vk::Format::eR8G8Srgb:
+        return F::eSampledImage | F::eColorAttachment | copy;
+    case vk::Format::eA2B10G10R10SnormPack32:
+    case vk::Format::eA2B10G10R10SintPack32:
+        return F::eSampledImage | storage | F::eColorAttachment | copy;
+    case vk::Format::eR32G32B32Uint:
+    case vk::Format::eR32G32B32Sint:
+    case vk::Format::eR32G32B32Sfloat:
+        return F::eSampledImage | copy;
+    case vk::Format::eR5G6B5UnormPack16:
+    case vk::Format::eA1R5G5B5UnormPack16:
+        return storage;
+    case vk::Format::eR5G5B5A1UnormPack16:
+    case vk::Format::eB4G4R4A4UnormPack16:
+        return storage | F::eColorAttachment;
+    case vk::Format::eD16UnormS8Uint:
+        return F::eDepthStencilAttachment;
+    default:
+        return {};
+    }
 }
 
 u64 LargestDeviceLocalHeap(const vk::PhysicalDeviceMemoryProperties& memory) {
@@ -164,7 +234,11 @@ void Instance::ReadProperties() {
     Check<"list the GPU's extensions">(result);
     available_extensions.reserve(extensions.size());
     for (const auto& extension : extensions) {
-        available_extensions.emplace_back(extension.extensionName.data());
+        const std::string_view name = extension.extensionName.data();
+        if (ImitateNvidia() && std::ranges::contains(NvidiaMissingExtensions, name)) {
+            continue;
+        }
+        available_extensions.emplace_back(name);
     }
 
     // In every log: reports of hangs and lost devices need it.
@@ -174,6 +248,13 @@ void Instance::ReadProperties() {
                 driver.driverName.data(),
                 DriverVersionString(driver_id, properties.driverVersion).c_str(),
                 driver.driverInfo.data(), VersionString(properties.apiVersion).c_str());
+    if (ImitateNvidia()) {
+        driver_id = vk::DriverId::eNvidiaProprietary;
+        properties.limits.minStorageBufferOffsetAlignment =
+            std::max<vk::DeviceSize>(properties.limits.minStorageBufferOffsetAlignment, 16);
+        properties.limits.minUniformBufferOffsetAlignment =
+            std::max<vk::DeviceSize>(properties.limits.minUniformBufferOffsetAlignment, 64);
+    }
     LOG_INFO(Render_Vulkan, "Subgroup size {}; extensions: {}", vk11_props.subgroupSize,
              fmt::join(available_extensions, ", "));
 }
@@ -190,12 +271,14 @@ void Instance::CreateDevice() {
         vk::PhysicalDeviceImage2DViewOf3DFeaturesEXT, vk::PhysicalDeviceShaderClockFeaturesKHR,
         vk::PhysicalDeviceComputeShaderDerivativesFeaturesKHR,
         vk::PhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE,
-        vk::PhysicalDeviceCooperativeMatrixFeaturesKHR, vk::PhysicalDeviceShaderFloat8FeaturesEXT>();
+        vk::PhysicalDeviceCooperativeMatrixFeaturesKHR, vk::PhysicalDeviceShaderFloat8FeaturesEXT,
+        vk::PhysicalDevicePresentIdFeaturesKHR, vk::PhysicalDeviceAntiLagFeaturesAMD,
+        vk::PhysicalDeviceFaultFeaturesEXT>();
     features = query.get().features;
     // bbport: BB_GEOMETRY_SHADERS=0 hides the geometry stage (its draws are skipped, as before
     // KosmicKrisp had it), for A/B runs: KosmicKrisp emulates it with compute passes that end the
     // render pass.
-    if (const char* gs = std::getenv("BB_GEOMETRY_SHADERS"); gs && gs[0] == '0') {
+    if (bb_env_off("BB_GEOMETRY_SHADERS")) {
         features.geometryShader = false;
         std::printf("Vulkan: geometry shaders hidden (BB_GEOMETRY_SHADERS=0)\n");
     }
@@ -248,8 +331,7 @@ void Instance::CreateDevice() {
     // needing it, and KosmicKrisp then "unrolls" every such indexed draw with an extra compute
     // dispatch and encoder switch. BB_LIST_RESTART=1 keeps it on (A/B testing).
     const bool kk_skip_list_restart =
-        driver_id == vk::DriverId::eMesaKosmickrisp &&
-        !(std::getenv("BB_LIST_RESTART") && std::getenv("BB_LIST_RESTART")[0] == '1');
+        driver_id == vk::DriverId::eMesaKosmickrisp && !bb_env_on("BB_LIST_RESTART");
     ext.list_restart =
         !kk_skip_list_restart && enable(VK_EXT_PRIMITIVE_TOPOLOGY_LIST_RESTART_EXTENSION_NAME);
     if (kk_skip_list_restart) {
@@ -282,12 +364,15 @@ void Instance::CreateDevice() {
     view_2d_of_3d = views.image2DViewOf3D && views.sampler2DViewOf3D;
     ext.image_view_min_lod = enable(VK_EXT_IMAGE_VIEW_MIN_LOD_EXTENSION_NAME);
     ext.memory_budget = enable(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+    // What the driver knows of a GPU fault, printed at a device lost (breadcrumbs).
+    ext.device_fault = query.get<vk::PhysicalDeviceFaultFeaturesEXT>().deviceFault &&
+                       enable(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
     // Guest direct memory allocated here and mapped by the runtime (BbGuestMemory), or host
     // memory imported where dma-bufs do not fit (NVIDIA).
     ext.memory_fd = enable(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
     ext.dma_buf = ext.memory_fd && enable(VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME);
     ext.memory_host = enable(VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
-    if (const char* env = std::getenv("BB_GUEST_UNCACHED"); env && env[0] == '1') {
+    if (bb_env_on("BB_GUEST_UNCACHED")) {
         ext.guest_uncached = enable(VK_AMD_DEVICE_COHERENT_MEMORY_EXTENSION_NAME);
     }
     // FSR 4: quad derivatives in compute shaders; FSR 4.1.1: mixed float dot products, and
@@ -306,6 +391,25 @@ void Instance::CreateDevice() {
                      .shaderFloat8CooperativeMatrix &&
                  enable(VK_EXT_SHADER_FLOAT8_EXTENSION_NAME);
     ext.shader_clock = enable(VK_KHR_SHADER_CLOCK_EXTENSION_NAME);
+    // Low latency (NVIDIA Reflex, render/vk_low_latency): the frame IDs of presents and the
+    // driver's sleep and markers; NVIDIA's driver only.
+    ext.present_id = query.get<vk::PhysicalDevicePresentIdFeaturesKHR>().presentId &&
+                     enable(VK_KHR_PRESENT_ID_EXTENSION_NAME);
+    ext.low_latency2 = ext.present_id && enable(VK_NV_LOW_LATENCY_2_EXTENSION_NAME);
+    // Without it, AMD Anti-Lag 2 (VK_AMD_anti_lag): AMD's own driver on Windows, Mesa's anti-lag
+    // layer on Linux (any Mesa driver; the layer is switched on in CreateInstance). The layer
+    // only steps in for a device created with the antiLag feature.
+    const char* anti_lag_env = bb_env("BB_ANTI_LAG");
+#ifdef _WIN32
+    const bool anti_lag_wanted = !(anti_lag_env && anti_lag_env[0] == '0');
+#else
+    // Linux: only with BB_ANTI_LAG=1 (issue #289, vulkan/platform.cpp): Mesa's layer crashes when
+    // a frame generation layer adds presents, also when the host enabled the layer itself.
+    const bool anti_lag_wanted = anti_lag_env && anti_lag_env[0] == '1';
+#endif
+    ext.anti_lag = !ext.low_latency2 && anti_lag_wanted &&
+                   query.get<vk::PhysicalDeviceAntiLagFeaturesAMD>().antiLag &&
+                   enable(VK_AMD_ANTI_LAG_EXTENSION_NAME);
 #ifdef __APPLE__
     // bbport: the MetalFX upscaler (upscale/vk_metalfx): KosmicKrisp exports memory as MTLHeaps
     // and, with this port's KosmicKrisp patch 0002, timeline semaphores as MTLSharedEvents (an
@@ -329,25 +433,43 @@ void Instance::CreateDevice() {
         .queueCount = 1,
         .pQueuePriorities = &priority,
     }};
-    if (const char* env = std::getenv("BB_READBACK_QUEUE"); !env || env[0] != '0') {
+    // The compute family: queue 0 for readbacks (BB_READBACK_QUEUE=0: none), the next one for
+    // asynchronous compute (BB_FG_ASYNC=1; none by default).
+    static constexpr std::array<float, 2> compute_priorities{1.0f, 1.0f};
+    u32 async_index = NoFamily;
+    {
         const auto compute = std::ranges::find_if(families, [](const auto& family) {
             return !(family.queueFlags & vk::QueueFlagBits::eGraphics) &&
                    (family.queueFlags & vk::QueueFlagBits::eCompute) && family.queueCount > 0;
         });
         if (compute != families.end()) {
-            readback_family = u32(compute - families.begin());
-            queues.push_back({
-                .queueFamilyIndex = readback_family,
-                .queueCount = 1,
-                .pQueuePriorities = &priority,
-            });
+            u32 count = 0;
+            if (const char* env = bb_env("BB_READBACK_QUEUE"); !env || env[0] != '0') {
+                readback_family = u32(compute - families.begin());
+                ++count;
+            }
+            if (const char* env = bb_env("BB_FG_ASYNC");
+                env && env[0] == '1' && compute->queueCount > count) {
+                async_index = count++;
+            }
+            if (count > 0) {
+                compute_family = u32(compute - families.begin());
+                queues.push_back({
+                    .queueFamilyIndex = compute_family,
+                    .queueCount = count,
+                    .pQueuePriorities = compute_priorities.data(),
+                });
+            }
         }
     }
 
+    // BB_ROBUSTNESS=0 (an experiment: what the bounds checks cost the GPU): buffer and image
+    // robustness off (null descriptors stay). Out-of-range reads are then undefined.
+    static const bool robust_access = !bb_env_off("BB_ROBUSTNESS");
     // The features the port uses, of those the GPU has.
     vk::PhysicalDeviceFeatures2 core{
         .features{
-            .robustBufferAccess = features.robustBufferAccess,
+            .robustBufferAccess = robust_access && features.robustBufferAccess,
             .imageCubeArray = features.imageCubeArray,
             .independentBlend = features.independentBlend,
             .geometryShader = features.geometryShader,
@@ -397,12 +519,13 @@ void Instance::CreateDevice() {
         .hostQueryReset = vk12_features.hostQueryReset,
         .timelineSemaphore = vk12_features.timelineSemaphore,
         .bufferDeviceAddress = vk12_features.bufferDeviceAddress,
+        .bufferDeviceAddressCaptureReplay = vk12_features.bufferDeviceAddressCaptureReplay,
         .vulkanMemoryModel = vk12_features.vulkanMemoryModel,
         .vulkanMemoryModelDeviceScope = vk12_features.vulkanMemoryModelDeviceScope,
         .shaderOutputLayer = vk12_features.shaderOutputLayer,
     };
     vk::PhysicalDeviceVulkan13Features enable13{
-        .robustImageAccess = vk13_features.robustImageAccess,
+        .robustImageAccess = robust_access && vk13_features.robustImageAccess,
         .shaderDemoteToHelperInvocation = vk13_features.shaderDemoteToHelperInvocation,
         .subgroupSizeControl = vk13_features.subgroupSizeControl,
         .computeFullSubgroups = vk13_features.computeFullSubgroups,
@@ -412,7 +535,8 @@ void Instance::CreateDevice() {
         .maintenance4 = vk13_features.maintenance4,
     };
     vk::PhysicalDeviceRobustness2FeaturesEXT robust{
-        .robustBufferAccess2 = true, .robustImageAccess2 = true, .nullDescriptor = true};
+        .robustBufferAccess2 = robust_access, .robustImageAccess2 = robust_access,
+        .nullDescriptor = true};
     vk::PhysicalDeviceVertexAttributeDivisorFeatures divisor{
         .vertexAttributeInstanceRateDivisor = true};
     vk::PhysicalDeviceCustomBorderColorFeaturesEXT border{
@@ -456,6 +580,9 @@ void Instance::CreateDevice() {
     vk::PhysicalDeviceShaderFloat8FeaturesEXT float8{.shaderFloat8 = true,
                                                       .shaderFloat8CooperativeMatrix = true};
     vk::PhysicalDeviceCoherentMemoryFeaturesAMD coherent{.deviceCoherentMemory = true};
+    vk::PhysicalDevicePresentIdFeaturesKHR present_id{.presentId = true};
+    vk::PhysicalDeviceAntiLagFeaturesAMD anti_lag{.antiLag = true};
+    vk::PhysicalDeviceFaultFeaturesEXT fault{.deviceFault = true};
 
     vk::DeviceCreateInfo create_info{
         .queueCreateInfoCount = u32(queues.size()),
@@ -495,6 +622,9 @@ void Instance::CreateDevice() {
     link_if(ext.cooperative_matrix, matrix);
     link_if(ext.float8, float8);
     link_if(ext.guest_uncached, coherent);
+    link_if(ext.present_id, present_id);
+    link_if(ext.anti_lag, anti_lag);
+    link_if(ext.device_fault, fault);
 
     // DLSS (optional bridge library) needs its own device extensions on NVIDIA GPUs.
     const size_t own_extensions = enabled.size();
@@ -564,6 +694,10 @@ void Instance::CreateDevice() {
         readback_queue = device->getQueue(readback_family, 0);
         LOG_INFO(Render_Vulkan, "Readback queue: family {}", readback_family);
     }
+    if (async_index != NoFamily) {
+        async_compute_queue = device->getQueue(compute_family, async_index);
+        LOG_INFO(Render_Vulkan, "Async compute queue: family {} queue {}", compute_family, async_index);
+    }
 }
 
 void Instance::CreateAllocator() {
@@ -571,22 +705,70 @@ void Instance::CreateAllocator() {
         .vkGetInstanceProcAddr = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetInstanceProcAddr,
         .vkGetDeviceProcAddr = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetDeviceProcAddr,
     };
-    // Device memory taken and given back per frame (BB_FRAME_LOG alloc_mb).
+    // Device memory taken and given back per frame (BB_FRAME_LOG alloc_mb), and every 10 s by
+    // kind: VMA blocks (block_size) and dedicated allocations (mirrors, big images), with counts.
+    struct AllocKinds {
+        std::atomic<u64> block_n, block_b, dedicated_n, dedicated_b, freed_n, freed_b;
+        std::atomic<u32> printed;
+    };
+    static AllocKinds kinds{};
+    static VkDeviceSize vma_block_size = 0;
+    static const auto note = [](VkDeviceSize size, bool alloc) {
+        // BB_BIG_ALLOC_STACKS=1 (diagnostics): who allocates device memory of 64 MiB and more (the
+        // first 60, with the call stack: module+offset).
+        static const bool stacks = bb_env_on("BB_BIG_ALLOC_STACKS");
+        static std::atomic<u32> stacks_printed{0};
+        if (stacks && alloc && size >= (VkDeviceSize{64} << 20) && size != vma_block_size &&
+            stacks_printed.fetch_add(1) < 60) {
+            void* frames[24];
+            const int depth = backtrace(frames, 24);
+            std::printf("Big allocation: %llu MiB, from:\n", (unsigned long long)(size >> 20));
+            std::fflush(stdout);
+            backtrace_symbols_fd(frames, depth, 1);
+        }
+        if (alloc) {
+            (size == vma_block_size ? kinds.block_n : kinds.dedicated_n).fetch_add(1);
+            (size == vma_block_size ? kinds.block_b : kinds.dedicated_b).fetch_add(size);
+        } else {
+            kinds.freed_n.fetch_add(1);
+            kinds.freed_b.fetch_add(size);
+        }
+        const u32 now = BbStats::coarse_second.load(std::memory_order_relaxed);
+        if (now - kinds.printed.load(std::memory_order_relaxed) >= 10) {
+            kinds.printed.store(now, std::memory_order_relaxed);
+            std::printf("Device memory (10 s): %llu VMA blocks %llu MiB, %llu dedicated %llu MiB "
+                        "allocated; %llu freed %llu MiB; new mirrors %llu MiB (promoted %llu, merged %llu, compacted %llu), new images %llu MiB\n",
+                        (unsigned long long)kinds.block_n.exchange(0),
+                        (unsigned long long)(kinds.block_b.exchange(0) >> 20),
+                        (unsigned long long)kinds.dedicated_n.exchange(0),
+                        (unsigned long long)(kinds.dedicated_b.exchange(0) >> 20),
+                        (unsigned long long)kinds.freed_n.exchange(0),
+                        (unsigned long long)(kinds.freed_b.exchange(0) >> 20),
+                        (unsigned long long)(BbStats::mirror_new_bytes.exchange(0) >> 20),
+                        (unsigned long long)(BbStats::mirror_new_by[0].exchange(0) >> 20),
+                        (unsigned long long)(BbStats::mirror_new_by[1].exchange(0) >> 20),
+                        (unsigned long long)(BbStats::mirror_new_by[2].exchange(0) >> 20),
+                        (unsigned long long)(BbStats::image_new_bytes.exchange(0) >> 20));
+        }
+    };
     static const VmaDeviceMemoryCallbacks callbacks{
         .pfnAllocate = [](VmaAllocator, uint32_t, VkDeviceMemory, VkDeviceSize size, void*) {
             BbStats::device_alloc_bytes.fetch_add(size, std::memory_order_relaxed);
+            note(size, true);
         },
         .pfnFree = [](VmaAllocator, uint32_t, VkDeviceMemory, VkDeviceSize size, void*) {
             BbStats::device_free_bytes.fetch_add(size, std::memory_order_relaxed);
+            note(size, false);
         },
     };
     // 64 MiB blocks (VMA's default is 256): a block goes back to the driver only once empty,
     // and images freed here and there (the texture collector) left big blocks mostly empty
     // and held. BB_VMA_BLOCK_MB=N.
     static const VkDeviceSize block_size = [] {
-        const char* env = std::getenv("BB_VMA_BLOCK_MB");
+        const char* env = bb_env("BB_VMA_BLOCK_MB");
         return VkDeviceSize(env ? std::max(1ul, std::strtoul(env, nullptr, 10)) : 64ul) << 20;
     }();
+    vma_block_size = block_size;
     const VmaAllocatorCreateInfo info{
         .flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT,
         .physicalDevice = physical_device,
@@ -613,6 +795,22 @@ void VmaDeviceUsage(u64& block_bytes, u64& allocation_bytes) {
         if (memory.memoryHeaps[heap].flags & vk::MemoryHeapFlagBits::eDeviceLocal) {
             block_bytes += budgets[heap].statistics.blockBytes;
             allocation_bytes += budgets[heap].statistics.allocationBytes;
+        }
+    }
+}
+
+void VmaDeviceBudget(u64& usage_bytes, u64& budget_bytes) {
+    usage_bytes = budget_bytes = 0;
+    if (!stats_instance) {
+        return;
+    }
+    const auto& memory = stats_instance->GetMemoryProperties();
+    std::array<VmaBudget, VK_MAX_MEMORY_HEAPS> budgets{};
+    vmaGetHeapBudgets(stats_instance->GetAllocator(), budgets.data());
+    for (u32 heap = 0; heap < memory.memoryHeapCount; ++heap) {
+        if (memory.memoryHeaps[heap].flags & vk::MemoryHeapFlagBits::eDeviceLocal) {
+            usage_bytes += budgets[heap].usage;
+            budget_bytes += budgets[heap].budget;
         }
     }
 }
@@ -758,8 +956,11 @@ void Instance::ReadFormats() {
             vk::FormatProperties3 props3{};
             vk::FormatProperties2 props2{.pNext = &props3};
             physical_device.getFormatProperties2(format, &props2);
-            format_features.emplace(format,
-                                    props3.optimalTilingFeatures | props3.bufferFeatures);
+            vk::FormatFeatureFlags2 features = props3.optimalTilingFeatures | props3.bufferFeatures;
+            if (ImitateNvidia()) {
+                features &= ~NvidiaMissingFeatures(format);
+            }
+            format_features.emplace(format, features);
         }
     };
     for (const auto& format : GcnToVk::SurfaceFormats()) {

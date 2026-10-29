@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Shaders read descriptors and constants through pointers in their user data (s_load_dword from
 // shader resource tables, possibly several levels deep, with computed offsets). The host shader

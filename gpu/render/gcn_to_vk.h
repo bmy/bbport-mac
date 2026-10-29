@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport render: GCN state and formats as Vulkan sees them: blend, depth, stencil and raster
 // state, sampler fields, surface and depth formats (with what each can be used for), clear colors

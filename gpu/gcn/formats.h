@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport gcn: the data and number formats of buffers, images and render targets (Sea Islands
 // ISA, "Data and Image Formats"), their component swizzles, and how the translator maps the ones

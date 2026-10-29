@@ -1,13 +1,17 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include <algorithm>
+#include "shim/bb_env.h"
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include <sys/uio.h>
 #include <unistd.h>
@@ -16,6 +20,7 @@
 #include <magic_enum/magic_enum.hpp>
 
 #include "bbport_write_log.h"
+#include "bbport_free_check.h"
 #include "bbport_gnm_hooks.h"
 #include "core/emulator_settings.h"
 #include "cp/cp_diagnostics.h"
@@ -108,6 +113,36 @@ std::string RecentLabels(size_t count) {
                                : std::string{});
     }
     return out;
+}
+
+void DumpRolledBackLabels(size_t count) {
+    const u64 next = label_next.load(std::memory_order_acquire);
+    count = std::min<u64>({count, next, LabelRingSize});
+    std::vector<std::pair<u64, u64>> newest; // address, value of its newest write
+    for (u64 i = next - count; i < next; ++i) {
+        const LabelRecord& record = label_ring[i % LabelRingSize];
+        if (record.when_ns.load(std::memory_order_acquire) == 0) {
+            continue;
+        }
+        const u64 value = record.bytes >= 8 ? record.value : record.value & 0xFFFFFFFFull;
+        const auto it = std::find_if(newest.begin(), newest.end(),
+                                     [&](const auto& n) { return n.first == record.address; });
+        if (it != newest.end()) {
+            it->second = value;
+        } else {
+            newest.emplace_back(record.address, value);
+        }
+    }
+    u32 dumped = 0;
+    for (const auto& [address, value] : newest) {
+        u64 current = 0;
+        if (dumped < 6 && ReadGuest(reinterpret_cast<const void*>(address), &current,
+                                    value >> 32 ? 8 : 4) &&
+            current != 0 && current != value) {
+            BbFreeCheck::DumpWrites(address, 8, "label rolled back");
+            ++dumped;
+        }
+    }
 }
 
 namespace {
@@ -279,11 +314,139 @@ void InspectSubmittedCopy(SubmittedCopy& copy) {
     }
 }
 
+namespace {
+size_t PacketDwords(u32 header) {
+    return (header >> 30) == 2 ? 1 : ((header >> 16) & 0x3fff) + 2;
+}
+bool PlausibleHeader(u32 header) {
+    return (header >> 30) == 2 || ((header >> 30) == 3 && ((header >> 8) & 0xff) != 0);
+}
+/// The first malformed top-level packet from `at`, or the dcb's size.
+size_t FirstBad(const SubmittedCopy& copy, size_t at) {
+    while (at < copy.dcb_dwords) {
+        const u32 header = copy.data[at];
+        if (!PlausibleHeader(header) || PacketDwords(header) > copy.dcb_dwords - at) {
+            return at;
+        }
+        at += PacketDwords(header);
+    }
+    return copy.dcb_dwords;
+}
+} // namespace
+
+bool RepairSubmittedCopy(SubmittedCopy& copy, u64 number) {
+    // The guest's own buffer is malformed when submitted, now and then while an area loads on
+    // the 2 GB GTX 1050 laptop (~1 load in 50, right as the character appears): a packet whose
+    // header promises values that are not there (the next packet follows at once), runs of
+    // zeros, a header with another count (old bytes over what the game wrote?). Decoded as it
+    // is, the rest is garbage: "PM4 type 0", a fault reading a WAIT_REG_MEM "address" (the next
+    // packet's NOP marker 0x6875000x), a GPU fault (TEX FORMAT). Repaired here, at most 16 times:
+    // a packet among the last 8 before the bad header that, cut short, leaves the rest well
+    // formed (at least 32 dwords further) becomes a NOP over what it has; else zeros at the bad
+    // header become 1-dword fillers. 3 of the 6 kept laptop snapshots parse to the end so.
+    // BB_PM4_REPAIR=0: decoded as submitted.
+    static const bool enabled = !bb_env_off("BB_PM4_REPAIR");
+    if (copy.bad_dcb_at_submit == ~size_t(0) || !enabled) {
+        return false;
+    }
+    const u32* data = copy.data.data();
+    copy.repaired = true;
+    // Who wrote there (BB_POOL_WATCH=1: the GPU side's writes into guest memory, copy-backs
+    // among them; BB_WRITE_LOG=1: the CPU's): once per session, the first damaged buffer.
+    static std::atomic<bool> dumped{false};
+    if (!dumped.exchange(true)) {
+        const size_t from = copy.bad_dcb_at_submit > 16 ? copy.bad_dcb_at_submit - 16 : 0;
+        const auto address = reinterpret_cast<std::uint64_t>(copy.guest_dcb + from);
+        BbFreeCheck::DumpWrites(address, 32 * sizeof(u32), "malformed command buffer");
+        BbWriteLog::DumpRange(address, 32 * sizeof(u32));
+        BbGnmHooks::ReportDriverWrites(address, 32 * sizeof(u32)); // BB_GNM_WRITES_TRACE=1
+    }
+    for (int repairs = 0; repairs < 16; ++repairs) {
+        const size_t bad = FirstBad(copy, 0);
+        if (bad >= copy.dcb_dwords) {
+            std::fprintf(stderr, "PM4 repair: submission %llu well formed after %d repairs\n",
+                         (unsigned long long)number, repairs);
+            copy.bad_dcb_at_submit = ~size_t(0);
+            return true;
+        }
+        std::vector<size_t> starts;
+        for (size_t at = 0; at < bad; at += PacketDwords(data[at])) {
+            starts.push_back(at);
+        }
+        bool done = false;
+        for (size_t back = 0; back < std::min<size_t>(starts.size(), 8) && !done; ++back) {
+            const size_t start = starts[starts.size() - 1 - back];
+            const u32 header = data[start];
+            if ((header >> 30) != 3) {
+                continue;
+            }
+            const size_t length = PacketDwords(header);
+            for (size_t cut = 1; cut < length && start + cut < copy.dcb_dwords; ++cut) {
+                const u32 next = data[start + cut];
+                if ((next >> 30) != 3 || !PlausibleHeader(next)) {
+                    continue;
+                }
+                const size_t next_bad = FirstBad(copy, start + cut);
+                if (next_bad < copy.dcb_dwords && next_bad < bad + 32) {
+                    continue;
+                }
+                // A NOP (type 3 opcode 0x10) over the `cut` dwords written.
+                copy.data[start] = cut >= 2 ? 0xC0001000u | u32(cut - 2) << 16 : 0x80000000u;
+                std::fprintf(stderr,
+                             "PM4 repair: submission %llu: packet at +%#llx (header %#x, %llu "
+                             "dwords) cut to %llu, made a NOP (bad header at +%#llx)\n",
+                             (unsigned long long)number, (unsigned long long)(start * 4), header,
+                             (unsigned long long)length, (unsigned long long)cut,
+                             (unsigned long long)(bad * 4));
+                done = true;
+                break;
+            }
+        }
+        if (!done && data[bad] == 0) {
+            size_t end = bad;
+            while (end < copy.dcb_dwords && data[end] == 0) {
+                copy.data[end++] = 0x80000000u;
+            }
+            std::fprintf(stderr, "PM4 repair: submission %llu: zeros at +%#llx..+%#llx made "
+                                 "fillers\n",
+                         (unsigned long long)number, (unsigned long long)(bad * 4),
+                         (unsigned long long)(end * 4));
+            done = true;
+        }
+        // A few stray dwords between whole packets (laptop, 2026-10-25: `00010000 00024004`
+        // after complete SET_SH_REGs, then the next packet's NOP marker): they become fillers when
+        // the buffer parses further from the next header on (more repairs follow).
+        for (size_t junk = 1; !done && junk <= 8 && bad + junk < copy.dcb_dwords; ++junk) {
+            const u32 next = data[bad + junk];
+            if ((next >> 30) != 3 || !PlausibleHeader(next)) {
+                continue;
+            }
+            const size_t next_bad = FirstBad(copy, bad + junk);
+            if (next_bad < copy.dcb_dwords && next_bad < bad + junk + 4) {
+                continue;
+            }
+            for (size_t i = bad; i < bad + junk; ++i) {
+                copy.data[i] = 0x80000000u;
+            }
+            std::fprintf(stderr, "PM4 repair: submission %llu: %llu stray dwords at +%#llx "
+                                 "(first %#x) made fillers\n",
+                         (unsigned long long)number, (unsigned long long)junk,
+                         (unsigned long long)(bad * 4), data[bad]);
+            done = true;
+        }
+        if (!done) {
+            std::fprintf(stderr, "PM4 repair: submission %llu: no repair for header %#x at +%#llx\n",
+                         (unsigned long long)number, data[bad], (unsigned long long)(bad * 4));
+            copy.bad_dcb_at_submit = bad;
+            return false;
+        }
+    }
+    copy.bad_dcb_at_submit = FirstBad(copy, 0);
+    return false;
+}
+
 void RememberSubmittedCopy(std::shared_ptr<const SubmittedCopy> copy) {
-    static const bool enabled = [] {
-        const char* env = std::getenv("BB_GNM_WRITES_TRACE");
-        return env && env[0] == '1';
-    }();
+    static const bool enabled = bb_env_on("BB_GNM_WRITES_TRACE");
     if (!enabled) return;
     struct Kept { u64 number; std::shared_ptr<const SubmittedCopy> copy; };
     static std::mutex mutex;
@@ -322,7 +485,7 @@ void RememberSubmittedCopy(std::shared_ptr<const SubmittedCopy> copy) {
             for (size_t p = from; p < std::min(old.dcb_dwords, word + 16); ++p)
                 std::fprintf(stderr, p == word ? " [%08x]" : " %08x", old.data[p]);
             std::fprintf(stderr, "\n");
-            const char* dir = std::getenv("BB_DATA_DIR");
+            const char* dir = bb_env("BB_DATA_DIR");
             const auto path = fmt::format("{}/out/pm4-history-{}-prior-{}.bin", dir ? dir : ".",
                                           number, it->number);
             if (FILE* f = std::fopen(path.c_str(), "wb")) {
@@ -403,7 +566,7 @@ void ReportBadPacket(uintptr_t base, std::size_t dwords, const u32* at, u64 seq,
         // Track writes to guest memory, not the malloc'ed snapshot (which has none by design).
         BbWriteLog::DumpRange(reinterpret_cast<uintptr_t>(copy->guest_dcb), dwords * 4);
         BbGnmHooks::ReportDriverWrites(reinterpret_cast<uintptr_t>(copy->guest_dcb + from), count * 4);
-        const char* data_dir = std::getenv("BB_DATA_DIR");
+        const char* data_dir = bb_env("BB_DATA_DIR");
         const std::string name = std::string(data_dir ? data_dir : ".") +
                                  "/out/pm4-bad-" + std::to_string(seq) + ".snapshot.bin";
         if (FILE* file = std::fopen(name.c_str(), "wb")) {
@@ -426,7 +589,7 @@ void CheckSubmittedCopy(const SubmittedCopy& copy, u64 seq) {
             const std::size_t n = std::min(buf.size(), dwords - at);
             iovec local{buf.data(), n * 4}, remote{const_cast<u32*>(guest + at), n * 4};
             if (process_vm_readv(getpid(), &local, 1, &remote, 1, 0) != ssize_t(n * 4)) {
-                // bbport BB_GUEST_IN_PLACE: dma-buf guest memory is not readable that way; still
+                // bbport: dma-buf guest memory is not readable that way; still
                 // mapped, it is read directly.
                 int prot = 0, type = -1;
                 uintptr_t end = 0;

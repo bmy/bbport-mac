@@ -28,10 +28,13 @@ does not answer within 5 s. (BBSC's own `BBSC_RELAY` is for the TCP relay in its
 port's relay is the UDP one on port 3478 of the shadNet server.)
 
 Environment: `BB_ONLINE=1 BB_BBSC=1` (what the launcher sets). BBSC's own switches
-(`SHADPS4_BBSC_*`, `SHADPS4_BLOODBORNE_*`, see `gpu/bbnet/shadps4/core/bbsc_persistence.h`) work as
+(`SHADPS4_BBSC_*`, `SHADPS4_BLOODBORNE_*`, see `gpu/bbnet20/bbsc/core/bbsc_persistence.h`) work as
 in BBSC: most features are on by default, `=0` turns one off.
 
-## Where it lives
+## Where it lived in the shadp2p module (history)
+
+The shadp2p module (`gpu/bbnet`, `libbbnet.so`) was removed on 2026-10-26; BBSC lives in
+`gpu/bbnet20` now (the table under "On the shadPS4 0.20 stack" below). The first port's layout:
 
 | Part | Files |
 |---|---|
@@ -75,8 +78,8 @@ pass, no faults (2026-10-14). Real co-op needs two players on a BBSC server.
 ## On the shadPS4 0.20 stack (2026-10-16)
 
 BBSC now runs in `gpu/bbnet20` (`libbbnet20.so`: shadPS4 v0.20.0's network, NP and shadNet code,
-see `gpu/bbnet20/SHADNET-PORT.md`); the shadp2p module (`libbbnet.so`) stays as a fallback
-(`BB_NET_GEN=19`). Seamless Hunt is the launcher's first pool, The Hunter's Dream the second (no
+see `gpu/bbnet20/SHADNET-PORT.md`); the shadp2p module (`libbbnet.so`) was kept as a fallback
+until 2026-10-26, then removed. Seamless Hunt is the launcher's first pool, The Hunter's Dream the second (no
 BBSC there). Ported, against the 0.20 sources:
 
 | BBSC part | Where in `gpu/bbnet20` |

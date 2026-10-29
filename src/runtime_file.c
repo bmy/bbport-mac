@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* Guest file system: PS4 mount points mapped onto host directories.
  *   /app0, /hostapp  -> game package root (read-only by convention)
  *   /temp0, /download0, /data, and mounts added by SaveData -> user directory
@@ -6,6 +8,7 @@
 #define _GNU_SOURCE
 #include "runtime.h"
 #include "platform.h"
+#include "../gpu/shim/bb_env.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -95,11 +98,36 @@ void runtime_file_unmount(const char *guest) {
 }
 static char user_root[512]="user";
 const char *runtime_file_user_dir(void) { return user_root; }
+/* bbport: the character's save the game is using (userdata0000..userdata0009, one per character;
+ * userdata0010 holds the system data): the last such file it opened. Loading a character reads
+ * its file and the game then writes only that one. Kept per host folder, for the BBSC kit's
+ * journal and its restore (gpu/shim/bbport_kit_restore). */
+static pthread_mutex_t slot_lock=PTHREAD_MUTEX_INITIALIZER;
+static int active_slot=-1;
+static char active_dir[1024];
+static void note_save_slot(const char *host) {
+    const char *name=strrchr(host,'/');
+    unsigned slot;
+    char tail;
+    if (!name || sscanf(name+1,"userdata%4u%c",&slot,&tail)!=1 || slot>9) return;
+    pthread_mutex_lock(&slot_lock);
+    active_slot=(int)slot;
+    snprintf(active_dir,sizeof(active_dir),"%.*s",(int)(name-host),host);
+    pthread_mutex_unlock(&slot_lock);
+}
+int runtime_savedata_active_slot(char *dir, size_t size) {
+    pthread_mutex_lock(&slot_lock);
+    const int slot=active_slot;
+    if (dir && size) snprintf(dir,size,"%s",slot>=0 ? active_dir : "");
+    pthread_mutex_unlock(&slot_lock);
+    return slot;
+}
 void runtime_file_configure(const char *app0,const char *user) {
     char path[600];
     snprintf(user_root,sizeof(user_root),"%s",user);
     runtime_file_mount("/app0",app0);
     runtime_file_mount("/hostapp",app0);
+    runtime_remote_configure(app0);
     const char *writable[]={"temp0","download0","data"};
     mkdir(user,0755);
     for (int i=0;i<3;++i) {
@@ -130,7 +158,7 @@ static int translate(const char *guest,char *out,size_t size) {
     if (result==ENOENT) fprintf(stderr,"Runtime: no mount for guest path %s\n",guest);
     /* BB_FILE_TRACE=1: every guest path the game opens, stats or checks (mods, missing files). */
     static int trace=-1;
-    if (trace<0) { const char *t=getenv("BB_FILE_TRACE"); trace=t && t[0]=='1'; }
+    if (trace<0) { const char *t=bb_env("BB_FILE_TRACE"); trace=t && t[0]=='1'; }
     if (trace) printf("File trace: %s -> %s\n",guest,result ? "(no mount)" : out);
     return result;
 }
@@ -228,7 +256,7 @@ static File *get(int fd) {
  * read in between, on CLOCK_MONOTONIC seconds (the texture trace's clock, in either process). */
 static int file_trace(void) {
     static int v=-1;
-    if (v<0) { const char *e=getenv("BB_FILE_TRACE"), *i=getenv("BB_IMAGE_TRACE"); v=(e && e[0]=='1') || (i && i[0]=='1'); }
+    if (v<0) { const char *e=bb_env("BB_FILE_TRACE"), *i=bb_env("BB_IMAGE_TRACE"); v=(e && e[0]=='1') || (i && i[0]=='1'); }
     return v;
 }
 static double trace_seconds(void) {
@@ -253,9 +281,9 @@ static void trace_read(int fd,int64_t n) {
     }
     pthread_mutex_unlock(&lock);
 }
-static int audio_trace(void) { static int v=-1; if (v<0) { const char *e=getenv("BB_AUDIO_TRACE"); v=e && e[0]=='1'; } return v; }
+static int audio_trace(void) { static int v=-1; if (v<0) { const char *e=bb_env("BB_AUDIO_TRACE"); v=e && e[0]=='1'; } return v; }
 /* BB_SAVE_TRACE=1: every operation on save files (/savedataN). */
-static int save_trace(void) { static int v=-1; if (v<0) { const char *e=getenv("BB_SAVE_TRACE"); v=e && e[0]=='1'; } return v; }
+static int save_trace(void) { static int v=-1; if (v<0) { const char *e=bb_env("BB_SAVE_TRACE"); v=e && e[0]=='1'; } return v; }
 /* Game mounts (including linked mod overlays) are read-only. Saves use other mounts. */
 static int game_path(const char *p) {
     if (!p || !*p) return 0;
@@ -445,9 +473,8 @@ static int fix_option_layout(uint8_t *buf,size_t size) {
 /* The host file for `guest`: a fixed copy (a memfd) for the option layouts, else `host`. */
 static int menu_layout_file(const char *guest,int host) {
     static const char suffix[]="/menu/optionsetting.gfx";
-    const char *env=getenv("BB_GAME_MENU");
     const size_t n=strlen(guest), k=sizeof(suffix)-1;
-    if ((env && env[0]=='0') || n<k || strcasecmp(guest+n-k,suffix)) return host;
+    if ((bb_env_off("BB_GAME_MENU")) || n<k || strcasecmp(guest+n-k,suffix)) return host;
     struct stat s;
     if (fstat(host,&s) || s.st_size<=0 || s.st_size>(16<<20)) return host;
     uint8_t *buf=malloc((size_t)s.st_size);
@@ -474,7 +501,7 @@ int runtime_file_host_path(const char *guest,char *out,size_t size) {
     const int e=translate(guest,out,size);
     if (e) return e;
     if (access(out,F_OK)!=0 && !fix_case(out)) return ENOENT;
-    return 0;
+    return runtime_remote_fetch(out);
 }
 static int64_t do_open(const char *guest,int flags,int mode) {
     if (game_path(guest) && (flags & (3|0x8|0x200|0x400|0x800))) return -EROFS;
@@ -489,13 +516,16 @@ static int64_t do_open(const char *guest,int flags,int mode) {
         host=open_for_commit(path,current,flags,mode,&commit,&temp);
         if (host<0) { errno=-host; host=-1; }
     } else {
+        if (game_path(guest) && (e=runtime_remote_fetch(current))) return -e;
         host=open(current,host_flags(flags),mode ? mode : 0644);
         if (host<0 && errno==ENOENT && !(flags&0x200) && !save_path(guest) && fix_case(current)) {
+            if (game_path(guest) && (e=runtime_remote_fetch(current))) return -e;
             host=open(current,host_flags(flags),mode ? mode : 0644);
             snprintf(path,sizeof(path),"%s",current); // the directory listing below uses it
         }
     }
     if (host>=0 && !(flags&3) && game_path(guest)) host=menu_layout_file(guest,host);
+    if (host>=0 && save_path(guest)) note_save_slot(path);
     if (save_trace() && save_path(guest))
         printf("Save trace: open(%s, flags 0x%x) -> host %d%s%s\n",guest,flags,host,temp ? ", copy " : "",temp ? temp : "");
     if (host<0) {
@@ -528,7 +558,7 @@ static int64_t do_open(const char *guest,int flags,int mode) {
                (long long)s.st_size,trace_thread(thread,sizeof(thread)));
     }
     if (audio_trace() && strstr(guest,"sound/")) printf("Audio trace: open(%s) -> fd %d, %lld bytes\n",guest,fd,(long long)s.st_size);
-    const char *mod_trace=getenv("BB_MOD_TRACE"), *mod_root=getenv("BB_MODS_DIR");
+    const char *mod_trace=bb_env("BB_MOD_TRACE"), *mod_root=bb_env("BB_MODS_DIR");
     if (mod_trace && mod_trace[0]=='1' && mod_root) {
         char actual[PATH_MAX],root[PATH_MAX];
         static unsigned traced;
@@ -602,10 +632,15 @@ static int64_t do_read(int fd,void *buffer,uint64_t size) {
     int h=host_fd(fd);
     if (h<0) return -EBADF;
     runtime_memory_note_write((uintptr_t)buffer,size);
+    /* Write traps over the buffer lifted at once (one call), not page by page through the fault
+     * handler: a level's files streaming in made 12-15 thousand faults a second (Windows: hitches
+     * of 60-200 ms, its exceptions cost more). */
+    runtime_memory_prepare_cpu_write((uintptr_t)buffer,size);
     touch_for_write(buffer,size);
     ssize_t n=read_retrying(h,buffer,size,0,0);
     if (n<0) { if (audio_trace()) printf("Audio trace: read(fd %d, %llu) failed, errno %d\n",fd,(unsigned long long)size,errno); return -errno; }
     if (n>0) runtime_memory_note_write((uintptr_t)buffer,(uint64_t)n); /* and once the data is there */
+    if (n>0) runtime_memory_note_cpu_write((uintptr_t)buffer,(uint64_t)n);
     __atomic_add_fetch(&reads,1,__ATOMIC_RELAXED); __atomic_add_fetch(&bytes_read,(uint64_t)n,__ATOMIC_RELAXED);
     trace_read(fd,n);
     return n;
@@ -614,10 +649,15 @@ static int64_t do_pread(int fd,void *buffer,uint64_t size,int64_t offset) {
     int h=host_fd(fd);
     if (h<0) return -EBADF;
     runtime_memory_note_write((uintptr_t)buffer,size);
+    /* Write traps over the buffer lifted at once (one call), not page by page through the fault
+     * handler: a level's files streaming in made 12-15 thousand faults a second (Windows: hitches
+     * of 60-200 ms, its exceptions cost more). */
+    runtime_memory_prepare_cpu_write((uintptr_t)buffer,size);
     touch_for_write(buffer,size);
     ssize_t n=read_retrying(h,buffer,size,offset,1);
     if (n<0) { if (audio_trace()) printf("Audio trace: pread(fd %d, %llu @%lld) failed, errno %d\n",fd,(unsigned long long)size,(long long)offset,errno); return -errno; }
     if (n>0) runtime_memory_note_write((uintptr_t)buffer,(uint64_t)n); /* and once the data is there */
+    if (n>0) runtime_memory_note_cpu_write((uintptr_t)buffer,(uint64_t)n);
     __atomic_add_fetch(&reads,1,__ATOMIC_RELAXED); __atomic_add_fetch(&bytes_read,(uint64_t)n,__ATOMIC_RELAXED);
     trace_read(fd,n);
     return n;
@@ -679,7 +719,10 @@ static int64_t do_stat(const char *guest,GuestStat *out) {
     if (r==-ENOENT && !save_path(guest) && fix_case(path)) r=stat(path,&s) ? -errno : 0;
     if (save_trace() && save_path(guest)) printf("Save trace: stat(%s) -> %d, %lld bytes\n",guest,r,r ? -1LL : (long long)s.st_size);
     if (r) return r;
-    convert_stat(&s,out); return 0;
+    convert_stat(&s,out);
+    int64_t size;
+    if (game_path(guest) && runtime_remote_size(path,&size)) out->size=size; /* not fetched yet */
+    return 0;
 }
 static int64_t do_getdents(int fd,char *buffer,uint64_t size,int64_t *basep) {
     pthread_mutex_lock(&lock);
@@ -817,7 +860,10 @@ int64_t runtime_file_lseek(int fd,int64_t o,int w) { return do_lseek(fd,o,w); }
 int64_t runtime_file_stat(const char *p,void *s) { return do_stat(p,s); }
 int64_t runtime_file_fstat(int fd,void *s) { return do_fstat(fd,s); }
 int64_t runtime_file_getdents(int fd,char *b,uint64_t n,int64_t *base) { return do_getdents(fd,b,n,base); }
-int runtime_file_translate(const char *guest,char *out,size_t size) { return translate(guest,out,size); }
+int runtime_file_translate(const char *guest,char *out,size_t size) {
+    const int e=translate(guest,out,size);
+    return e || !game_path(guest) ? e : runtime_remote_fetch(out); /* avplayer: the movie is read from the host */
+}
 void runtime_file_report(void) {
     printf("Runtime: files opened=%zu, reads=%zu (%llu bytes), writes=%zu, not found=%zu\n",
            opens,reads,(unsigned long long)bytes_read,writes,missing);

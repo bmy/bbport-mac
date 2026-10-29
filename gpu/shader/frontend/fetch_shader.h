@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport shader translator: the fetch shader a vertex shader calls (S_SWAPPC_B64) to load its
 // vertex attributes. Its loads are parsed back into the attribute list (V# location, destination
@@ -77,5 +78,9 @@ struct FetchShaderData {
 const u32* GetFetchShaderCode(const Info& info, u32 sgpr_base);
 
 std::optional<FetchShaderData> ParseFetchShader(const Shader::Info& info);
+
+/// bbport: ParseFetchShader without the copy: the calling thread's cached parse, valid until its
+/// next parse; null without a fetch shader.
+const FetchShaderData* ParseFetchShaderRef(const Shader::Info& info);
 
 } // namespace Shader::Gcn

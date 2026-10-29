@@ -1,7 +1,10 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: optimizations that can be switched off while the game runs (BB_TOGGLE_FILE,
 // see runtime_memory.c), to find which one changes rendering without restarting.
 #pragma once
 #include <array>
+#include "shim/bb_env.h"
 #include <atomic>
 #include <csetjmp>
 #include <chrono>
@@ -34,7 +37,6 @@ enum : std::uint64_t {
     HotPages = 32768,
     FaultWindow = 65536,
     ParallelCopies = 131072,
-    AsyncFences = 262144,
     PoolSmallCopies = 524288,
     RecordPrefetch = 1ull << 32,
     TextureViewMemo = 1ull << 33,
@@ -45,7 +47,6 @@ enum : std::uint64_t {
     PipelinedTasks = 1ull << 38,
     PendingFenceWaits = 1ull << 39,
     PipelinedDispatch = 1ull << 40,
-    RecorderFences = 1ull << 41,
     PipelinedMemoryWrites = 1ull << 42,
     MultiCopyShader = 1ull << 43,
     RenderStateMemo = 1ull << 44,
@@ -53,8 +54,13 @@ enum : std::uint64_t {
     PipelinedIndirectDraws = 1ull << 46,
     SceneAttachmentsOnly = 1ull << 47,
     SampleSceneProxies = 1ull << 48,
-    OrderedGuestWrites = 1ull << 49,
     SceneHalfRes = 1ull << 50, ///< live scaling also reduces the 960x540 post targets
+    /// A copy shader (IsComputeImageCopy) into memory that is no image yet makes the image there
+    /// instead of running through memory; bit set: the shader runs.
+    ComputeCopyNewImage = 1ull << 49,
+    /// Such a copy of a reduced scene target copies its proxy (SceneTargets::CopyProxy); bit
+    /// set: the native images, after a resolve.
+    SceneProxyCopies = 1ull << 41,
     /// Clears of proxied scene images clear the proxy too instead of resolving it first.
     SceneClearProxies = 1ull << 20,
     UpdateImageFastPath = 1u << 30,
@@ -106,19 +112,28 @@ namespace BbStats {
 inline std::atomic<std::uint64_t> tracker_faults{0};
 /// Writes the GPU side heard of from the writers (libc copies over watched pages, no write tracking).
 inline std::atomic<std::uint64_t> cpu_write_notes{0}, cpu_write_note_bytes{0};
-/// Ranges the game's GPU memory allocator handed out (guest hook, BB_GUEST_IN_PLACE).
+inline std::atomic<std::uint64_t> fast_writer_faults{0}; ///< write faults of the game's bookkeeping, no pipeline wait
+/// Ranges the game's GPU memory allocator handed out (guest hook).
 inline std::atomic<std::uint64_t> gpu_range_allocs{0}, gpu_range_alloc_bytes{0};
-/// Buffer bindings (BB_GUEST_IN_PLACE): bytes bound where the game's memory is (read over PCIe on a
+/// Buffer bindings: bytes bound where the game's memory is (read over PCIe on a
 /// discrete GPU) and bytes bound to VRAM copies.
 inline std::atomic<std::uint64_t> bound_in_place_bytes{0}, bound_vram_bytes{0};
 inline std::atomic<std::uint64_t> bound_in_place_written_bytes{0};
+/// Vertex and index data of the draws, by where the GPU reads it: [0] the game's memory in place
+/// (over the bus on a discrete GPU), [1] a VRAM copy or the stream buffer; vertex streams and
+/// index buffers as bound (sizes of the draw's ranges, not unique bytes).
+inline std::atomic<std::uint64_t> vertex_bytes[2]{}, index_bytes[2]{}, geometry_draws{0};
 /// Command processor writes put into the GPU's VRAM data (no readback); blocks whose GPU data went
 /// back to the game's memory before moving in place; downloads of GPU data (readbacks).
 inline std::atomic<std::uint64_t> gpu_data_updates{0}, copied_back_blocks{0}, readbacks{0};
 inline std::atomic<std::uint64_t> late_vram_writes{0}; ///< labels and the like put into VRAM copies
-/// BB_GUEST_IN_PLACE: copies of in-place data the CPU writes into VRAM for reading (ShadowCopy).
+/// Copies of in-place data the CPU writes into VRAM for reading (ShadowCopy).
 inline std::atomic<std::uint64_t> shadow_copies{0}, shadow_bytes{0};
-/// BB_HONEST_LABELS: submissions sent early because the GPU had finished everything before them.
+/// Ranges a dispatch wrote in place copied into VRAM after it (ShadowGpuWrites), and bindings
+/// served from those copies.
+inline std::atomic<std::uint64_t> write_shadow_copies{0}, write_shadow_bytes{0}, write_shadow_hits{0},
+    write_shadow_misses{0}; ///< small in-place reads with none to read
+/// Submissions sent early because the GPU had finished everything before them.
 inline std::atomic<std::uint64_t> idle_flushes{0};
 inline std::atomic<std::uint64_t> drain_flushes{0}; ///< submissions sent as the GPU reached the last one
 /// EOP fences with data: decoded, and their labels written (a growing gap: lost fences, guest leaks).
@@ -129,6 +144,10 @@ inline std::atomic<std::uint64_t> submits_allowed_queries{0}, submits_refused{0}
 inline std::atomic<std::uint64_t> gnm_frame_waits{0}, gnm_frame_wait_ns{0};
 /// Submissions to the compute queues (sceGnmDingDong).
 inline std::atomic<std::uint64_t> asc_submits{0};
+/// The game's submissions to any queue, numbered from 1 when made (Work::stamp), and the highest
+/// one stage A started to decode: what the game did on its CPU in between (a heap block freed)
+/// comes before every submission numbered higher.
+inline std::atomic<std::uint64_t> guest_submit_stamp{0}, started_submit_stamp{0};
 /// The game's GPU range allocators (seen at their collector, 0x26aa860): object, live ranges, bytes.
 inline std::array<std::atomic<std::uint64_t>, 4> range_allocators{}, range_live{}, range_bytes{};
 inline std::atomic<std::int64_t> hot_pages{0};
@@ -154,8 +173,7 @@ inline std::atomic<std::uint64_t> layer_entries_written{0};
 inline std::atomic<std::uint64_t> layer_mprotects{0};
 /// Diagnostics are collected only with BB_FRAME_STATS=1.
 inline const bool enabled = [] {
-    const char* env = std::getenv("BB_FRAME_STATS");
-    return env && env[0] == '1';
+    return bb_env_on("BB_FRAME_STATS");
 }();
 struct Timer {
     std::atomic<std::uint64_t>& total;
@@ -183,9 +201,13 @@ inline std::atomic<std::uint64_t> sync_recording_ns{0}, host_copies_wait_ns{0}, 
 /// Wall time the frame preparation waited for the GPU to finish an earlier frame (BB_FRAMES_AHEAD):
 /// how GPU-bound the frames are (BB_FRAME_LOG).
 inline std::atomic<std::uint64_t> present_wait_ns{0};
-/// Frames shown (Presenter::PrepareFrame), and bytes the background pre-upload put into the arena.
+/// Wall time the frame preparation waited for a free presenter frame (all of them still being
+/// presented: with frame generation the presenter keeps each for the generated frames too).
+inline std::atomic<std::uint64_t> frame_pool_wait_ns{0};
+/// Wall time in vkQueuePresentKHR (with the submission mutex held).
+inline std::atomic<std::uint64_t> present_call_ns{0};
+/// Frames shown (Presenter::PrepareFrame).
 inline std::atomic<std::uint32_t> frame_number{0};
-inline std::atomic<std::uint64_t> preupload_bytes{0};
 /// Device memory allocated (VMA blocks, arena residency) and freed, bytes.
 inline std::atomic<std::uint64_t> device_alloc_bytes{0}, device_free_bytes{0};
 /// Memory statistics: registered images (their guest size) and how many; the buffer cache's VRAM
@@ -194,12 +216,43 @@ inline std::atomic<std::uint64_t> device_alloc_bytes{0}, device_free_bytes{0};
 inline std::atomic<std::uint64_t> live_image_bytes{0}, live_images{0};
 /// Every Vulkan image we allocated (their memory as allocated: host sizes, mips, scene targets).
 inline std::atomic<std::uint64_t> vk_image_bytes{0};
+/// Time inside vmaCreate*/vmaDestroy* of buffers and images (ns) and their calls, always on: a
+/// device memory allocation or free on Windows (WDDM) can take tens of ms near the VRAM budget.
+inline std::atomic<std::uint64_t> t_vk_alloc{0}, t_vk_free{0}, n_vk_alloc{0}, n_vk_free{0};
+/// Time inside vkQueueSubmit2 (ns): WDDM pages evicted memory back in there.
+inline std::atomic<std::uint64_t> t_vk_submit{0}, n_vk_submit{0};
+/// Image creation split (ns): vkCreateImage, the memory, vkBindImageMemory.
+inline std::atomic<std::uint64_t> t_img_create{0}, t_img_alloc{0}, t_img_bind{0};
+/// Device memory made by kind (the Device memory lines): new mirrors (not from the pool), images.
+inline std::atomic<std::uint64_t> mirror_new_bytes{0}, image_new_bytes{0}, staging_new_bytes{0};
+/// New mirror bytes by where they were made: [0] promotion, [1] merge across, [2] compaction.
+inline std::atomic<std::uint64_t> mirror_new_by[3]{};
+inline thread_local int mirror_new_reason = 0;
+struct VkMemTimer {
+    std::atomic<std::uint64_t>& total;
+    std::atomic<std::uint64_t>& count;
+    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+    ~VkMemTimer() {
+        total.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::steady_clock::now() - start)
+                            .count(),
+                        std::memory_order_relaxed);
+        count.fetch_add(1, std::memory_order_relaxed);
+    }
+};
 inline std::atomic<std::uint64_t> residency_alloc_bytes{0}, residency_unused_bytes{0};
 /// The texture cache collector: the usage it compares, the mark it starts at, images it freed.
 inline std::atomic<std::uint64_t> gc_used_bytes{0}, gc_trigger_bytes{0}, gc_freed_images{0};
 /// Its critical mark (images used a moment ago evicted past it): VRAM copies of the game's
 /// memory stop short of it and yield first (BufferCache::VramPromotionsPaused, LayerProcessIdle).
 inline std::atomic<std::uint64_t> gc_critical_bytes{0};
+/// Copies of loaded blocks wait for VRAM (BufferCache::VramPromotionsPaused with candidates): only
+/// then the texture collector makes room for the mirrors under their floor.
+inline std::atomic<bool> mirror_copies_waiting{false};
+/// MiB the driver's VRAM budget for the game is below the most seen this session (other programs
+/// took video memory: browsers with hardware acceleration, video players, overlays); the FPS
+/// readout shows it from 150 MiB on.
+inline std::atomic<std::uint32_t> vram_budget_lost_mb{0};
 /// Seconds of a steady clock, updated at every guest submission (cheap ages for caches).
 inline std::atomic<std::uint32_t> coarse_second{0};
 /// VRAM blocks moved back in place when idle, unbound with the memory the game unmapped, and

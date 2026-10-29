@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport shader translator: GCN instructions to IR. One Translator per program; Translate()
 // emits a block's instructions in order, each through its encoding group (Emit*) and opcode

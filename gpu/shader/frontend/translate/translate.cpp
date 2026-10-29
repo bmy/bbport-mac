@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // The translator core: the stage prologue (what GCN hands a wave in SGPRs and VGPRs at start),
 // operand reads with their modifiers (32-bit, 16-bit halves, mixed precision, 64-bit pairs,

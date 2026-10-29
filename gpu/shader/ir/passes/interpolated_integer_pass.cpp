@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Integer attributes passed as smooth float varyings (Bloodborne's instanced objects pass
 // the instance index this way, then truncate it with v_cvt_u32_f32). AMD hardware interpolates

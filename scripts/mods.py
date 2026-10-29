@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Merge loose-file mods through links, preserving the original game and mod files."""
 import argparse
@@ -8,6 +9,7 @@ from pathlib import Path
 import shutil
 import sys
 import tempfile
+import time
 
 # Top-level folders of the game's dvdroot_ps4: a mod made of these is a dvdroot_ps4 itself (adhoc:
 # the debug menu's fonts, which the retail game does not ship).
@@ -105,16 +107,54 @@ def mod_files(folder):
             yield relative, source
 
 
+# The overlay's links and what they point to. Windows without the symbolic link privilege
+# (Developer Mode off) gets directory junctions and hard links (copies across volumes) instead,
+# which is_symlink() does not see: this table does.
+LINKS = {}
+
+
+def make_link(link, target):
+    """link -> target: a symbolic link, else (Windows) a junction for a folder, a hard link or a
+    copy for a file."""
+    try:
+        link.symlink_to(target, target_is_directory=target.is_dir())
+    except OSError:
+        if os.name != 'nt':
+            raise
+        if target.is_dir():
+            import _winapi
+            _winapi.CreateJunction(str(target), str(link))
+        else:
+            try:
+                os.link(target, link)
+            except OSError:
+                shutil.copy2(target, link)
+    LINKS[link] = target
+
+
+def is_link(path):
+    return path in LINKS or path.is_symlink()
+
+
+def unlink(path):
+    """Removes a link, never what it points to (a junction is removed as a folder entry)."""
+    LINKS.pop(path, None)
+    if path.is_dir() and not path.is_symlink():
+        os.rmdir(path)
+    else:
+        path.unlink()
+
+
 def expand(directory):
     """Materialize one directory level; never write through a directory link."""
-    if directory.is_symlink():
-        target = directory.resolve(strict=True)
+    if is_link(directory):
+        target = LINKS.get(directory) or directory.resolve(strict=True)
         if not target.is_dir():
             raise ValueError(f'File/directory conflict at {directory.name}')
-        directory.unlink()
+        unlink(directory)
         directory.mkdir()
         for entry in target.iterdir():
-            (directory / entry.name).symlink_to(entry, target_is_directory=entry.is_dir())
+            make_link(directory / entry.name, entry)
     elif directory.exists() and not directory.is_dir():
         raise ValueError(f'File/directory conflict at {directory.name}')
     else:
@@ -142,7 +182,7 @@ def build_overlay(game, out, mods):
     overlay = Path(tempfile.mkdtemp(prefix='mod-game-', dir=out))
     try:
         for entry in game.iterdir():
-            (overlay / entry.name).symlink_to(entry, target_is_directory=entry.is_dir())
+            make_link(overlay / entry.name, entry)
         replaced = added = 0
         for relative, source in replacements:
             # Each component takes the game's spelling when it exists in another case.
@@ -151,19 +191,39 @@ def build_overlay(game, out, mods):
                 parent = child(parent, part)
                 expand(parent)
             destination = child(parent, relative.parts[-1])
-            if destination.is_symlink():
-                replaced += destination.resolve().is_relative_to(game)
-                destination.unlink()
+            if is_link(destination):
+                replaced += (LINKS.get(destination) or destination.resolve()).is_relative_to(game)
+                unlink(destination)
             elif destination.exists():
                 raise ValueError(f'File/directory conflict: {relative}')
             else:
                 added += 1
-            destination.symlink_to(source)
+            make_link(destination, source)
         print(f'Mods: {replaced} game files replaced, {added} added', file=sys.stderr)
         return overlay
     except BaseException:
         shutil.rmtree(overlay)
         raise
+
+
+def backup_saves(saves, state, mods):
+    """Issue #212: the game drops a mod's items from a save loaded without that mod (their ids are
+    unknown), and the next autosave keeps them dropped. When the set of mods differs from the last
+    launch's, the saves are copied first (the newest 5 copies are kept, beside the saves)."""
+    saves, state = Path(saves), Path(state)
+    now = '\n'.join(mods)
+    before = state.read_text(encoding='utf-8') if state.is_file() else None
+    if before == now:
+        return
+    if (before is not None or mods) and saves.is_dir() and any(saves.iterdir()):
+        backups = saves.parent / 'savedata-backups'
+        target = backups / time.strftime('%Y%m%d-%H%M%S')
+        shutil.copytree(saves, target, symlinks=True)
+        print(f'Mods: the set of mods changed; saves copied to {target}', file=sys.stderr)
+        for old in sorted(p for p in backups.iterdir() if p.is_dir())[:-5]:
+            shutil.rmtree(old)
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text(now, encoding='utf-8')
 
 
 def main():
@@ -173,6 +233,8 @@ def main():
     parser.add_argument('--mods-dir', required=True, type=Path)
     parser.add_argument('--config', type=Path)
     parser.add_argument('--enabled', choices=('0', '1'), default='1')
+    parser.add_argument('--saves', type=Path, help='the save folder, copied when the set of mods changes')
+    parser.add_argument('--state', type=Path, help='where the last launch\'s set of mods is kept')
     args = parser.parse_args()
     layers = []
     if args.enabled == '1':
@@ -186,6 +248,8 @@ def main():
         else:
             for name in selected(args.mods_dir, args.config):
                 layers.append((name, args.mods_dir / name))
+    if args.saves and args.state:
+        backup_saves(args.saves, args.state, [name for name, _ in layers])
     print(build_overlay(args.game, args.out, layers))
 
 

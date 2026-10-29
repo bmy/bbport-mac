@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: FSR 4 (source-v07 INT8/DOT4 model, FSR-Vulkan provider) as an alternative to the
 // FSR 3.1 context of TemporalUpscaler. It consumes the same inputs: HDR scene color, depth,
@@ -29,6 +30,8 @@ public:
         vk::Image image;
         vk::ImageView view;
         u32 width, height;
+        /// The image's own format: AMD's DLLs make their views from it (upscale/vk_fsr_amd).
+        vk::Format format = vk::Format::eUndefined;
     };
     struct Frame {
         vk::CommandBuffer cmdbuf;
@@ -45,10 +48,21 @@ public:
     /// cannot run (Problem() says why; missing assets or device features are permanent).
     bool Record(const Frame& frame);
 
+    /// Whether the v07 model for `preset` and this output size is ready; if not, it is built
+    /// on a background thread and this answers false until it is (the caller runs another
+    /// upscaler meanwhile). True too when FSR 4 cannot run at all: Record() says why.
+    bool Prepare(int preset, u32 output_width, u32 output_height);
+
+    /// Drops the context and any permanent failure (a retry after a menu change); a model
+    /// being built in the background is kept.
+    void Reset();
+
     /// Why the last Record failed, or null.
     [[nodiscard]] const char* Problem() const noexcept;
     /// Assets or device features are missing: FSR 4 will not run in this session.
     [[nodiscard]] bool Fatal() const noexcept;
+    /// AMD's FSR DLLs (upscaler fsr_amd) were found and loaded.
+    [[nodiscard]] bool AmdAvailable() const noexcept;
 
 private:
     struct Impl;

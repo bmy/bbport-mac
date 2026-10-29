@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: a shared hold of a mutex that the same thread may already hold shared. With
 // SharedFirstMutex that is safe as it is (readers never wait for a waiting writer), so this is a

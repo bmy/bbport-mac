@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Boundary tests for the native loader; uses tiny synthetic x86-64 images."""
 from paths import ROOT
 from pathlib import Path

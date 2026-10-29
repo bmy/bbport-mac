@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport render: from the game's display buffers to the window. Owns the Vulkan device, the
 // schedulers and the rasterizer. A flip is prepared on the command processor's thread (the
@@ -6,6 +7,7 @@
 // the port's overlay over it).
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <deque>
@@ -18,6 +20,7 @@
 #include "vulkan/instance.h"
 #include "render/runtime.h"
 #include "render/scheduler.h"
+#include "upscale/vk_frame_generation.h"
 #include "vulkan/swapchain.h"
 
 namespace BbCp {
@@ -48,11 +51,20 @@ struct Frame {
     u64 ready_tick = 0;
     bool is_hdr = false;
     u8 id = 0;
-    /// Frame generation: the frame interpolated before this one, encoded like it (shown first).
-    VmaAllocation interp_allocation{};
-    vk::Image interp_image{};
-    vk::ImageView interp_view{};
-    bool has_interp = false;
+    /// Frame generation: the frames generated before this one (oldest first), encoded like it
+    /// and shown first. Made with the first ones generated: most sessions never need them.
+    static constexpr u32 MaxInterp = 3;
+    std::array<VmaAllocation, MaxInterp> interp_allocation{};
+    std::array<vk::Image, MaxInterp> interp_image{};
+    std::array<vk::ImageView, MaxInterp> interp_view{};
+    u32 interp_count = 0;
+    /// Asynchronous frame generation (FrameGeneration::Async): the generated frames, waited for
+    /// and encoded when shown (PresentImage), with this frame's encoding.
+    std::array<FrameGeneration::Output, MaxInterp> interp_async{};
+    EncodePass::Settings interp_encode{};
+    vk::Format interp_view_format{};
+    /// Low latency: the frame's ID for the driver (0: a blank frame).
+    u64 present_id = 0;
 };
 
 class Presenter {
@@ -76,10 +88,12 @@ public:
 
     /// Command processor thread: the display buffer at `cpu_address` into a free frame.
     Frame* PrepareFrame(const BbVideoOut::BufferAttributeGroup& attribute, VAddr cpu_address);
-    /// Frame generation's frame interpolated before `frame` (PrepareFrame): encoded into the
-    /// frame's second image like the real one.
-    void EncodeInterpolated(Frame* frame, vk::Image image, vk::Format format, u32 width, u32 height,
-                            vk::Format display_view_format, const EncodePass::Settings& encode);
+    /// Frame generation's frame `index` generated before `frame` (PrepareFrame): encoded into
+    /// the frame's extra image like the real one.
+    void EncodeInterpolated(Frame* frame, u32 index, vk::Image image, vk::Format format, u32 width,
+                            u32 height, vk::Format display_view_format,
+                            const EncodePass::Settings& encode,
+                            vk::CommandBuffer present_cmdbuf = {});
     /// A black frame (no GPU work until it is presented).
     Frame* PrepareBlankFrame(bool present_thread);
     /// Present thread: shows `frame` and frees it (unless `is_reusing_frame`).
@@ -92,6 +106,8 @@ private:
     Frame* GetRenderFrame();
     void ReleaseFrame(Frame* frame);
     void RecreateFrame(Frame& frame, u32 width, u32 height);
+    /// Frees the frame's generated-frame images (RecreateFrame, the destructor).
+    void DestroyInterpolated(Frame& frame);
     /// The frame size: the display buffer's aspect fitted into the swapchain.
     void SetExpectedSize(u32 width, u32 height);
     /// Records the swapchain image's contents: black bars and `frame` (if any) blitted in.
@@ -99,7 +115,10 @@ private:
                        vk::Extent2D extent, vk::Image source = {});
     /// Shows `source` (or the frame's image) in the next swapchain image; false: none shown.
     /// `last`: the frame's final present (signals its fence).
-    bool PresentImage(Frame* frame, vk::Image source, bool last);
+    /// `generated`: an asynchronous generated frame (waited for already), encoded first into the
+    /// frame's image `index`; given back to the frame generation once submitted.
+    bool PresentImage(Frame* frame, vk::Image source, bool last,
+                      const FrameGeneration::Output* generated = nullptr, u32 index = 0);
 
     Frontend::WindowSDL& window;
     Instance instance;

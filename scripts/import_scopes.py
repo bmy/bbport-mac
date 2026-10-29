@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Import names in one spelling for every game.
 
 A PS4 executable names an import NID#L#M, where L and M are its own numbers for the library and

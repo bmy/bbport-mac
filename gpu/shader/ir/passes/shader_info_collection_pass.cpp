@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Fills the shader's Info from its instructions: attributes and user data it reads or writes,
 // the shared memory types, and the device features it needs (fp16/fp64, subgroup operations,
@@ -223,7 +224,10 @@ void CollectShaderInfoPass(IR::Program& program, const Profile& profile) {
         for (const auto& buffer : info.buffers) {
             if (buffer.buffer_type == BufferType::Guest) {
                 guest_buffers = true;
-                info.uses_paged_buffers |= IsPagedBuffer(true, buffer.GetSharp(info));
+                // Any guest buffer may be paged in a later permutation (size, or lazy guest
+                // memory: a range across imports): the module's physical addressing for all of
+                // them. Taken from the first permutation only, a later paged one lacked it.
+                info.uses_paged_buffers = true;
             }
         }
         if (guest_buffers && !info.uses_dma) {

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport shader translator IR: the structured program as a list of nodes (blocks and the
 // if/loop/break constructs around them), as the SPIR-V backend emits it.

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: a set of disjoint [start, end) ranges kept sorted in one array. An interval type may
 // carry data (Backing: memory and offset); it says which neighbours may merge into one interval

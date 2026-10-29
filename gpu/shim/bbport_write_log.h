@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: BB_WRITE_LOG=1 — a ring of the writes the GPU emulation makes to guest memory (fences,
 // WriteData, DmaData, buffer and image downloads), dumped when the guest faults: which of them

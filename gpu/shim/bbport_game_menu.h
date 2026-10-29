@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: the port's settings as pages of the game's own System menu ("Display", "Game effects",
 // "Game patches" after "Screen/Sound"), built and drawn by the game's menu code: rows are the

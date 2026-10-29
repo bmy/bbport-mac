@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "textures/image_info.h"
 
@@ -130,6 +131,24 @@ ImageInfo::ImageInfo(const Gcn::Image& image, const Shader::ImageResource& desc)
     guest_address = image.Address();
     alt_tile = Libraries::Kernel::sceKernelIsNeoMode() && image.alt_tile_mode;
     UpdateSize();
+}
+
+} // namespace VideoCore
+
+namespace VideoCore {
+
+ImageInfo ImageInfo::Reduced(u32 skip) const {
+    ImageInfo out = *this;
+    out.size.width = std::max(size.width >> skip, 1u);
+    out.size.height = std::max(size.height >> skip, 1u);
+    out.pitch = std::max(pitch >> skip, 1u);
+    out.resources.levels = resources.levels - skip;
+    for (u32 level = 0; level < out.resources.levels; ++level) {
+        out.mips_layout[level] = mips_layout[level + skip];
+    }
+    out.micro_tiled_mips = micro_tiled_mips >> skip;
+    out.skip_levels = u8(skip);
+    return out;
 }
 
 } // namespace VideoCore

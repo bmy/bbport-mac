@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: libkernel functions the GPU library implements (shim/bbgpu.cpp: clocks and process
 // facts from the port's runtime) or needs. The online module links against these names.

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport shader translator: the control flow graph of a GCN program. Blocks are the linear
 // ranges between branch targets and after branches; a block ends in a branch (taken when its

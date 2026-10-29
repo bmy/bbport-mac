@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Inspect an already plaintext PS4 SELF; prepare a native entry-point probe.
 
 No decryption, patches to source files, third-party modules or Python dependencies.

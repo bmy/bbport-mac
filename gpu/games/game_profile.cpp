@@ -1,5 +1,7 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "game_profile.h"
+#include "shim/bb_env.h"
 
 #include <algorithm>
 #include <array>
@@ -19,7 +21,7 @@ std::atomic<const Profile*> active{nullptr};
 } // namespace
 
 void Select(const char* serial) {
-    const char* env = std::getenv("BB_GAME_PROFILE");
+    const char* env = bb_env("BB_GAME_PROFILE");
     if (env && std::strcmp(env, "none") == 0) {
         std::printf("Game profile: none (BB_GAME_PROFILE=none): the game runs as an unknown one\n");
         return;

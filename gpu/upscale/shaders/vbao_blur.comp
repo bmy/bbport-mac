@@ -1,0 +1,63 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
+// bbport: edge-aware denoise of the raw VBAO (vbao.comp): a 5x5 Gaussian whose taps are weighted
+// down by their view-depth and normal differences, so the AO does not bleed across depth edges or
+// wash out the normal-map detail (mortar lines, carvings). Writes the
+// game's AO target (1 = unoccluded, the lighting multiplies by it), see vk_vbao.h: R8 at the
+// scene size, or with OUTPUT_RGBA the red channel of the half-size RGBA8 target of the game's
+// cheaper SSAO (green, blue and alpha are kept).
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0) uniform texture2D raw_tex; // AO, view z, normal xy
+#ifdef OUTPUT_RGBA
+layout(binding = 1, rgba8) uniform image2D ao_img;
+#else
+layout(binding = 1, r8) uniform writeonly image2D ao_img;
+#endif
+
+layout(push_constant) uniform Constants {
+    vec2 size;
+    int radius;      // taps per side; 0 copies the raw AO
+    float tolerance; // relative depth difference at which a tap's weight falls to 1/e
+    float normal_power; // tap weight times (cos of the normals' angle)^normal_power
+};
+
+// The normal stored by vbao.comp; its z faces the camera (-z). Zero for the sky.
+vec3 Normal(vec2 xy) {
+    return vec3(xy, -sqrt(max(1.0 - dot(xy, xy), 0.0)));
+}
+
+void main() {
+    const ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (pixel.x >= int(size.x) || pixel.y >= int(size.y)) {
+        return;
+    }
+    const vec4 center = texelFetch(raw_tex, pixel, 0);
+    const vec3 center_normal = Normal(center.zw);
+    const bool use_normal = normal_power > 0.0 && dot(center.zw, center.zw) > 0.0;
+    float sum = 0.0;
+    float weight = 0.0;
+    const float inv_sigma2 = 1.0 / max(float(radius * radius), 1.0);
+    for (int y = -radius; y <= radius; ++y) {
+        for (int x = -radius; x <= radius; ++x) {
+            const ivec2 p = clamp(pixel + ivec2(x, y), ivec2(0), ivec2(size) - 1);
+            const vec4 tap = texelFetch(raw_tex, p, 0);
+            const float dz = abs(tap.y - center.y) / (center.y * tolerance);
+            float w = exp(-float(x * x + y * y) * inv_sigma2 - dz);
+            if (use_normal) {
+                w *= pow(max(dot(Normal(tap.zw), center_normal), 0.0), normal_power);
+            }
+            sum += tap.r * w;
+            weight += w;
+        }
+    }
+    const float value = weight > 1e-6 ? sum / weight : center.r;
+#ifdef OUTPUT_RGBA
+    imageStore(ao_img, pixel, vec4(value, imageLoad(ao_img, pixel).gba));
+#else
+    imageStore(ao_img, pixel, vec4(value));
+#endif
+}

@@ -142,7 +142,28 @@ void runtime_memory_trap_stats(uint64_t *wait_ns, uint64_t *apply_ns, uint64_t *
     *calls=atomic_load_explicit(&trap_stat_calls,memory_order_relaxed);
     *bytes=atomic_load_explicit(&trap_stat_bytes,memory_order_relaxed);
 }
+/* bbport (native GPU process, protocol 12): per page, the newest of bb-gpu's trap changes applied
+ * there (its order, bb_trap_copy.h); allocated on the first runtime_memory_trap_seq. */
+static uint64_t *trap_seqs;
+static void trap_change(uintptr_t address, uint64_t size, unsigned reason, int on, uint64_t seq, int lift);
 void runtime_memory_trap(uintptr_t address, uint64_t size, unsigned reason, int on) {
+    trap_change(address,size,reason,on,0,0);
+}
+/* bbport (native GPU process): runtime_memory_trap from bb-gpu, `seq` its order of the change
+ * (recorded per page). A lift (`lift`: off, reasons bb-gpu found nobody there holds) is skipped on
+ * pages a newer change already reached: an owner's trap set after bb-gpu checked stays, in
+ * whichever order the two arrive (one from the faulting thread, one from the protection thread). */
+void runtime_memory_trap_seq(uintptr_t address, uint64_t size, unsigned reason, int on, uint64_t seq, int lift) {
+    if (!__atomic_load_n(&trap_seqs,__ATOMIC_ACQUIRE)) {
+        void *bytes=mmap(NULL,(TRAP_LIMIT>>12)*sizeof(uint64_t),PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE,-1,0);
+        if (bytes==MAP_FAILED) { perror("bbport: write trap order table"); return; }
+        uint64_t *expected=NULL;
+        if (!__atomic_compare_exchange_n(&trap_seqs,&expected,(uint64_t *)bytes,0,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE))
+            munmap(bytes,(TRAP_LIMIT>>12)*sizeof(uint64_t));
+    }
+    trap_change(address,size,reason,on && !lift,seq,lift);
+}
+static void trap_change(uintptr_t address, uint64_t size, unsigned reason, int on, uint64_t seq, int lift) {
     if (!size || address>=TRAP_LIMIT) return;
     if (!trap_reasons) {
         void *bytes=mmap(NULL,TRAP_LIMIT>>12,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE,-1,0);
@@ -163,8 +184,11 @@ void runtime_memory_trap(uintptr_t address, uint64_t size, unsigned reason, int 
     uintptr_t run=0; int run_level=0;
     uint64_t changed=0;
     const uintptr_t first=address>>12, last=(end-1)>>12;
+    uint64_t *const seqs=seq ? __atomic_load_n(&trap_seqs,__ATOMIC_ACQUIRE) : NULL;
     for (uintptr_t p=first; p<=last; ++p) {
-        const uint8_t old=trap_reasons[p], now=on ? (uint8_t)(old|reason) : (uint8_t)(old & ~reason);
+        const int skip=seqs && lift && seqs[p]>seq; /* bbport: a newer change reached it */
+        if (seqs && !lift && seqs[p]<seq) seqs[p]=seq;
+        const uint8_t old=trap_reasons[p], now=skip ? old : on ? (uint8_t)(old|reason) : (uint8_t)(old & ~reason);
         if (old!=now) trap_reasons[p]=now;
         const int level=trap_level(now), change=trap_level(old)!=level;
         if (run && (!change || level!=run_level)) { changed+=(p<<12)-run; trap_apply(run,p<<12,run_level); run=0; }

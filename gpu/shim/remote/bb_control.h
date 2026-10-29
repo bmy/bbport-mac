@@ -18,7 +18,7 @@ inline constexpr std::uint64_t LowBegin = 0x0800000000ull;   ///< the low region
 inline constexpr std::uint64_t LowEnd = 0x0fc0000000ull;     ///< platform.h BB_LOW_MAX (macOS)
 
 inline constexpr std::uint64_t ControlAddress = GuestEnd;
-inline constexpr std::uint64_t ControlBytes = 8ull << 20;
+inline constexpr std::uint64_t ControlBytes = 16ull << 20; ///< bbport: four channels (protocol 12)
 /// Pool bytes after direct and flexible memory for the control block and shared image data.
 inline constexpr std::uint64_t HostSpanBytes = 512ull << 20;
 
@@ -67,6 +67,10 @@ struct ControlBlock {
     /// bbport: the guest hooks' fresh ranges as calls (BB_REMOTE_FRESH_SYNC=1, game process ->
     /// bb-gpu), served by a bb-gpu thread that does nothing else (remote_back.cpp FreshThread).
     ChannelLayout fresh;
+    /// bbport (protocol 12): write faults from threads that hold the runtime's lock (game process
+    /// -> bb-gpu), served by a bb-gpu thread of their own (remote_back.cpp FaultThread), never
+    /// queued behind a fault whose protections wait for that lock.
+    ChannelLayout locked;
     alignas(4096) SharedState state;
 };
 static_assert(sizeof(ControlBlock) <= ControlBytes);

@@ -66,6 +66,7 @@
 #include "shader/ir/passes/srt.h"
 #include "remote/bb_protocol.h"
 #include "remote/bb_remote.h"
+#include "remote/bb_trap_copy.h"
 #include "render/presenter.h"
 #include "render/rasterizer.h"
 
@@ -93,7 +94,7 @@ struct State {
     int pool_fd = -1;
     u64 pool_bytes = 0;
     ControlBlock* control = nullptr;
-    std::unique_ptr<Channel> channel, protect, fresh;
+    std::unique_ptr<Channel> channel, protect, fresh, locked;
     MemoryMirror guest, low;
     VmaTable table;
     std::mutex hook_mutex;
@@ -119,48 +120,28 @@ State g;
 /// meanwhile is asked of the faulting thread, which applies it while it waits (ForwardProtect).
 thread_local Channel::Reply* fault_reply = nullptr;
 
-/// Write traps (runtime_memory_trap, bbport 0.5): the game process keeps the page protections
-/// (and its own table of reasons, which is the one that counts); this process keeps a copy of the
-/// reasons for its GPU code's questions, one byte per 4 KiB page below TrapLimit, set by its own
-/// trap calls and cleared where the game's mappings change, as runtime_memory.c's trap_forget.
-/// Every owner of a trap (the layer's VRAM copies, images, occlusion and VRAM-data reads) is GPU
-/// code, so it is this process's: the copy differs from the game's only when a trap crosses a
-/// remap on its way (set here for the old mapping, applied there to the new one). A fault brings
-/// the game's reasons for its page (FaultArgs::reasons): any nobody here holds is lifted, and the
-/// fault goes through the same handlers as in one process (WriteFault).
-constexpr u64 TrapLimit = 1ull << 40;
-std::atomic<u8*> trap_reasons{nullptr};
-std::mutex trap_mutex;
-/// runtime_memory_trap_stats: waits for trap_mutex here, and the game process applying them.
+/// Sets fault_reply for a scope.
+struct FaultScope {
+    explicit FaultScope(Channel::Reply* reply) { fault_reply = reply; }
+    ~FaultScope() { fault_reply = nullptr; }
+    FaultScope(const FaultScope&) = delete;
+    FaultScope& operator=(const FaultScope&) = delete;
+};
+
+/// Write traps (runtime_memory_trap, bbport 0.5): this process's copy of the game's reasons
+/// (bb_trap_copy.h), for its GPU code's questions, set by its own trap calls and cleared where the
+/// game's mappings change. Every owner of a trap (the layer's VRAM copies, images, occlusion and
+/// VRAM-data reads) is GPU code, so it is this process's: the copy differs from the game's only
+/// when a trap crosses a remap on its way (set here for the old mapping, applied there to the new
+/// one). A fault brings the game's reasons for its page (FaultArgs::reasons): any nobody here
+/// holds is lifted, and the fault goes through the same handlers as in one process (WriteFault).
+constexpr u64 TrapLimit = TrapCopy::Limit;
+TrapCopy traps;
+/// runtime_memory_trap_stats: changes of the copy here, and the game process applying them.
 std::atomic<u64> trap_wait_ns{0}, trap_apply_ns{0}, trap_calls{0}, trap_bytes{0};
 
-u8* TrapTable() {
-    if (u8* table = trap_reasons.load(std::memory_order_acquire)) {
-        return table;
-    }
-    void* bytes = mmap(nullptr, TrapLimit >> 12, PROT_READ | PROT_WRITE,
-                       MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
-    if (bytes == MAP_FAILED) {
-        std::perror("GPU process: write trap table");
-        return nullptr;
-    }
-    u8* expected = nullptr;
-    if (!trap_reasons.compare_exchange_strong(expected, static_cast<u8*>(bytes),
-                                              std::memory_order_acq_rel)) {
-        munmap(bytes, TrapLimit >> 12);
-        return expected;
-    }
-    return static_cast<u8*>(bytes);
-}
-
 void TrapForget(u64 start, u64 end) {
-    u8* table = trap_reasons.load(std::memory_order_acquire);
-    if (!table || start >= TrapLimit) {
-        return;
-    }
-    end = std::min(end, TrapLimit);
-    std::scoped_lock lock{trap_mutex};
-    std::memset(table + (start >> 12), 0, ((end + 4095) >> 12) - (start >> 12));
+    traps.Forget(start, end);
 }
 
 template <typename T>
@@ -553,31 +534,35 @@ struct FaultContext {
 };
 
 /// Reasons the game's table holds for the page that nobody here does (see TrapLimit): lifted
-/// there by the faulting thread (fault_reply). bbport: checked and lifted under trap_mutex, which
-/// an owner's MemoryTrap takes to change the table before it sends: a trap set meanwhile is seen
-/// here (kept) or sent after the lift was applied. (Checked before, lifted after the lock: a new
-/// trap lifted in the game while it counted here, CPU writes unseen.) The wait under the lock is
-/// for the faulting thread only, which needs nothing of this process to apply it.
+/// there by the faulting thread (fault_reply). bbport (protocol 12): the lift carries the copy's
+/// order when it was checked (TrapCopy::Stale), and the game drops it on a page a newer change
+/// already reached (runtime_memory_trap_seq): a trap an owner sets meanwhile stays, whichever
+/// arrives first. Protocol 11 held the copy's lock across the faulting thread's apply instead,
+/// which can wait for the runtime's lock: every MemoryTrap here waited with it. Dropped, the
+/// stale reasons fault again and are lifted then.
 bool LiftStaleTraps(u64 address, unsigned game_reasons) {
-    if (!(game_reasons & 0xffu) || address >= TrapLimit || !fault_reply) {
+    if (!fault_reply) {
         return false;
     }
-    std::scoped_lock lock{trap_mutex};
-    const u8* table = trap_reasons.load(std::memory_order_acquire);
-    const unsigned stale = game_reasons & 0xffu & ~unsigned(table ? table[address >> 12] : 0);
-    if (stale) {
-        ForwardProtect(ProtectArgs{address & ~u64(4095), 4096, ProtectTrap | stale, 0});
+    const TrapCopy::Lift lift = traps.Stale(address, game_reasons);
+    if (!lift.reasons) {
+        return false;
     }
-    return stale != 0;
+    const u64 t0 = MonotonicNs();
+    ForwardProtect(
+        ProtectArgs{address & ~u64(4095), 4096, ProtectTrap | ProtectLift | lift.reasons, 0, lift.seq});
+    trap_apply_ns.fetch_add(MonotonicNs() - t0, std::memory_order_relaxed);
+    trap_calls.fetch_add(1, std::memory_order_relaxed);
+    trap_bytes.fetch_add(4096, std::memory_order_relaxed);
+    return true;
 }
 
 void WriteFault(const Message& message, Channel::Reply& reply) {
     const auto args = Payload<FaultArgs>(message);
     // bbport: what the handlers decide is applied by the faulting thread while it waits (asked
     // over this call's slot), each before the handler goes on, as in one process; with the
-    // runtime's lock held there too (args.lock_held), so nothing here waits for the protection
-    // thread meanwhile. See FaultReply.
-    fault_reply = reply.CanAsk() ? &reply : nullptr;
+    // runtime's lock held there too (args.lock_held: then on FaultThread). See FaultReply.
+    const FaultScope scope{reply.CanAsk() ? &reply : nullptr};
     const bool lifted = LiftStaleTraps(args.address, args.reasons);
     int handled = 0;
     if (Core::Memory::Instance()->GetRasterizer()) {
@@ -589,7 +574,6 @@ void WriteFault(const Message& message, Channel::Reply& reply) {
                       ? 1
                       : 0;
     }
-    fault_reply = nullptr;
     // Only stale reasons held the page (nobody here claims it): the write is retried.
     const FaultReply out{handled || lifted ? 1 : 0, 0};
     reply(&out, sizeof(out));
@@ -910,22 +894,47 @@ void ChunkThread() {
 
 /// bbport: the guest hooks' fresh ranges as calls (BB_REMOTE_FRESH_SYNC=1, ControlBlock::fresh):
 /// NoteFreshRange here before the hook's thread writes the new block, as it does itself in one
-/// process. Deadlock-free on a thread of its own: it waits only for NoteFreshRange's locks (the
-/// tracker's regions, pending_assets_mutex), whose holders may wait for the game process
-/// (protections, sends) but never for the hook's thread (game code: no runtime or HLE lock held)
-/// or for this one. Not the main reader (stuck behind a fault or a submission, and a fault's
-/// handler takes those locks), nor ChunkThread (must never wait: the runtime may hold its lock).
-/// Not ordered with the main channel's earlier messages (dead and live ranges included).
+/// process, and (protocol 12) after the main reader has handled what the game sent before it
+/// (maps, remaps, dead and live ranges: FreshArgs::after). Deadlock-free on a thread of its own:
+/// it waits for the main reader, holding nothing, then for NoteFreshRange's locks (the tracker's
+/// regions, pending_assets_mutex). The main reader's waits (faulting threads' applies, the
+/// runtime's lock, GPU threads) and those locks' holders' (the game process's protection thread
+/// and reader) never wait for the hook's thread (game code: no runtime or HLE lock held) or for
+/// this one. Not ChunkThread (must never wait: the runtime may hold its lock).
 void FreshThread() {
     Common::SetCurrentThreadName("bb:remote-fresh");
     for (;;) {
         g.fresh->ReceiveOne(
             [](const Message& message, auto&& reply) {
                 if (message.type == MsgFreshRange) {
-                    GuestHookRange(MsgFreshRange, Payload<RangeArgs>(message));
+                    const auto args = Payload<FreshArgs>(message);
+                    g.channel->WaitHandled(args.after);
+                    GuestHookRange(MsgFreshRange, RangeArgs{args.address, args.size});
                 }
                 const ResultReply out{0, 0};
                 reply(&out, sizeof(out));
+            },
+            [] { return false; });
+    }
+}
+
+/// bbport (protocol 12): write faults from threads that hold the runtime's lock
+/// (ControlBlock::locked). On the main reader they could queue behind another fault whose
+/// protections its faulting thread cannot apply until this one's thread leaves the lock: a cycle
+/// one process does not have (each fault there is handled on its own thread). Here a lock-holding
+/// thread's fault waits for nothing but its handlers, and their waits (owner locks, the faulting
+/// thread's own apply, which needs only the lock it holds and the game's trap_mutex) are the ones
+/// its own handler has in one process. They are served one at a time: two can be pending only
+/// with both holding the lock shared, and one's handling needs the other to leave it only where
+/// one process stops too (a nested read lock behind a waiting writer).
+void FaultThread() {
+    Common::SetCurrentThreadName("bb:remote-faults");
+    for (;;) {
+        g.locked->ReceiveOne(
+            [](const Message& message, auto&& reply) {
+                if (message.type == MsgWriteFault) {
+                    WriteFault(message, reply);
+                }
             },
             [] { return false; });
     }
@@ -1101,7 +1110,8 @@ int Main(int argc, char** argv) {
     g.channel = std::make_unique<Channel>(&g.control->channel, Side::Backend);
     g.protect = std::make_unique<Channel>(&g.control->protect, Side::Backend);
     g.fresh = std::make_unique<Channel>(&g.control->fresh, Side::Backend);
-    if (!g.channel->Valid() || !g.protect->Valid() || !g.fresh->Valid()) {
+    g.locked = std::make_unique<Channel>(&g.control->locked, Side::Backend);
+    if (!g.channel->Valid() || !g.protect->Valid() || !g.fresh->Valid() || !g.locked->Valid()) {
         std::fprintf(stderr, "GPU process: the control block is not initialized\n");
         return 5;
     }
@@ -1141,6 +1151,7 @@ int Main(int argc, char** argv) {
     std::thread(ReaderThread).detach();
     std::thread(ChunkThread).detach();
     std::thread(FreshThread).detach();
+    std::thread(FaultThread).detach();
 #ifdef __APPLE__
     bbgpu_main_thread_loop(); // Cocoa: the window and its events belong to the main thread
 #else
@@ -1387,35 +1398,25 @@ void ForwardProtect(const ProtectArgs& args) {
 }
 
 void MemoryGpuProtect(uintptr_t address, u64 size, int read, int write) {
-    ForwardProtect(ProtectArgs{address, size, u32(read != 0), u32(write != 0)});
+    ForwardProtect(ProtectArgs{address, size, u32(read != 0), u32(write != 0), 0});
 }
 
 void MemoryTrap(uintptr_t address, u64 size, unsigned reason, int on) {
-    if (!size || address >= TrapLimit || address + size < address || (reason & ProtectTrap)) {
+    if (reason & (ProtectTrap | ProtectLift)) {
         return;
     }
-    u8* table = TrapTable();
-    if (!table) {
-        return;
-    }
-    const u64 end = std::min<u64>(address + size, TrapLimit);
     const u64 t0 = MonotonicNs();
-    u64 t1 = 0;
-    {
-        std::scoped_lock lock{trap_mutex};
-        t1 = MonotonicNs();
-        for (u64 page = address >> 12; page <= (end - 1) >> 12; ++page) {
-            const u8 old = table[page];
-            __atomic_store_n(&table[page], on ? u8(old | reason) : u8(old & ~reason),
-                             __ATOMIC_RELEASE);
-        }
+    const TrapCopy::Order order = traps.Change(address, size, reason, on != 0);
+    if (!order.size) {
+        return;
     }
-    const u64 t2 = MonotonicNs();
-    ForwardProtect(ProtectArgs{address, end - address, ProtectTrap | reason, on ? 1u : 0u});
+    const u64 t1 = MonotonicNs();
+    ForwardProtect(
+        ProtectArgs{order.address, order.size, ProtectTrap | reason, on ? 1u : 0u, order.seq});
     trap_wait_ns.fetch_add(t1 - t0, std::memory_order_relaxed);
-    trap_apply_ns.fetch_add(MonotonicNs() - t2, std::memory_order_relaxed);
+    trap_apply_ns.fetch_add(MonotonicNs() - t1, std::memory_order_relaxed);
     trap_calls.fetch_add(1, std::memory_order_relaxed);
-    trap_bytes.fetch_add(end - address, std::memory_order_relaxed);
+    trap_bytes.fetch_add(order.size, std::memory_order_relaxed);
 }
 
 void TrapStats(u64* wait_ns, u64* apply_ns, u64* calls, u64* bytes) {
@@ -1426,9 +1427,7 @@ void TrapStats(u64* wait_ns, u64* apply_ns, u64* calls, u64* bytes) {
 }
 
 unsigned MemoryTrapReasons(uintptr_t address) {
-    const u8* table = trap_reasons.load(std::memory_order_acquire);
-    return table && address < TrapLimit ? __atomic_load_n(&table[address >> 12], __ATOMIC_ACQUIRE)
-                                        : 0;
+    return traps.Reasons(address);
 }
 
 void SetGpuHooks(GpuRange map, GpuRange unmap, GpuRange invalidate) {

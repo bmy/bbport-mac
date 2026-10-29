@@ -11,7 +11,7 @@
 
 namespace BbRemote {
 
-inline constexpr std::uint32_t ProtocolVersion = 11;
+inline constexpr std::uint32_t ProtocolVersion = 12;
 
 enum Msg : std::uint32_t {
     // ---- game process -> GPU process ----
@@ -19,7 +19,8 @@ enum Msg : std::uint32_t {
     MsgMapMemory = 2,   ///< MapArgs: a guest mapping to mirror (before the GPU hears of it)
     MsgUnmapMemory = 3, ///< RangeArgs
     /// call: FaultArgs -> FaultReply; meanwhile MsgProtect asked of the faulting thread
-    /// (Channel::Reply::Ask): it applies the fault's protections itself, as they are decided
+    /// (Channel::Reply::Ask): it applies the fault's protections itself, as they are decided.
+    /// Protocol 12: with lock_held on ControlBlock::locked (its own bb-gpu thread), else here
     MsgWriteFault = 4,
     MsgShutdown = 5,    ///< call: no payload; the GPU process exits after answering
     MsgInit = 6,        ///< call: InitArgs -> ResultReply (window, Vulkan device, GPU core)
@@ -31,7 +32,8 @@ enum Msg : std::uint32_t {
     // bbport 0.7's memory model (the GPU uses the game's memory in place).
     MsgGuestMemory = 12, ///< call -> GuestMemoryReply: how bb-gpu's GPU takes the game's memory
     /// RangeArgs: the game's hooks (CoreServices::fresh_range); BB_REMOTE_FRESH_SYNC=1: a call on
-    /// ControlBlock::fresh -> ResultReply, answered once bb-gpu's buffer cache has the range
+    /// ControlBlock::fresh, FreshArgs -> ResultReply, answered once bb-gpu's buffer cache has the
+    /// range (after the main channel's messages before it)
     MsgFreshRange = 13,
     MsgDeadRange = 14,   ///< RangeArgs: CoreServices::dead_range
     MsgLiveRange = 15,   ///< RangeArgs: CoreServices::live_range
@@ -144,10 +146,19 @@ struct MirrorProtectArgs {
 struct ProtectArgs {
     std::uint64_t address, size;
     std::uint32_t read, write;
+    std::uint64_t seq; ///< a trap's: bb-gpu's order of its trap changes (bb_trap_copy.h)
 };
 /// ProtectArgs.read with this bit: a write trap (runtime_memory_trap) rather than a protection;
 /// the rest of `read` is the trap's reason and `write` is 1 (on) or 0 (off).
 inline constexpr std::uint32_t ProtectTrap = 0x80000000u;
+/// With ProtectTrap (off): a lift of reasons nobody in bb-gpu holds (a trap that crossed a remap),
+/// dropped on a page a change newer than `seq` already reached (runtime_memory_trap_seq).
+inline constexpr std::uint32_t ProtectLift = 0x40000000u;
+/// MsgFreshRange as a call (BB_REMOTE_FRESH_SYNC=1).
+struct FreshArgs {
+    std::uint64_t address, size;
+    std::uint64_t after; ///< the main channel's bytes written before it (Channel::Written)
+};
 struct ResultReply {
     std::int32_t result;
     std::uint32_t pad;
@@ -159,7 +170,7 @@ struct ValueArgs {
 struct FaultArgs {
     std::uint64_t address, rip;
     std::uint32_t is_write;
-    std::uint32_t lock_held; ///< the faulting thread holds the runtime's lock (it faulted in it)
+    std::uint32_t lock_held; ///< the faulting thread holds the runtime's lock (ControlBlock::locked)
     std::uint32_t reasons;   ///< the game's write trap reasons for the page (runtime_memory.c)
     std::uint32_t pad;
 };
@@ -307,7 +318,8 @@ struct GameSettingsArgs {
 static_assert(sizeof(HelloArgs) == 80 && sizeof(HelloReply) == 16 + 16 * MaxTakenRanges &&
               sizeof(MapArgs) == 40 &&
               sizeof(RangeArgs) == 16 && sizeof(MirrorProtectArgs) == 24 &&
-              sizeof(ProtectArgs) == 24 && sizeof(ResultReply) == 8 && sizeof(ValueArgs) == 8);
+              sizeof(ProtectArgs) == 32 && sizeof(ResultReply) == 8 && sizeof(ValueArgs) == 8 &&
+              sizeof(FreshArgs) == 24);
 static_assert(sizeof(FaultArgs) == 32 && sizeof(FaultReply) == 8);
 static_assert(sizeof(InitArgs) == 16 + 128 + 32 + 1024 && sizeof(SubmitGfxArgs) == 40 &&
               sizeof(SubmitAscArgs) == 16 && sizeof(ComputeQueueArgs) == 24);

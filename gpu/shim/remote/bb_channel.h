@@ -13,9 +13,12 @@
 //   handler goes on (bb-gpu's write faults: the faulting thread applies their protections).
 // - Waiting sleeps on a 32-bit word in the shared region (os_sync_wait_on_address with the shared
 //   flag on macOS 14.4+, a shared futex on Linux) after a short spin.
-// Both sides only use std::atomic with acquire/release, so x86-64 (TSO) and arm64 agree.
+// Both sides only use lock-free std::atomic: data published with release stores and taken with
+// acquire loads; the sleep/wake handshake (a waiter counts itself in, then checks; a publisher
+// stores, then checks for waiters) seq_cst on both sides. So x86-64 (TSO) and arm64 agree.
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <chrono>
@@ -93,6 +96,9 @@ void WaitUntil(std::atomic<std::uint32_t>& word, std::atomic<std::uint32_t>& sle
         }
         const std::uint32_t seen = word.load(std::memory_order_acquire);
         sleepers.fetch_add(1, std::memory_order_seq_cst);
+        // bbport: ready()'s loads are acquire: the fence orders them after the count (Dekker,
+        // against a publisher's seq_cst store and sleepers load).
+        std::atomic_thread_fence(std::memory_order_seq_cst);
         if (!ready()) {
             WaitWord(word, seen);
         }
@@ -353,6 +359,22 @@ public:
         return true;
     }
 
+    /// bbport: bytes this side has written to its peer so far (a position in its outgoing ring).
+    [[nodiscard]] std::uint64_t Written() const {
+        return layout->control[Out()].head.load(std::memory_order_acquire);
+    }
+
+    /// bbport: waits until this side's reader has handled every message the peer wrote before
+    /// `position` (its Written() then). The reader moves its tail past a message only after the
+    /// handler returns, and signals the space word then; a position past what the peer has
+    /// written is taken as that.
+    void WaitHandled(std::uint64_t position) {
+        RingControl& c = layout->control[In()];
+        position = std::min(position, c.head.load(std::memory_order_acquire));
+        WaitUntil(c.space_word, c.space_sleepers,
+                  [&] { return c.tail.load(std::memory_order_acquire) >= position; });
+    }
+
     /// Wakes this side's reader (after its stop condition became true).
     void WakeReader() {
         RingControl& c = layout->control[In()];
@@ -389,12 +411,16 @@ private:
         }
         const Message message{slot.ask_type, request, n};
         std::uint32_t answer_size = 0;
+        bool answered = false;
         auto answer = [&](const void* data, std::uint32_t size) {
-            if (answer_size || !size) {
-                return;
+            if (answered) {
+                return; // once
             }
-            answer_size = size < MaxPayload ? size : MaxPayload;
-            std::memcpy(slot.data, data, answer_size);
+            answered = true;
+            answer_size = !data ? 0 : size < MaxPayload ? size : MaxPayload;
+            if (answer_size) {
+                std::memcpy(slot.data, data, answer_size);
+            }
         };
         serve(message, answer);
         slot.size = answer_size;

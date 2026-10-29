@@ -153,6 +153,7 @@ void runtime_memory_set_mirror_hook(void (*)(int, uintptr_t, uint64_t, uint64_t,
 int runtime_memory_lock_held(void) {
     return 0;
 }
+void runtime_memory_trap_seq(uintptr_t, uint64_t, unsigned, int, uint64_t, int) {}
 int runtime_memory_exclude(uintptr_t, uintptr_t) {
     return -1;
 }

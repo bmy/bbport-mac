@@ -134,7 +134,7 @@ int GpuProcess(int channel_fd, int pool_fd) {
                                 // protection in the game process before it retries the write.
                                 RangeArgs page;
                                 std::memcpy(&page, m.data, sizeof(page));
-                                ProtectArgs protect{page.address, page.size, 1, 1};
+                                ProtectArgs protect{page.address, page.size, 1, 1, 0};
                                 ResultReply result{-1, 0};
                                 if (page.address >= AskFrom) {
                                     CHECK(reply.CanAsk());

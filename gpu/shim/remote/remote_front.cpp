@@ -63,6 +63,8 @@ int runtime_memory_lock_held(void);
 int runtime_memory_exclude(uintptr_t start, uintptr_t end);
 void runtime_memory_gpu_protect(uintptr_t address, uint64_t size, int read, int write);
 void runtime_memory_trap(uintptr_t address, uint64_t size, unsigned reason, int on);
+void runtime_memory_trap_seq(uintptr_t address, uint64_t size, unsigned reason, int on,
+                             uint64_t seq, int lift);
 unsigned runtime_memory_trap_reasons(uintptr_t address);
 typedef void (*RuntimeGpuRange)(uintptr_t address, uint64_t size);
 void runtime_memory_set_gpu_hooks(RuntimeGpuRange map, RuntimeGpuRange unmap,
@@ -143,7 +145,7 @@ constexpr u64 SharePage = 16384; // shared mappings are whole 16 KiB pages, even
 
 struct State {
     ControlBlock* control = nullptr;
-    std::unique_ptr<Channel> channel, protect, fresh;
+    std::unique_ptr<Channel> channel, protect, fresh, locked;
     bool fresh_sync = false; ///< BB_REMOTE_FRESH_SYNC=1: FreshRange is a call (ControlBlock::fresh)
     int pool_fd = -1;
     u64 pool_bytes = 0, host_offset = 0, host_next = 0, host_end = 0;
@@ -508,7 +510,10 @@ void ApplyProtect(const ProtectArgs& args) {
                          static_cast<unsigned long long>(args.size));
             return;
         }
-        runtime_memory_trap(args.address, args.size, args.read & ~ProtectTrap, args.write ? 1 : 0);
+        // bbport (protocol 12): in bb-gpu's order (bb_trap_copy.h); a lift only where no newer
+        // change reached the page.
+        runtime_memory_trap_seq(args.address, args.size, args.read & ~(ProtectTrap | ProtectLift),
+                                args.write ? 1 : 0, args.seq, (args.read & ProtectLift) ? 1 : 0);
     } else {
         runtime_memory_gpu_protect(args.address, args.size, int(args.read), int(args.write));
     }
@@ -741,10 +746,12 @@ bool Init(const BbGpuConfig& config) {
     Channel::Init(&g.control->channel);
     Channel::Init(&g.control->protect);
     Channel::Init(&g.control->fresh);
+    Channel::Init(&g.control->locked);
     new (&g.control->state) SharedState{};
     g.channel = std::make_unique<Channel>(&g.control->channel, Side::Frontend);
     g.protect = std::make_unique<Channel>(&g.control->protect, Side::Frontend);
     g.fresh = std::make_unique<Channel>(&g.control->fresh, Side::Frontend);
+    g.locked = std::make_unique<Channel>(&g.control->locked, Side::Frontend);
     if (bb_env_on("BB_REMOTE_FRESH_SYNC")) {
         g.fresh_sync = true;
         std::printf("GPU process: fresh ranges are calls (BB_REMOTE_FRESH_SYNC=1)\n");
@@ -1021,25 +1028,29 @@ int HandleFault(void* context, void* address) {
     if (!runtime_memory_is_mapped(addr & ~u64(4095), 1)) {
         return 0;
     }
+    const bool lock_held = runtime_memory_lock_held() != 0;
     const FaultArgs args{addr,
                          BbPortable::Rip(context),
                          Common::IsWriteError(context) ? 1u : 0u,
-                         runtime_memory_lock_held() ? 1u : 0u,
+                         lock_held ? 1u : 0u,
                          runtime_memory_trap_reasons(addr),
                          0};
     FaultReply reply{};
     // bbport: the protections bb-gpu's handlers decide for this fault are applied here, by this
     // thread while it waits, each before the handler goes on (asked over the call's reply slot),
     // as this thread's own handler does in one process; with the runtime's lock held here too
-    // (the protection thread would wait for it). See FaultReply.
-    g.channel->Call(MsgWriteFault, &args, sizeof(args), &reply, sizeof(reply),
-                    [](const Message& message, auto&& answer) {
-                        if (message.type == MsgProtect) {
-                            ApplyProtect(Payload<ProtectArgs>(message));
-                        }
-                        const ResultReply result{0, 0};
-                        answer(&result, sizeof(result));
-                    });
+    // (the protection thread would wait for it). See FaultReply. bbport (protocol 12): holding
+    // that lock, on a channel of its own (remote_back.cpp FaultThread): on the main one it could
+    // wait behind a fault whose thread waits for this one's lock.
+    Channel& channel = lock_held ? *g.locked : *g.channel;
+    channel.Call(MsgWriteFault, &args, sizeof(args), &reply, sizeof(reply),
+                 [](const Message& message, auto&& answer) {
+                     if (message.type == MsgProtect) {
+                         ApplyProtect(Payload<ProtectArgs>(message));
+                     }
+                     const ResultReply result{0, 0};
+                     answer(&result, sizeof(result));
+                 });
     return reply.handled;
 }
 
@@ -1054,7 +1065,8 @@ void FreshRange(u64 address, u64 size) {
     // FreshThread (deadlock-free: see there); this thread runs the game's code (no runtime or HLE
     // lock held).
     if (g.fresh_sync) {
-        const RangeArgs args{address, size};
+        // After what this process sent bb-gpu before it (FreshThread waits for that).
+        const FreshArgs args{address, size, g.channel->Written()};
         ResultReply result{};
         g.fresh->Call(MsgFreshRange, &args, sizeof(args), &result, sizeof(result));
         return;

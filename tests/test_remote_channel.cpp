@@ -2,8 +2,9 @@
 // bbport: the GPU process channel (gpu/shim/remote/bb_channel.h) between two real processes:
 // ordering, ring wrap-around, synchronous calls both ways (a call made from inside a handler),
 // requests a handler asks its caller (Reply::Ask, as bb-gpu asks the faulting thread to apply a
-// write fault's protections: many per call, in order; a plain Call asked gets nothing back), and
-// call latency.
+// write fault's protections: many per call, in order; a plain Call asked gets nothing back),
+// waiting for the reader to have handled what the peer wrote before a position (WaitHandled, as
+// bb-gpu's FreshThread does), and call latency.
 //   c++ -std=c++20 -O2 -pthread -Igpu/shim tests/test_remote_channel.cpp -o /tmp/channel-test
 #include <cassert>
 #include <chrono>
@@ -199,6 +200,42 @@ int main() {
         std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start)
             .count() /
         rounds;
+
+    // 4. WaitHandled (in this process: a slow reader, another thread of its side waiting).
+    {
+        void* memory2 = mmap(nullptr, ChannelBytes, PROT_READ | PROT_WRITE,
+                             MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+        CHECK(memory2 != MAP_FAILED);
+        Channel::Init(memory2);
+        Channel front{memory2, Side::Frontend}, back{memory2, Side::Backend};
+        std::atomic<int> handled{0};
+        std::atomic<bool> done{false};
+        std::thread slow([&] {
+            while (back.ReceiveOne(
+                [&](const Message&, auto&&) {
+                    std::this_thread::sleep_for(std::chrono::microseconds(50));
+                    handled.fetch_add(1);
+                },
+                [&] { return done.load(); })) {
+            }
+        });
+        std::uint64_t value = 0;
+        for (int i = 0; i < 200; ++i) {
+            front.Send(Data, &value, sizeof(value));
+        }
+        const std::uint64_t position = front.Written();
+        for (int i = 0; i < 50; ++i) {
+            front.Send(Data, &value, sizeof(value)); // after the position: not waited for
+        }
+        back.WaitHandled(position);
+        CHECK(handled.load() >= 200);
+        back.WaitHandled(~0ull); // past what was written: as far as that
+        CHECK(handled.load() == 250);
+        done = true;
+        back.WakeReader();
+        slow.join();
+        munmap(memory2, ChannelBytes);
+    }
 
     std::uint64_t received = 0;
     CHECK(channel.Call(Quit, nullptr, 0, &received, sizeof(received)) == 8);

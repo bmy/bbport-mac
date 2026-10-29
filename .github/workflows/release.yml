@@ -203,7 +203,9 @@ jobs:
           for log in out/gpu-errors.txt out/loader-build.log out/gpu-arm64-errors.txt \
                      out/gpu-arm64-configure.log deps-x86_64/setup.log deps-arm64/setup.log out/package.log; do
             [[ -f $log ]] || continue
-            # The dependencies' logs: their last lines (a failed clone says "fatal:", not "error").
+            # The dependencies' logs (kept with their cache, appended to): only one that ends in a
+            # stop, its last lines (a failed clone says "fatal:", not "error").
+            [[ $log == */setup.log ]] && ! tail -40 "$log" | grep -q 'STOP:' && continue
             { [[ $log == *errors.txt ]] && cat "$log" ||
               { [[ $log == */package.log || $log == */setup.log ]] && tail -80 "$log" || grep -E 'error' "$log"; }; } | head -640 |
               split -l 80 - "/tmp/annotation-$(basename "$log")-"

@@ -83,12 +83,12 @@ clone_into() {  # clone_into <dir> <tag> <git url>: a fresh shallow clone
     git -c advice.detachedHead=false clone -q --depth 1 --branch "$2" "$3" "$1"
 }
 fetch() {  # fetch <name> <git url> <tag> <commit> [mirror url]: the mirror if the first fails
-    local dir=$SRC/$1 url
+    local dir=$SRC/$1 url ok=
     if [[ ! -d $dir/.git ]] || [[ $(git -C "$dir" rev-parse HEAD 2>/dev/null) != "$4" ]]; then
         for url in "$2" ${5:+"$5"}; do
-            retry clone_into "$dir" "$3" "$url" && break
+            retry clone_into "$dir" "$3" "$url" && { ok=1; break; }
         done
-        [[ -d $dir/.git ]] || die "$1: could not clone $2${5:+ or $5}"
+        [[ -n $ok ]] || die "$1: could not clone $2${5:+ or $5}"
     fi
     verify_rev "$dir" "$4"
 }

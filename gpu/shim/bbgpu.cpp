@@ -368,13 +368,16 @@ extern "C" int bbgpu_init(const BbGpuConfig* config) {
         BbSettings::save_game_menu_keys_only = true;
         // The hooks in the game's own code (fixes, live effects, aspect ratio): the game's code
         // is in this process; in one process the buffer cache installs them, here bb-gpu doesn't.
-        // bbport: their GPU-range notifications (fresh, dead, live ranges) are not forwarded to
-        // bb-gpu's buffer cache yet.
+        // Their GPU ranges (fresh, dead, live) go to bb-gpu's buffer cache.
         if (const Game::Profile* game = Game::Active(); game && game->install_hooks) {
             if (bb_env_off("BB_GUEST_HOOKS")) {
                 std::printf("Guest hooks: off (BB_GUEST_HOOKS=0): nothing in the game's own code is hooked\n");
             } else {
-                game->install_hooks(Game::CoreServices{.fresh_range = nullptr});
+                game->install_hooks(Game::CoreServices{
+                    .fresh_range = &BbRemote::Front::FreshRange,
+                    .dead_range = &BbRemote::Front::DeadRange,
+                    .live_range = &BbRemote::Front::LiveRange,
+                });
             }
         }
 #ifdef __APPLE__

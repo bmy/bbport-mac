@@ -527,9 +527,15 @@ void Display::VblankThread(std::stop_token stop) {
 /// The game shows its world (a frame of BB_PAD_WORLD_DRAWS draws or more): runtime_pad.c times
 /// recordings and replays by it, so loading screens of any length do not shift them.
 extern "C" int bbgpu_world_active(void) {
+    if (BbRemote::FrontActive()) {
+        return BbRemote::Front::WorldActive(); // bbport: Display::Flip runs in bb-gpu
+    }
     return BbVideoOut::world_active.load(std::memory_order_relaxed) ? 1 : 0;
 }
 
 extern "C" unsigned long long bbgpu_world_us(void) {
+    if (BbRemote::FrontActive()) {
+        return BbRemote::Front::WorldUs();
+    }
     return BbVideoOut::world_us.load(std::memory_order_relaxed);
 }

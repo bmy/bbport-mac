@@ -28,11 +28,21 @@
 #endif
 
 #include "bbport_overlay.h"
+#include "remote/bb_remote.h"
 #include "bbport_trophy_data.h"
 
 namespace {
 
 namespace fs = std::filesystem;
+
+/// bbport (native GPU process): the overlay that shows the pop-up is bb-gpu's.
+void Show(char grade, const std::string& name, const fs::path& icon, float delay = 0.0f) {
+    if (BbRemote::FrontActive()) {
+        BbRemote::Front::ShowTrophy(grade, name.c_str(), icon.string().c_str(), delay);
+        return;
+    }
+    BbOverlay::ShowTrophy(grade, name, icon, delay);
+}
 
 std::mutex trophy_mutex;
 bool set_up = false;
@@ -202,8 +212,8 @@ void SetUp(const char* sce_sys, const char* user_dir) {
     if (const char* test = bb_env("BB_TROPHY_TEST"); test && *test) {
         const int id = std::atoi(test);
         const auto it = std::find_if(trophies.begin(), trophies.end(), [id](const auto& t) { return t.id == id; });
-        BbOverlay::ShowTrophy(it != trophies.end() ? it->grade : '?',
-                              it != trophies.end() ? it->name : "#" + std::to_string(id), IconPath(id), 40.0f);
+        Show(it != trophies.end() ? it->grade : '?',
+             it != trophies.end() ? it->name : "#" + std::to_string(id), IconPath(id), 40.0f);
     }
 }
 
@@ -236,7 +246,7 @@ extern "C" int bbgpu_trophy_unlock(int id) {
         const char grade = it != trophies.end() ? it->grade : '?';
         const std::string name = it != trophies.end() && !it->name.empty() ? it->name : "#" + std::to_string(t);
         std::printf("Trophies: unlocked %d (%c) %s\n", t, grade, name.c_str());
-        BbOverlay::ShowTrophy(grade, name, IconPath(t));
+        Show(grade, name, IconPath(t));
         if (t != id) {
             platinum = t;
         }

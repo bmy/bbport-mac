@@ -12,6 +12,12 @@
 #include "vulkan/instance.h"
 
 extern "C" void (*ffxVkJobMark)(uint32_t x, uint32_t y, uint32_t z);
+#ifdef __APPLE__
+// bbport: as ffxVkShaderOverride (ffx_shaders.cpp): no 0.7 patch defines it in the FFX backend.
+extern "C" {
+void (*ffxVkJobMark)(uint32_t x, uint32_t y, uint32_t z) = nullptr;
+}
+#endif
 
 namespace FgProfile {
 

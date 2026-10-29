@@ -23,6 +23,15 @@
 
 extern "C" bool (*ffxVkShaderOverride)(uint32_t effect, uint32_t pass, uint32_t permutationOptions,
                                        const uint32_t** words, size_t* size);
+#ifdef __APPLE__
+// bbport: no patch in 0.7's tree gives the FFX Vulkan backend this hook (ffx_vk.cpp at the pinned
+// FSR-Vulkan commit has none), so the library would import it unresolved. Defined here; while
+// the backend does not call it, frame generation keeps the SDK's packaged shaders.
+extern "C" {
+bool (*ffxVkShaderOverride)(uint32_t effect, uint32_t pass, uint32_t permutationOptions,
+                            const uint32_t** words, size_t* size) = nullptr;
+}
+#endif
 
 namespace FfxShaders {
 

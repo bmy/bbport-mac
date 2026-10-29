@@ -1166,6 +1166,25 @@ Id EmitContext::DefineUfloatM5ToFloat32(u32 mantissa_bits, const std::string_vie
     return func;
 }
 
+Id EmitContext::PageTableOffset(Id address) {
+#ifdef __APPLE__
+    // bbport: two halves (Shader::PageTableOffset): the game's mappings above the macOS GPU
+    // carve-out after the low region.
+    const Id user_offset = OpISub(U64, address, Constant(U64, PageTableUserBase));
+    const Id user_ok =
+        OpULessThan(U1[1], user_offset, Constant(U64, PageTableSpan - PageTableLowSpan));
+    const Id user = OpSelect(U64, user_ok, OpIAdd(U64, user_offset, Constant(U64, PageTableLowSpan)),
+                             Constant(U64, PageTableSpan));
+    const Id low_offset = OpISub(U64, address, Constant(U64, PageTableBase));
+    const Id low = OpSelect(U64, OpULessThan(U1[1], low_offset, Constant(U64, PageTableLowSpan)),
+                            low_offset, Constant(U64, PageTableSpan));
+    return OpSelect(U64, OpUGreaterThanEqual(U1[1], address, Constant(U64, PageTableUserBase)),
+                    user, low);
+#else
+    return OpISub(U64, address, Constant(U64, PageTableBase));
+#endif
+}
+
 /// DMA: the host address of a guest address through the page table; on a page not resident,
 /// the fault buffer gets the page's bit and the result is 0.
 Id EmitContext::DefineGetBdaPointer() {
@@ -1186,7 +1205,7 @@ Id EmitContext::DefineGetBdaPointer() {
     const auto page{OpShiftRightLogical(U64, address, caching_pagebits)};
     const auto page32{OpUConvert(U32[1], page)}; // the fault buffer's bit (all of the space)
     // The table covers [PageTableBase, +PageTableSpan) only: outside it, not resident.
-    const auto window_offset{OpISub(U64, address, Constant(U64, PageTableBase))};
+    const auto window_offset{PageTableOffset(address)};
     const auto in_window{OpULessThan(U1[1], window_offset, Constant(U64, PageTableSpan))};
     const auto table_page{OpSelect(
         U32[1], in_window, OpUConvert(U32[1], OpShiftRightLogical(U64, window_offset, caching_pagebits)),
@@ -1343,7 +1362,7 @@ EmitContext::PagedAccess EmitContext::PagedPointer(const BufferDefinition& buffe
     const Id address = OpIAdd(U64, record.base, OpUConvert(U64, byte_offset));
     const u32 shift = profile.sparse_page_shift;
     // The table covers [PageTableBase, +PageTableSpan) only: outside it, as out of range.
-    const Id window_offset = OpISub(U64, address, Constant(U64, PageTableBase));
+    const Id window_offset = PageTableOffset(address);
     in_range = OpLogicalAnd(U1[1], in_range,
                             OpULessThan(U1[1], window_offset, Constant(U64, PageTableSpan)));
     const Id page =
@@ -1378,7 +1397,7 @@ boost::container::static_vector<EmitContext::PagedAccess, 4> EmitContext::PagedD
         Id entry;
     };
     const auto lookup = [&](Id address) {
-        const Id window_offset = OpISub(U64, address, Constant(U64, PageTableBase));
+        const Id window_offset = PageTableOffset(address);
         const Id in_window = OpULessThan(U1[1], window_offset, Constant(U64, PageTableSpan));
         const Id page =
             OpUConvert(U32[1], OpShiftRightLogical(U64, window_offset, Constant(U64, u64{shift})));
@@ -1413,7 +1432,7 @@ boost::container::static_vector<EmitContext::PagedAccess, 4> EmitContext::PagedD
         Id window_offset = first.window_offset;
         Id entry = first.entry;
         if (i != 0 && count > 1) {
-            const Id window_offset_i = OpISub(U64, address_i, Constant(U64, PageTableBase));
+            const Id window_offset_i = PageTableOffset(address_i);
             const Id page_i = OpUConvert(
                 U32[1], OpShiftRightLogical(U64, window_offset_i, Constant(U64, u64{shift})));
             entry = OpSelect(U64, OpIEqual(U1[1], page_i, first.page), first.entry, last.entry);

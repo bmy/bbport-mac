@@ -393,6 +393,9 @@ public:
         Id pointer;
         Id guard;
     };
+    /// The page table window offset of a guest address (Shader::PageTableOffset): U64,
+    /// PageTableSpan or more outside the window.
+    Id PageTableOffset(Id address);
     PagedAccess PagedPointer(const BufferDefinition& buffer, Id byte_offset, u32 access_bytes,
                              Id pointee, bool guest_write = false);
     /// `count` consecutive dwords from `byte_offset` (4-aligned): two page table lookups (the

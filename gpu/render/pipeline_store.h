@@ -20,7 +20,11 @@ struct StageSpecialization;
 namespace Vulkan::PipelineStore {
 
 /// Increment the one whose layout changes.
+#ifdef __APPLE__
+constexpr u32 ShaderBinaryVersion = 25u; // bbport: the page table's two halves on macOS
+#else
 constexpr u32 ShaderBinaryVersion = 24u; // paged records read once, a lookup per page (PagedDwords)
+#endif
 constexpr u32 ShaderMetaVersion = 8u;    // the object motion buffer addresses
 constexpr u32 PipelineKeyVersion = 5u;   // Info layout (ImageResource::needs_native)
 

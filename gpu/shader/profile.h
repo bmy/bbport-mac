@@ -14,6 +14,36 @@ namespace Shader {
 /// this window 16 MiB. Addresses outside it read as unmapped.
 inline constexpr u64 PageTableBase = 0x800000000ull;
 inline constexpr u64 PageTableSpan = u64{1} << 36;
+#ifdef __APPLE__
+/// bbport: macOS keeps a GPU carve-out at 0x1000000000-0x6FFFFFFFFF (src/platform.h): the game's
+/// mappings start at 0x7000000000, above it. The window is two halves of one table: the low
+/// region [PageTableBase, +PageTableLowSpan) (image, stacks) first, then the mappings
+/// [PageTableUserBase, +PageTableSpan - PageTableLowSpan). Same table size as on Linux.
+inline constexpr u64 PageTableLowSpan = u64{1} << 35;
+inline constexpr u64 PageTableUserBase = 0x7000000000ull;
+#endif
+
+/// The offset in the table's window of a guest address: PageTableSpan or more outside it. The
+/// shaders compute the same (EmitContext::PageTableOffset).
+constexpr u64 PageTableOffset(u64 address) {
+#ifdef __APPLE__
+    if (address >= PageTableUserBase) {
+        const u64 offset = address - PageTableUserBase;
+        return offset < PageTableSpan - PageTableLowSpan ? offset + PageTableLowSpan : PageTableSpan;
+    }
+    const u64 offset = address - PageTableBase;
+    return offset < PageTableLowSpan ? offset : PageTableSpan;
+#else
+    return address - PageTableBase;
+#endif
+}
+
+/// Whether [address, address + size) lies in one piece of the window (size > 0).
+constexpr bool InPageTableWindow(u64 address, u64 size) {
+    const u64 first = PageTableOffset(address);
+    return size != 0 && first < PageTableSpan && size <= PageTableSpan - first &&
+           PageTableOffset(address + size - 1) == first + size - 1;
+}
 
 struct Profile {
     u32 max_viewport_width{};

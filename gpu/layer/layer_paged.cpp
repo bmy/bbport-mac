@@ -66,6 +66,41 @@ void BufferCache::LayerWriteEntries(u64 first, u64 end) {
         return;
     }
     // The table covers its window only (Shader::PageTableBase): blocks outside it read as unmapped.
+#ifdef __APPLE__
+    // bbport: two halves on macOS (Shader::PageTableOffset), each written on its own.
+    {
+        const u64 low_first = Shader::PageTableBase >> block_shift;
+        const u64 low_end = low_first + (Shader::PageTableLowSpan >> block_shift);
+        const u64 user_first = Shader::PageTableUserBase >> block_shift;
+        const u64 user_end =
+            user_first + ((Shader::PageTableSpan - Shader::PageTableLowSpan) >> block_shift);
+        const bool in_low = first >= low_first && end <= low_end;
+        const bool in_user = first >= user_first && end <= user_end;
+        if (!in_low && !in_user) {
+            static std::atomic<u32> told{0};
+            if (told.fetch_add(1, std::memory_order_relaxed) < 8) {
+                std::printf("Layer memory: page table entries %#llx..%#llx not in one half of its "
+                            "window [%#llx, %#llx) + [%#llx, %#llx): the rest left unmapped\n",
+                            (unsigned long long)(first << block_shift),
+                            (unsigned long long)(end << block_shift),
+                            (unsigned long long)(low_first << block_shift),
+                            (unsigned long long)(low_end << block_shift),
+                            (unsigned long long)(user_first << block_shift),
+                            (unsigned long long)(user_end << block_shift));
+            }
+            for (const auto& [a, b] :
+                 {std::pair<u64, u64>{low_first, low_end}, std::pair<u64, u64>{user_first, user_end}}) {
+                const u64 piece_first = std::max(first, a), piece_end = std::min(end, b);
+                if (piece_first < piece_end) {
+                    LayerWriteEntries(piece_first, piece_end);
+                }
+            }
+            return;
+        }
+    }
+    // The table index of the first block (the second half after the first on macOS).
+    const u64 table_first = Shader::PageTableOffset(first << block_shift) >> block_shift;
+#else
     const u64 window_first = Shader::PageTableBase >> block_shift;
     const u64 window_end = window_first + (Shader::PageTableSpan >> block_shift);
     if (first < window_first || end > window_end) {
@@ -83,6 +118,8 @@ void BufferCache::LayerWriteEntries(u64 first, u64 end) {
             return;
         }
     }
+    const u64 table_first = first - window_first;
+#endif
     // Diagnostics (BB_FRAME_STATS): where the time goes (t_layer 8-11).
     auto mark = std::chrono::steady_clock::now();
     const auto lap = [&](size_t kind) {
@@ -175,9 +212,9 @@ void BufferCache::LayerWriteEntries(u64 first, u64 end) {
     // guest-view table in the second half rather than interleaving its entries.
     const u64 bytes = (end - first) * sizeof(vk::DeviceAddress);
     const std::array<vk::BufferCopy, 2> copies{{
-        {staging.offset, (first - window_first) * sizeof(vk::DeviceAddress), bytes},
+        {staging.offset, table_first * sizeof(vk::DeviceAddress), bytes},
         {staging.offset + bytes, bda_pagetable_buffer->SizeBytes() / 2 +
-                                    (first - window_first) * sizeof(vk::DeviceAddress), bytes},
+                                    table_first * sizeof(vk::DeviceAddress), bytes},
     }};
     runtime.CopyBuffer(staging.buffer, bda_pagetable_buffer.get(), copies);
     lap(11);

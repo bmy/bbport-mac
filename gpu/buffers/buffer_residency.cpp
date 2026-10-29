@@ -178,9 +178,13 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
         }
         const u64 copy_size = (bind.end - bind.start) * sizeof(vk::DeviceAddress);
         // Only inside the page table's window (Shader::PageTableBase): the arena holds no other.
-        if ((bind.start << block_shift) >= Shader::PageTableBase &&
-            (bind.end << block_shift) <= Shader::PageTableBase + Shader::PageTableSpan) {
-            copies.emplace_back(offset, (bind.start - (Shader::PageTableBase >> block_shift)) * sizeof(vk::DeviceAddress), copy_size);
+        // bbport: through Shader::PageTableOffset (two halves on macOS).
+        if (Shader::InPageTableWindow(bind.start << block_shift,
+                                      (bind.end - bind.start) << block_shift)) {
+            copies.emplace_back(offset,
+                                (Shader::PageTableOffset(bind.start << block_shift) >> block_shift) *
+                                    sizeof(vk::DeviceAddress),
+                                copy_size);
         }
         offset += copy_size;
     }

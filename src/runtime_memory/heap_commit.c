@@ -106,7 +106,10 @@ int runtime_memory_commit(uint64_t phys, uint64_t size) {
     }
     /* Pages the memfd allocated there (the reservation was touched after all): kept. */
     int touched=0;
-#ifndef _WIN32 /* Windows: the section has no holes to tell; the reservation is never touched */
+/* Windows: the section has no holes to tell; the reservation is never touched. bbport (macOS):
+ * neither has a shared memory object (no lseek, no pread), and its chunks are host imports of the
+ * pool's own pages, which need no copy. */
+#if !defined(_WIN32) && !defined(__APPLE__)
     off_t data=lseek(pool_fd,(off_t)phys,SEEK_DATA);
     if (data>=0 && (uint64_t)data<phys+size) touched=1;
 #endif

@@ -124,12 +124,18 @@ void FreeChunk(u64 phys, u64 size) {
 
 
 std::uint32_t FindHostType(std::uint32_t bits) {
+#ifdef __APPLE__
+    // bbport (macOS): unified memory: KosmicKrisp's one type is device-local too.
+    constexpr vk::MemoryPropertyFlags not_wanted{};
+#else
+    constexpr vk::MemoryPropertyFlags not_wanted = vk::MemoryPropertyFlagBits::eDeviceLocal;
+#endif
     // Cached host memory first, then any host-visible type the import allows.
     for (const bool cached : {true, false}) {
         for (std::uint32_t i = 0; i < memory_properties.memoryTypeCount; ++i) {
             const auto flags = memory_properties.memoryTypes[i].propertyFlags;
             if (!(bits & (1u << i)) || !(flags & vk::MemoryPropertyFlagBits::eHostVisible) ||
-                (flags & vk::MemoryPropertyFlagBits::eDeviceLocal) || !TypeAllowed(flags) ||
+                (flags & not_wanted) || !TypeAllowed(flags) ||
                 (cached &&!(flags & vk::MemoryPropertyFlagBits::eHostCached))) {
                 continue;
             }
@@ -197,6 +203,16 @@ bool ImportHost(void* pointer, u64 size, vk::Buffer& buffer, vk::DeviceMemory& m
         error = result;
         return false;
     }
+#ifdef __APPLE__
+    // bbport (macOS): KosmicKrisp reports success when Metal refuses the pointer
+    // (newBufferWithBytesNoCopy nil): the buffer then has no GPU address.
+    if (LayerMemory() && !device.getBufferAddress({.buffer = created})) {
+        device.freeMemory(allocated);
+        device.destroyBuffer(created);
+        error = vk::Result::eErrorInvalidExternalHandle;
+        return false;
+    }
+#endif
     buffer = created;
     memory = allocated;
     return true;

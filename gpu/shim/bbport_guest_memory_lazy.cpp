@@ -8,7 +8,7 @@ namespace BbGuestMemory::detail {
 
 /// A dma-buf of [offset, offset + size) of the memfd (udmabuf), or -1.
 int MakeUdmabuf(int memfd, u64 offset, u64 size) {
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__APPLE__) // bbport (macOS): no udmabuf
     (void)memfd, (void)offset, (void)size;
     return -1;
 #else

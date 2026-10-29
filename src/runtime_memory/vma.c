@@ -127,6 +127,11 @@ static int32_t place(void **inout, uint64_t size, int prot, int flags, uint64_t 
     /* bbport (macOS): no executable shared (file) mappings: such ranges get private anonymous
      * memory, as in upstream shadPS4 (no aliasing for executable guest memory). */
     private_exec = kind!=KIND_RESERVED && (host_prot(prot)&PROT_EXEC);
+    /* The GPU reads direct memory through its import of the pool, which these pages are not. */
+    static int told_exec;
+    if (private_exec && kind==KIND_DIRECT && chunk_alloc && told_exec++<4)
+        printf("Runtime: direct memory %#" PRIx64 "+%#" PRIx64 " mapped executable at %#" PRIxPTR ": private "
+               "memory on macOS, which the GPU does not see\n",phys,size,address);
 #endif
     /* bbport: memory outside the pool (the GPU process cannot share it): private regions too. */
     const int private_mem = private_exec || (kind==KIND_DIRECT && private_import && chunk_fds && phys<POOL_SIZE);

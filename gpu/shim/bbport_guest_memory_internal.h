@@ -28,7 +28,7 @@
 #endif
 #include <sys/stat.h>
 #include <unistd.h>
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__APPLE__) // bbport (macOS): no udmabuf
 #include <linux/udmabuf.h>
 #include <sys/ioctl.h>
 #endif

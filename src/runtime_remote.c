@@ -12,6 +12,17 @@
 #include "runtime.h"
 #include "../gpu/shim/bb_env.h"
 #include <stdio.h>
+#ifdef __APPLE__
+/* bbport (macOS): not built. It runs adb through popen with a command made of the phone's file
+ * names, which a name holding a quote would extend; the game's files are local on the Mac. */
+void runtime_remote_configure(const char *app0) {
+    (void)app0;
+    const char *r=bb_env("BB_APP0_ADB");
+    if (r && *r) printf("Remote: BB_APP0_ADB (the game's files over adb) is not supported on macOS; ignored\n");
+}
+int runtime_remote_fetch(const char *host) { (void)host; return 0; }
+int runtime_remote_size(const char *host,int64_t *size) { (void)host; (void)size; return 0; }
+#else
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -290,3 +301,4 @@ int runtime_remote_fetch(const char *host) {
     pthread_mutex_unlock(&fetch_lock);
     return result;
 }
+#endif /* __APPLE__ */

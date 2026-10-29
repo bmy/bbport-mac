@@ -46,9 +46,13 @@ bool RunOnce(const Vulkan::Instance& instance, Record&& record) {
 /// imported, the GPU filling through one what the CPU then reads in the memfd, and copying what
 /// the CPU wrote there through the other.
 bool UdmabufWorks(const Vulkan::Instance& instance, const char*& why) {
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__APPLE__)
     (void)instance;
+#ifdef __APPLE__
+    why = "no udmabuf on macOS";
+#else
     why = "no udmabuf on Windows";
+#endif
     return false;
 #else
     why = "/dev/udmabuf cannot be opened";
@@ -157,7 +161,17 @@ bool HostImportWorks(const Vulkan::Instance& instance, const char*& why) {
     auto* view = static_cast<std::uint32_t*>(views[0]);
     auto* guest = static_cast<std::uint32_t*>(views[1]);
 #else
+#ifdef __APPLE__
+    // bbport (macOS): an unlinked POSIX shared memory object, as the runtime's pool (backing.c).
+    char name[64];
+    std::snprintf(name, sizeof(name), "/bbport-probe-%d", int(getpid()));
+    const int fd = shm_open(name, O_RDWR | O_CREAT | O_EXCL, 0600);
+    if (fd >= 0) {
+        shm_unlink(name);
+    }
+#else
     const int fd = memfd_create("bb-guest-memory-probe", MFD_CLOEXEC);
+#endif
     if (fd < 0 || ftruncate(fd, Size) != 0) {
         why = "memfd";
         if (fd >= 0) {

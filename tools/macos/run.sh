@@ -38,10 +38,6 @@ export BB_PREBUILT=1
 # contact the community server with BB_ONLINE=1 and the game still play offline.
 unset BB_ONLINE BB_NET_MODULE
 export BB_FPS=${BB_FPS:-30}
-# Memory model: 0.6 gives the new one to every GPU (run.sh). On the Mac it is untested (it needs
-# the game's memory imported into the GPU driver), so the 0.3 model stays the default here;
-# BB_PC_MODEL=1 tries the new one.
-export BB_PC_MODEL=${BB_PC_MODEL:-0}
 mkdir -p "$data/out"
 # FPS counter on by default, as the Linux launcher does; the overlay menu (F1, ` or §) toggles
 # it and saves the choice.
@@ -64,7 +60,9 @@ version=$(cat .version 2>/dev/null || git log -1 --format='%h' 2>/dev/null || ec
 tilde() { [[ -n ${HOME:-} && $1 == "$HOME"/* ]] && printf '~/%s' "${1#"$HOME"/}" || printf '%s' "$1"; }
 echo "macOS run: $(sw_vers -productVersion), bbport $version, game $(tilde "$BB_GAME_DIR"), fps $BB_FPS, upscaler ${BB_UPSCALER:-from $(tilde "$ini")}"
 # Direct memory sized to the scene (run.sh, BB_DMEM_AUTO): there, so an in-game restart (which
-# runs run.sh directly) and live resolution changes size it again. BB_DMEM_MB overrides.
+# runs run.sh directly) and live resolution changes size it again. The GPU imports the game's
+# direct memory (0.7), which Metal keeps resident: on smaller Macs every MiB counts. Texture packs
+# get the larger heaps' 9152 MiB regardless (their heaps need it). BB_DMEM_MB overrides.
 if [[ -z ${BB_DMEM_MB:-} ]]; then
     export BB_DMEM_AUTO=1
 fi

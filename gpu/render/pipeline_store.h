@@ -22,7 +22,7 @@ namespace Vulkan::PipelineStore {
 /// Increment the one whose layout changes.
 #ifdef __APPLE__
 // bbport: one above the Linux value; bump both when either changes.
-constexpr u32 ShaderBinaryVersion = 25u; // bbport: the page table's two halves on macOS
+constexpr u32 ShaderBinaryVersion = 26u; // bbport: the page table's two halves on macOS (64 GiB of mappings)
 #else
 constexpr u32 ShaderBinaryVersion = 24u; // paged records read once, a lookup per page (PagedDwords)
 #endif

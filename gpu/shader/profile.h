@@ -13,14 +13,17 @@ namespace Shader {
 /// up (about 5 GiB). All of the 40-bit space took 256 MiB of VRAM (two tables), 13 % of a 2 GB card;
 /// this window 16 MiB. Addresses outside it read as unmapped. On macOS: two halves, below.
 inline constexpr u64 PageTableBase = 0x800000000ull;
-inline constexpr u64 PageTableSpan = u64{1} << 36;
 #ifdef __APPLE__
 /// bbport: macOS keeps a GPU carve-out at 0x1000000000-0x6FFFFFFFFF (src/platform.h): the game's
 /// mappings start at 0x7000000000, above it. The window is two halves of one table: the low
 /// region [PageTableBase, +PageTableLowSpan) (image, stacks) first, then the mappings
-/// [PageTableUserBase, +PageTableSpan - PageTableLowSpan). Same table size as on Linux.
+/// [PageTableUserBase, +PageTableSpan - PageTableLowSpan). The mappings get 64 GiB: bb-gpu's own
+/// 24 GiB (placed by ASLR) can sit in the user range, and the game's mappings go around it.
 inline constexpr u64 PageTableLowSpan = u64{1} << 35;
 inline constexpr u64 PageTableUserBase = 0x7000000000ull;
+inline constexpr u64 PageTableSpan = PageTableLowSpan + (u64{1} << 36);
+#else
+inline constexpr u64 PageTableSpan = u64{1} << 36;
 #endif
 
 /// The offset in the table's window of a guest address: PageTableSpan or more outside it. The

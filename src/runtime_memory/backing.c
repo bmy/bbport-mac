@@ -42,8 +42,21 @@ static int pool(void) {
     /* udmabuf (the GPU's lazy imports of guest memory) needs the size sealed. */
     (void)fcntl(pool_fd,F_ADD_SEALS,F_SEAL_SHRINK|F_SEAL_GROW);
 #endif
+#ifdef __APPLE__
+    /* bbport (macOS): the view 2 MiB-aligned. Under Rosetta mmap aligns to 4 KiB only, and the GPU's
+     * host memory imports of it (KosmicKrisp) need 16 KiB-aligned pointers. */
+    const uint64_t view_span=POOL_SIZE+FLEX_SPAN+host_span, view_align=UINT64_C(2)<<20;
+    void *reserved=mmap(NULL,view_span+view_align,PROT_NONE,MAP_PRIVATE|MAP_ANON,-1,0);
+    if (reserved==MAP_FAILED) return -1;
+    const uintptr_t lo=(uintptr_t)reserved, at=(lo+view_align-1)&~(uintptr_t)(view_align-1);
+    void *view=mmap((void *)at,view_span,PROT_READ|PROT_WRITE,MAP_SHARED|MAP_FIXED,pool_fd,0);
+    if (view==MAP_FAILED) { munmap(reserved,view_span+view_align); return -1; }
+    if (at>lo) munmap(reserved,at-lo);
+    if (lo+view_span+view_align>at+view_span) munmap((void *)(at+view_span),lo+view_span+view_align-(at+view_span));
+#else
     void *view=mmap(NULL,POOL_SIZE+FLEX_SPAN+host_span,PROT_READ|PROT_WRITE,MAP_SHARED|MAP_NORESERVE,pool_fd,0);
     if (view==MAP_FAILED) return -1;
+#endif
     backing_base=view;
     advise_huge(view,POOL_SIZE);
     chunk_fds=malloc((POOL_SIZE/CHUNK+1)*sizeof(int));

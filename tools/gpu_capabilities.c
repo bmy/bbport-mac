@@ -20,8 +20,10 @@
 #include <string.h>
 #include <vulkan/vulkan.h>
 #include <SDL3/SDL.h>
+#ifndef _WIN32
 #include <sys/mman.h>
 #include <unistd.h>
+#endif
 
 static VkDeviceSize largest_local_heap(VkPhysicalDevice device) {
     VkPhysicalDeviceMemoryProperties memory;
@@ -238,6 +240,7 @@ static void print_memory_types(VkPhysicalDevice device) {
 
 /* Imports `size` bytes at `pointer` as Vulkan memory, binds a buffer to it, has the GPU fill part
  * of it and checks the program sees the GPU's writes there and the GPU sees the program's. */
+#ifndef _WIN32
 static void try_import(VkPhysicalDevice physical, VkDevice device, uint32_t queue_family,
                        const char *what, void *pointer, VkDeviceSize size) {
     PFN_vkGetMemoryHostPointerPropertiesEXT get_props =
@@ -475,6 +478,14 @@ static int memory_import(VkPhysicalDevice physical) {
     vkDestroyDevice(device, NULL);
     return 0;
 }
+#else
+/* No POSIX shared memory in the Windows build (llvm-mingw, packaging/windows/package.sh). */
+static int memory_import(VkPhysicalDevice physical) {
+    (void)physical;
+    puts("--memory-import: not in the Windows build");
+    return 1;
+}
+#endif
 
 int main(int argc, char **argv) {
     if (argc > 1 && !strcmp(argv[1], "--read-input")) {

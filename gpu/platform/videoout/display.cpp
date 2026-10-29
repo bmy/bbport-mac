@@ -375,7 +375,8 @@ void Display::Flip(const Request& request) {
         last_draws = draws;
     }
     BbTimeline::Note(BbTimeline::FlipProcessed, ++flips);
-    BbSections::FrameEnd(runtime_tsc_frequency());
+    // bbport: BbSections counts BbCpu::Ticks (arm64's counter in bb-gpu, not the game's TSC).
+    BbSections::FrameEnd(BbCpu::CounterFrequency() ? BbCpu::CounterFrequency() : runtime_tsc_frequency());
     RunPresenter([frame = request.frame, hdr = request.port->is_hdr] {
         presenter->SetHDR(hdr);
         presenter->Present(frame);

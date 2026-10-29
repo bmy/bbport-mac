@@ -384,7 +384,9 @@ void WriteFrameLog(Clock::time_point now, double frame_ms, const FlipCounters& c
     static u64 log_alloc, log_free;
     static u64 log_stage_a, log_stage_b;
     static u64 log_va, log_vf, log_van, log_vfn;
-    static const double stage_ms = 1e3 / double(std::max<u64>(runtime_tsc_frequency(), 1));
+    // bbport: the stages count BbCpu::Ticks (arm64's counter in bb-gpu, not the game's TSC).
+    static const double stage_ms =
+        1e3 / double(std::max<u64>(BbCpu::CounterFrequency() ? BbCpu::CounterFrequency() : runtime_tsc_frequency(), 1));
     const u64 tick = BbStats::tick_wait_ns.load(), present = BbStats::present_wait_ns.load();
     const u64 compiles_now = Vulkan::g_bb_compiles.load();
     // tick_wait_ns and the compile count are reset every stats window.

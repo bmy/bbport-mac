@@ -734,7 +734,8 @@ void TemporalUpscaler::RunScaled() {
         static constexpr const char* Labels[BbSettings::UpscalerCount] = {
             "upscaler RunScaled (off)",     "upscaler RunScaled (FSR 3.1)", "upscaler RunScaled (FSR 4)",
             "upscaler RunScaled (FSR 4.1.1)", "upscaler RunScaled (TAA)",   "upscaler RunScaled (DLSS)",
-            "upscaler RunScaled (FSR 1)",   "upscaler RunScaled (FSR 4, AMD's DLL)"};
+            "upscaler RunScaled (FSR 1)",   "upscaler RunScaled (FSR 4, AMD's DLL)",
+            "upscaler RunScaled (MetalFX)"}; // bbport: BbSettings::UpscalerMetalFx
         const int chosen = BbSettings::Get().upscaler;
         const char* label = chosen >= 0 && chosen < BbSettings::UpscalerCount ? Labels[chosen]
                                                                                 : "upscaler RunScaled";

@@ -290,10 +290,18 @@ How it crosses the split:
   process alone has) are refused at the start.
 - Lazy imports (`BB_GUEST_LAZY=1`): `runtime_memory_note_pinned` is a call to the game process
   (`MsgNotePinned`), the pool descriptor bb-gpu's own.
-- Heaps growing on demand: the hooks and `runtime_memory_commit`/`_decommit` are the game
-  process's; a piece's new or returned chunk reaches bb-gpu's GPU as `MIRROR_REMAP` ->
-  `MsgGpuRemap` (unmap and map hooks over what is mapped). The guest hooks' fresh, dead and live
-  ranges go to bb-gpu's buffer cache (`MsgFreshRange`, `MsgDeadRange`, `MsgLiveRange`).
+- Heaps growing on demand: off with the native GPU process for now (`kernel_api.c`: no mirror
+  hook for a commit; the log says "Heap grow: off"), so the GraphicsPrivate heap is imported
+  whole at the start. `MsgGpuRemap` is there for it, but nothing in the runtime queues a remap
+  yet: enabling growth needs a `MIRROR_REMAP` queued next to the commit and decommit of an
+  imported chunk (`heap_commit.c`). The guest hooks' fresh, dead and live ranges go to bb-gpu's
+  buffer cache (`MsgFreshRange`, `MsgDeadRange`, `MsgLiveRange`; without growth, dead and live
+  do not fire). `MsgFreshRange` is a send, not a call: in one process the GPU's old data there
+  stops being GPU-modified before the game writes the new block; across the split a readback in
+  bb-gpu could still land after those writes (to measure before making it a call).
+- The BDA page table: on macOS its window has two halves (`gpu/shader/profile.h`), the low region
+  and 64 GiB of the guest's user mappings from 0x7000000000: bb-gpu's own 24 GiB, placed by ASLR
+  before `main`, can sit in that range, and the game's mappings go around it.
 - Write faults carry the game's trap reasons for the page; reasons bb-gpu holds none of (a trap
   that crossed a remap) are lifted, and the fault runs through the same handlers as in one
   process (`Core::Signals`: the layer's VRAM copy traps, then page tracking).

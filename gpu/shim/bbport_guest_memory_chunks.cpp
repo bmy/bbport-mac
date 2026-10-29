@@ -239,6 +239,14 @@ bool RegisterImported(u64 phys, u64 size, void* pointer) {
     }
     if (!pointer || reinterpret_cast<std::uintptr_t>(pointer) % import_alignment != 0 ||
         size % import_alignment != 0) {
+#ifdef __APPLE__
+        // bbport: said, not silent (an unimported chunk reads as zeros on the GPU).
+        static std::atomic<int> told{0};
+        if (told.fetch_add(1, std::memory_order_relaxed) < 4) {
+            std::printf("Guest memory: %p+%#llx not aligned to %llu bytes: not imported\n", pointer,
+                        (unsigned long long)size, (unsigned long long)import_alignment);
+        }
+#endif
         return false;
     }
     vk::Buffer buffer;

@@ -47,4 +47,16 @@ inline std::uint64_t TicksFromUs(std::uint64_t us) {
 #endif
 }
 
+/// Ticks() per second when the counter's own rate is known: arm64's architectural frequency; 0 on
+/// x86-64, where the caller takes the TSC rate (runtime_tsc_frequency).
+inline std::uint64_t CounterFrequency() {
+#if defined(__aarch64__)
+    std::uint64_t frequency;
+    asm volatile("mrs %0, cntfrq_el0" : "=r"(frequency));
+    return frequency;
+#else
+    return 0;
+#endif
+}
+
 } // namespace BbCpu

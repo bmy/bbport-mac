@@ -443,7 +443,7 @@ final class LauncherModel: ObservableObject {
         if limit > 0 { env["BB_FPS_LIMIT"] = String(limit) } else { env.removeValue(forKey: "BB_FPS_LIMIT") }
         if p.drawPipe.isEmpty { env.removeValue(forKey: "BB_DRAW_PIPE") } else { env["BB_DRAW_PIPE"] = p.drawPipe }
         if p.readbacks.isEmpty { env.removeValue(forKey: "BB_READBACKS") } else { env["BB_READBACKS"] = p.readbacks }
-        if p.preupload.isEmpty { env.removeValue(forKey: "BB_PREUPLOAD") } else { env["BB_PREUPLOAD"] = p.preupload }
+        env.removeValue(forKey: "BB_PREUPLOAD") // 0.3's background upload: gone in 0.7, never passed on
         // Set only when on: parts of the port test these for presence, not value ("0" is on).
         // (BB_NATIVE_GPU, above, is the exception: its 0 is the opt-out.)
         if p.inProcessGpu && nativeGpuAvailable {

@@ -141,13 +141,6 @@ enum Catalog {
         Choice(value: "0", label: "Off (more stable)"),
     ]
 
-    /// BB_PREUPLOAD (bbport 0.3): background upload of the game's GPU memory ahead of use.
-    static let preupload: [Choice<String>] = [
-        Choice(value: "", label: "Normal (default)"),
-        Choice(value: "2", label: "Full (about 3 GB more memory)"),
-        Choice(value: "0", label: "Off"),
-    ]
-
     static let readbacks: [Choice<String>] = [
         Choice(value: "", label: "Relaxed (default)"),
         Choice(value: "0", label: "Off"),
@@ -188,7 +181,6 @@ struct LauncherPrefs: Equatable {
     var fpsLimit = 0
     var drawPipe = ""
     var readbacks = ""
-    var preupload = ""
     var inProcessGpu = false ///< the native GPU process is the default (BB_NATIVE_GPU=0)
     var frameStats = false
     var gpuProfile = false
@@ -217,7 +209,6 @@ struct LauncherPrefs: Equatable {
         static let fpsLimit = "fpsLimit"
         static let drawPipe = "drawPipe"
         static let readbacks = "readbacks"
-        static let preupload = "preupload"
         static let inProcessGpu = "inProcessGpu" // not nativeGpu: that one was the opt-in
         static let frameStats = "frameStats"
         static let gpuProfile = "gpuProfile"
@@ -247,7 +238,6 @@ struct LauncherPrefs: Equatable {
         p.fpsLimit = defaults.object(forKey: Key.fpsLimit) as? Int ?? p.fpsLimit
         p.drawPipe = text(Key.drawPipe, p.drawPipe)
         p.readbacks = text(Key.readbacks, p.readbacks)
-        p.preupload = text(Key.preupload, p.preupload)
         p.inProcessGpu = flag(Key.inProcessGpu, p.inProcessGpu)
         p.frameStats = flag(Key.frameStats, p.frameStats)
         p.gpuProfile = flag(Key.gpuProfile, p.gpuProfile)
@@ -262,7 +252,6 @@ struct LauncherPrefs: Equatable {
         if !Catalog.contains(Catalog.fpsModes, p.fpsMode) { p.fpsMode = Catalog.defaultFPSMode }
         if !Catalog.contains(Catalog.drawPipe, p.drawPipe) { p.drawPipe = "" }
         if !Catalog.contains(Catalog.readbacks, p.readbacks) { p.readbacks = "" }
-        if !Catalog.contains(Catalog.preupload, p.preupload) { p.preupload = "" }
         return p
     }
 
@@ -282,7 +271,7 @@ struct LauncherPrefs: Equatable {
         defaults.set(fpsLimit, forKey: Key.fpsLimit)
         defaults.set(drawPipe, forKey: Key.drawPipe)
         defaults.set(readbacks, forKey: Key.readbacks)
-        defaults.set(preupload, forKey: Key.preupload)
+        defaults.removeObject(forKey: "preupload") // 0.3's background upload (gone in 0.7)
         defaults.set(inProcessGpu, forKey: Key.inProcessGpu)
         defaults.set(frameStats, forKey: Key.frameStats)
         defaults.set(gpuProfile, forKey: Key.gpuProfile)

@@ -133,6 +133,11 @@ static int32_t place(void **inout, uint64_t size, int prot, int flags, uint64_t 
     if (private_exec && kind==KIND_DIRECT && chunk_alloc && told_exec++<4)
         printf("Runtime: direct memory %#" PRIx64 "+%#" PRIx64 " mapped executable at %#" PRIxPTR ": private "
                "memory on macOS, which the GPU does not see\n",phys,size,address);
+    /* The GPU's page table covers the user range up to 0x8000000000 (gpu/shader/profile.h). */
+    static int told_high;
+    if (kind!=KIND_RESERVED && address+size>UINT64_C(0x8000000000) && told_high++<4)
+        printf("Runtime: guest memory %#" PRIxPTR "+%#" PRIx64 " mapped past 0x8000000000, outside the GPU's "
+               "page table: shaders read it as unmapped\n",address,size);
 #endif
     /* bbport: memory outside the pool (the GPU process cannot share it): private regions too. */
     const int private_mem = private_exec || (kind==KIND_DIRECT && private_import && chunk_fds && phys<POOL_SIZE);

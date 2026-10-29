@@ -220,6 +220,7 @@ static int read_input(const char *kind) {
 
 /* ---- --memory-import ---------------------------------------------------------------------- */
 
+#ifndef _WIN32
 static const char *yes_no(int value) { return value ? "yes" : "no"; }
 
 static void print_memory_types(VkPhysicalDevice device) {
@@ -240,7 +241,6 @@ static void print_memory_types(VkPhysicalDevice device) {
 
 /* Imports `size` bytes at `pointer` as Vulkan memory, binds a buffer to it, has the GPU fill part
  * of it and checks the program sees the GPU's writes there and the GPU sees the program's. */
-#ifndef _WIN32
 static void try_import(VkPhysicalDevice physical, VkDevice device, uint32_t queue_family,
                        const char *what, void *pointer, VkDeviceSize size) {
     PFN_vkGetMemoryHostPointerPropertiesEXT get_props =

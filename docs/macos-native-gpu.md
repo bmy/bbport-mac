@@ -293,7 +293,7 @@ How it crosses the split:
 - Heaps growing on demand: off with the native GPU process for now (`kernel_api.c`: no mirror
   hook for a commit; the log says "Heap grow: off"), so the GraphicsPrivate heap is imported
   whole at the start. `MsgGpuRemap` is there for it, but nothing in the runtime queues a remap
-  yet: enabling growth needs a `MIRROR_REMAP` queued next to the commit and decommit of an
+  yet: enabling growth needs a new `MIRROR_REMAP` (3: `remote_front.cpp` handles a case 3) queued next to the commit and decommit of an
   imported chunk (`heap_commit.c`). The guest hooks' fresh, dead and live ranges go to bb-gpu's
   buffer cache (`MsgFreshRange`, `MsgDeadRange`, `MsgLiveRange`; without growth, dead and live
   do not fire). `MsgFreshRange` is a send, not a call: in one process the GPU's old data there

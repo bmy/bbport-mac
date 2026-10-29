@@ -242,7 +242,7 @@ bool RegisterImported(u64 phys, u64 size, void* pointer) {
 #ifdef __APPLE__
         // bbport: said, not silent (an unimported chunk reads as zeros on the GPU).
         static std::atomic<int> told{0};
-        if (told.fetch_add(1, std::memory_order_relaxed) < 4) {
+        if (pointer && told.fetch_add(1, std::memory_order_relaxed) < 4) {
             std::printf("Guest memory: %p+%#llx not aligned to %llu bytes: not imported\n", pointer,
                         (unsigned long long)size, (unsigned long long)import_alignment);
         }

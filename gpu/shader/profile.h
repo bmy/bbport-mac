@@ -11,7 +11,7 @@ namespace Shader {
 /// bbport: the BDA page table covers guest addresses [PageTableBase, PageTableBase + PageTableSpan):
 /// the low region (image, stacks) and the game's mappings, which the runtime places from 0x1000000000
 /// up (about 5 GiB). All of the 40-bit space took 256 MiB of VRAM (two tables), 13 % of a 2 GB card;
-/// this window 16 MiB. Addresses outside it read as unmapped.
+/// this window 16 MiB. Addresses outside it read as unmapped. On macOS: two halves, below.
 inline constexpr u64 PageTableBase = 0x800000000ull;
 inline constexpr u64 PageTableSpan = u64{1} << 36;
 #ifdef __APPLE__

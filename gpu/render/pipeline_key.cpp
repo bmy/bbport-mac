@@ -454,7 +454,7 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
         constexpr u32 mv = Shader::MotionVectors::Output;
         key.motion_vectors = 1;
         key.mrt_mask |= 1u << mv;
-        key.num_color_attachments = mv + 1;
+        key.num_color_attachments = std::max<u32>(key.num_color_attachments, mv + 1); // bbport: mv 5 on macOS
         auto& color_buffer = key.color_buffers[mv];
         // R32G32_UINT: the vector as two halves, the depth with the "written" flag in its sign
         // (8 bytes a pixel of the G-buffer instead of 16: EmitFragmentMotion).

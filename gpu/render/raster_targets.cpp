@@ -677,7 +677,9 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
     const auto& key = pipeline->GetGraphicsKey();
     // The G-buffer pass of an eligible scene starts the scene (reduced to the proxies from
     // here on).
-    if (std::popcount(key.mrt_mask & 0x7f) >= 5 && db_desc.first &&
+    // bbport: the motion target left out (bit 7 upstream, 5 on macOS).
+    if (std::popcount(key.mrt_mask & 0xffu & ~(1u << Shader::MotionVectors::Output)) >= 5 &&
+        db_desc.first &&
         scene_targets->EligibleScene(texture_cache.GetImage(db_desc.first))) {
         scene_started = true;
     }

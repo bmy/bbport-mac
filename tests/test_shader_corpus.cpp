@@ -281,9 +281,9 @@ struct Out {
 
 enum class Outcome { Same, SpirvDiffers, InfoDiffers, BindingsDiffer, Unreadable, Nondeterministic };
 
-/// The capture format (shader_capture.cpp): bbport, macOS 5 (Profile's tess flags).
+/// The capture format (shader_capture.cpp): bbport, macOS 6 (Profile's tess flags).
 #ifdef __APPLE__
-constexpr u32 CaptureVersion = 5;
+constexpr u32 CaptureVersion = 6;
 #else
 constexpr u32 CaptureVersion = 2;
 #endif

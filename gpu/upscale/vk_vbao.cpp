@@ -121,7 +121,9 @@ void Vbao::OnAoPass(VideoCore::ImageId target, VideoCore::ImageId normals_id, bo
     const bool half = ao_format == vk::Format::eR8G8B8A8Unorm;
     if ((depth_format == vk::Format::eD32Sfloat || depth_format == vk::Format::eD32SfloatS8Uint) &&
         (ao_format == vk::Format::eR8Unorm || half)) {
-        runtime.UpgradeUsage(&ao, "VBAO output"); // bbport (macOS): written as storage
+        if (instance.IsCompressibleImages()) { // bbport (macOS): written as storage
+            runtime.UpgradeUsage(&ao, "VBAO output");
+        }
     }
     const u32 scale = half ? 2 : 1;
     if ((depth_format != vk::Format::eD32Sfloat && depth_format != vk::Format::eD32SfloatS8Uint) ||
@@ -367,7 +369,9 @@ void Vbao::OnDisplayPass(VideoCore::ImageId frame) {
     }
     auto& color = texture_cache.GetImage(frame);
     if (color.info.pixel_format == vk::Format::eR8G8B8A8Unorm) {
-        runtime.UpgradeUsage(&color, "VBAO view"); // bbport (macOS): written as storage
+        if (instance.IsCompressibleImages()) { // bbport (macOS): written as storage
+            runtime.UpgradeUsage(&color, "VBAO view");
+        }
     }
     if (color.info.pixel_format != vk::Format::eR8G8B8A8Unorm ||
         !(color.usage_flags & vk::ImageUsageFlagBits::eStorage)) {

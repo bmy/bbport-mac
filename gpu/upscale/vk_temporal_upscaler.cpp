@@ -462,7 +462,9 @@ void TemporalUpscaler::Run() {
         return;
     }
     // bbport (macOS): the result is merged back into the scene color as a storage image.
-    runtime.UpgradeUsage(&color, "upscaler output merge");
+    if (instance.IsCompressibleImages()) { // bbport (macOS): no helper sync elsewhere
+        runtime.UpgradeUsage(&color, "upscaler output merge");
+    }
     if (!(color.usage_flags & vk::ImageUsageFlagBits::eStorage)) {
         return;
     }

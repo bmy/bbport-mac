@@ -393,7 +393,9 @@ void TemporalUpscaler::OnSceneComposite() {
         return;
     }
     // bbport (macOS): the mask reads the scene color as a storage image.
-    runtime.UpgradeUsage(&color, "upscaler reactive mask");
+    if (instance.IsCompressibleImages()) { // bbport (macOS): no helper sync elsewhere
+        runtime.UpgradeUsage(&color, "upscaler reactive mask");
+    }
     if (!(color.usage_flags & vk::ImageUsageFlagBits::eStorage)) {
         return;
     }

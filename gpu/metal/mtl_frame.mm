@@ -5053,7 +5053,7 @@ void Report(double seconds) {
         gpu_waiting_ms = gpu_clock.waiting * 1e3 / seconds;
         gpu_clock.busy = gpu_clock.waiting = 0.0;
     }
-    Print("Metal frame: per second %.0f draws, %.0f dispatches (%.0f of them paged) and %.0f "
+    Print("Metal frame: per second %.0f draws, %.0f dispatches (%.0f of these paged) and %.0f "
           "transfers in Metal, %.0f "
           "draws and %.0f dispatches and %.0f other commands to KosmicKrisp (%.0f segments, %.0f "
           "switches); %.0f Metal command buffers; render passes ended in Metal %.0f, split %.0f "

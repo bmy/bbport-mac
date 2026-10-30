@@ -100,6 +100,20 @@ struct Profile {
     bool needs_unorm_fixup{};
     bool needs_clip_distance_emulation{};
     bool supports_shader_stencil_export{};
+#ifdef __APPLE__ // bbport: elsewhere the profile (stored raw: the cache's header) is 0.7's
+    /// bbport (macOS), BB_SPIRV_PRECISE=vertex: float adds, multiplies, divides and FMAs are
+    /// NoContraction only in the stages that make positions (vertex, tessellation, geometry),
+    /// not in fragment and compute shaders. KosmicKrisp compiles every NoContraction operation
+    /// in Metal's safe math mode, which keeps the compiler from optimising it.
+    bool precise_vertex_stages_only{};
+    /// bbport (macOS), BB_TESS_CLAMP=1: hull shader tessellation factors are clamped to the
+    /// game's VGT_HOS_MAX_TESS_LEVEL as the hardware does (SwTessControlRuntimeInfo).
+    bool tess_level_clamp{};
+    /// bbport (macOS) experiment, BB_TESS_MAX=n: the hull shaders' tessellation factors are
+    /// capped at n (0: as the game writes them). Here so that changing it rebuilds the cache;
+    /// the hull shader transform reads the variable itself.
+    u32 tess_factor_cap{};
+#endif
     /// BB_LAYER_MEMORY: guest buffers of IsPagedBuffer size go through the page table.
     bool paged_buffers{};
     /// The game's buffer copy compute shader (its GCN program hash, from the game's profile;

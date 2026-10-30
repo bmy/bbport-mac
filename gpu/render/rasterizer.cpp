@@ -3,6 +3,8 @@
 // bbport render: Rasterizer, the draw and dispatch entry points: pipeline selection, then recording here or on the
 // draw recording thread (raster_pipe.cpp), and the per-frame bookkeeping.
 
+#include <chrono>
+#include <cstring>
 #include <mutex>
 #include "shim/bb_env.h"
 #include <set>
@@ -86,7 +88,11 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
         }
     }
     // bbport: this thread joins the texture binding helper before it changes image state.
-    runtime.SetImageAccessHook(&JoinBindHelper, this);
+    // bbport (macOS): only with the helper (BB_TEXTURE_HELPER=1); without it the hook was an
+    // indirect call that did nothing on every image access.
+    if (bind_helper.Available()) {
+        runtime.SetImageAccessHook(&JoinBindHelper, this);
+    }
     scheduler.SetSubmitCallback([this](Vulkan::SubmitInfo& info) {
         runtime.FlushBarriers();
         buffer_cache.SubmitPendingArenaBinds(info);
@@ -115,8 +121,122 @@ std::pair<u32, u32> GetDrawOffsets(
 }
 } // namespace
 
+#ifdef __APPLE__
+namespace {
+
+/// bbport (macOS), BB_SKIP_TESS_DRAWS=1 (a test): draws with the game's own tessellation are not
+/// recorded, to tell whether they are what makes the GPU slow (missing from the picture meanwhile).
+bool SkipTessDraws() {
+    static const bool skip = [] {
+        const bool on = bb_env_on("BB_SKIP_TESS_DRAWS");
+        if (on) {
+            std::printf("GPU: draws with the game's tessellation are skipped (BB_SKIP_TESS_DRAWS=1, "
+                        "a test: they are missing from the picture)\n");
+        }
+        return on;
+    }();
+    return skip;
+}
+
+/// Counts a recorded draw by kind; true when it is to be skipped (BB_SKIP_TESS_DRAWS). The first
+/// draw with each pipeline that uses the game's tessellation is logged with its stages.
+bool CountTessellation(const Vulkan::GraphicsPipeline* pipeline) {
+    const auto& key = pipeline->GetGraphicsKey();
+    if (key.stage_hashes[u32(Shader::SwStage::TessellationControl)] == 0) {
+        if (key.prim_type == Gcn::PrimitiveType::RectList ||
+            key.prim_type == Gcn::PrimitiveType::QuadList) {
+            BbStats::patch_list_draws.fetch_add(1, std::memory_order_relaxed);
+        }
+        return false;
+    }
+    BbStats::tess_draws.fetch_add(1, std::memory_order_relaxed);
+    static std::mutex seen_mutex;
+    static std::set<const Vulkan::GraphicsPipeline*> seen;
+    {
+        std::scoped_lock lock{seen_mutex};
+        if (seen.size() < 4096 && seen.insert(pipeline).second) {
+            std::printf("GPU: a pipeline with the game's tessellation drawn (%zu so far; vertex "
+                        "%#llx, hull %#llx, domain %#llx, pixel %#llx, geometry %#llx, %u control "
+                        "points)\n",
+                        seen.size(),
+                        (unsigned long long)key.stage_hashes[u32(Shader::SwStage::Vertex)],
+                        (unsigned long long)key.stage_hashes[u32(Shader::SwStage::TessellationControl)],
+                        (unsigned long long)key.stage_hashes[u32(Shader::SwStage::TessellationEval)],
+                        (unsigned long long)key.stage_hashes[u32(Shader::SwStage::Fragment)],
+                        (unsigned long long)key.stage_hashes[u32(Shader::SwStage::Geometry)],
+                        key.patch_control_points);
+            std::fflush(stdout);
+        }
+    }
+    return SkipTessDraws();
+}
+
+/// bbport (macOS) experiment bits of BB_TOGGLE_FILE (its second number), to measure what draws
+/// drawn as patches cost on drivers that tessellate in software (KosmicKrisp): 1 << 18 leaves out
+/// the game's tessellated draws, 1 << 19 the rect and quad lists (drawn as patches; 0.6's 128 and
+/// 256 are 0.7's own experiments). The picture is wrong while either is set: for GPU time
+/// measurements only.
+bool SkippedPatchDraw(const GraphicsPipeline* pipeline) {
+    const bool skip_tess = BbToggle::Experiment(1u << 18);
+    const bool skip_lists = BbToggle::Experiment(1u << 19);
+    if (!skip_tess && !skip_lists) {
+        return false;
+    }
+    const auto prim = pipeline->GetGraphicsKey().prim_type;
+    const bool list = prim == Gcn::PrimitiveType::RectList || prim == Gcn::PrimitiveType::QuadList;
+    return (skip_lists && list) || (skip_tess && prim == Gcn::PrimitiveType::PatchPrimitive);
+}
+
+/// bbport (macOS) diagnostics: the game's tessellated draws (direct ones) every 5 s, per frame,
+/// with the tess level clamp the game sets (VGT_HOS_MAX/MIN_TESS_LEVEL, 0xA286/0xA287, which
+/// the renderer does not apply): what KosmicKrisp's software tessellation is given.
+void NoteTessellatedDraw(const GraphicsPipeline* pipeline, const Gcn::Regs& regs) {
+    const auto& key = pipeline->GetGraphicsKey();
+    if (key.prim_type != Gcn::PrimitiveType::PatchPrimitive) {
+        return;
+    }
+    static std::mutex mutex;
+    static auto window = std::chrono::steady_clock::now();
+    static u64 frames_at = BbStats::gpu_frames.load(std::memory_order_relaxed);
+    static u64 draws = 0, patches = 0;
+    static std::set<std::pair<u32, u32>> clamps;
+    std::scoped_lock lock{mutex};
+    ++draws;
+    const u32 points = std::max(1u, u32(key.patch_control_points));
+    patches += u64(regs.num_indices / points) * std::max(1u, regs.num_instances.NumInstances());
+    if (clamps.size() < 8) {
+        clamps.emplace(regs.reg_array[0xA286], regs.reg_array[0xA287]);
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now - window < std::chrono::seconds(5)) {
+        return;
+    }
+    const u64 frames_now = BbStats::gpu_frames.load(std::memory_order_relaxed);
+    const double frames = double(std::max<u64>(1, frames_now - frames_at));
+    std::string levels;
+    for (const auto& [max_bits, min_bits] : clamps) {
+        float max_level, min_level;
+        std::memcpy(&max_level, &max_bits, sizeof(float));
+        std::memcpy(&min_level, &min_bits, sizeof(float));
+        levels += fmt::format("{}{}..{}", levels.empty() ? "" : ", ", min_level, max_level);
+    }
+    std::printf("Tessellation (game): %.1f draws/frame, %.0f patches/frame; tess level clamp "
+                "the game sets (min..max): %s\n",
+                double(draws) / frames, double(patches) / frames, levels.c_str());
+    window = now;
+    frames_at = frames_now;
+    draws = patches = 0;
+    clamps.clear();
+}
+} // namespace
+#endif // __APPLE__
+
 void Rasterizer::Draw(bool is_indexed, u32 index_offset, const PreparedDraw* prepared) {
     BB_SECTION(ADraw);
+#ifdef __APPLE__
+    static const bool skip_note = SkipTessDraws(); // says so at the first draw of the run
+    (void)skip_note;
+#endif
     BbStats::draws.fetch_add(1, std::memory_order_relaxed);
 
     // bbport: with the draw pipeline this thread only selects the pipeline and hands the draw
@@ -340,6 +460,11 @@ void Rasterizer::NoteInPlaceVertexReads(const GraphicsPipeline* pipeline, bool i
 void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw* used_prepared,
                             bool is_indexed, u32 index_offset) {
     BB_SECTION(DrawRecord);
+#ifdef __APPLE__
+    if (CountTessellation(pipeline)) {
+        return; // BB_SKIP_TESS_DRAWS (a test)
+    }
+#endif
     buffer_cache.NewPacket();
     if (DrawPipe::OnStageB()) {
         FrameCapture::Poll();
@@ -399,6 +524,12 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     if (IsNoopDraw(regs, pipeline)) {
         return;
     }
+#ifdef __APPLE__
+    if (SkippedPatchDraw(pipeline)) {
+        return;
+    }
+    NoteTessellatedDraw(pipeline, regs);
+#endif
     // bbport: the key guide icons for the device in use (a change: uploaded before this draw).
     prompts->Update();
     bind_prepared = used_prepared;
@@ -755,48 +886,61 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     const u32 first_vertex = vertex_offset;
     const u32 first_instance = instance_offset;
     const auto* ps_info = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
-    Breadcrumbs::Crumb crumb{
-        .kind = is_indexed ? Breadcrumbs::Kind::DrawIndexed : Breadcrumbs::Kind::Draw,
-        .hash = {vs_info.pgm_hash, ps_info ? ps_info->pgm_hash : 0},
-        .program = {vs_info.ProgramBase(), ps_info ? ps_info->ProgramBase() : 0},
-        .count = {num_indices, num_instances, 0},
-    };
     // On NVIDIA by default (its hangs give no fault address): it costs the recording thread a
     // few T# and V# reads a draw. BB_BREADCRUMB_READS=1 / 0: on / off everywhere.
     static const bool crumb_reads = [&] {
         const char* env = bb_env("BB_BREADCRUMB_READS");
         return env ? env[0] == '1' : instance.GetVendorID() == 0x10de;
     }();
-    if (crumb_reads && Breadcrumbs::Enabled()) {
-        NoteCrumbReads(crumb, pipeline, regs, is_indexed, index_offset);
-    }
-    const Scissors check_scissors =
-        DynCheck::Enabled() ? scheduler.GetDynamicState().CurrentScissors() : Scissors{};
-    const Viewports check_viewports =
-        DynCheck::Enabled() ? scheduler.GetDynamicState().CurrentViewports() : Viewports{};
-    const u64 check_vs = vs_info.pgm_hash, check_ps = ps_info ? ps_info->pgm_hash : 0;
+    // bbport (macOS): built only with breadcrumbs on (RecordCrumbWith).
+    const auto make_crumb = [&] {
+        Breadcrumbs::Crumb crumb{
+            .kind = is_indexed ? Breadcrumbs::Kind::DrawIndexed : Breadcrumbs::Kind::Draw,
+            .hash = {vs_info.pgm_hash, ps_info ? ps_info->pgm_hash : 0},
+            .program = {vs_info.ProgramBase(), ps_info ? ps_info->ProgramBase() : 0},
+            .count = {num_indices, num_instances, 0},
+        };
+        if (crumb_reads) {
+            NoteCrumbReads(crumb, pipeline, regs, is_indexed, index_offset);
+        }
+        return crumb;
+    };
     // BB_GPU_PROFILE=1 with BB_GPU_PROFILE_DRAWS=1: a timestamp before each draw labelled by its
     // shaders (the profile lists the dearest draws by shader pair).
     if (auto* profiler = GpuProfiler::Get()) {
         static const bool per_draw = bb_env_on("BB_GPU_PROFILE_DRAWS");
         if (per_draw) {
-            const u64 key = (check_vs * 0x9E3779B97F4A7C15ull) ^ (check_ps + 0x1234567ull);
+            const u64 vs = vs_info.pgm_hash, ps = ps_info ? ps_info->pgm_hash : 0;
+            const u64 key = (vs * 0x9E3779B97F4A7C15ull) ^ (ps + 0x1234567ull);
             profiler->MarkInPass(key, [&] {
-                return fmt::format("draw vs {:016x} ps {:016x}", check_vs, check_ps);
+                return fmt::format("draw vs {:016x} ps {:016x}", vs, ps);
             });
         }
     }
-    scheduler.RecordCrumb(crumb, [=](vk::CommandBuffer cmdbuf) {
-        cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, handle);
-        if (DynCheck::Enabled()) {
-            DynCheck::Draw(cmdbuf, check_viewports, check_scissors, check_vs, check_ps);
-        }
+    const auto draw = [=](vk::CommandBuffer cmdbuf) {
         if (is_indexed) {
             cmdbuf.drawIndexed(num_indices, num_instances, 0, s32(first_vertex), first_instance);
         } else {
             cmdbuf.draw(num_indices, num_instances, first_vertex, first_instance);
         }
-    });
+    };
+    if (DynCheck::Enabled()) {
+        const Scissors check_scissors = scheduler.GetDynamicState().CurrentScissors();
+        const Viewports check_viewports = scheduler.GetDynamicState().CurrentViewports();
+        const u64 check_vs = vs_info.pgm_hash, check_ps = ps_info ? ps_info->pgm_hash : 0;
+        scheduler.RecordCrumbWith(make_crumb, [=](vk::CommandBuffer cmdbuf) {
+            cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, handle);
+            DynCheck::Draw(cmdbuf, check_viewports, check_scissors, check_vs, check_ps);
+            draw(cmdbuf);
+        });
+    } else {
+        // bbport (macOS): without BB_DYNSTATE_CHECK the closure no longer carries its
+        // viewports and scissors (about 650 bytes a draw).
+        scheduler.RecordCrumbWith(make_crumb, [=](vk::CommandBuffer cmdbuf) {
+            cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, handle);
+            draw(cmdbuf);
+        });
+    }
     // BB_TRACE_SHADER with BB_GPU_PROFILE: a mark right after the traced vertex shader's draws,
     // so the profile splits their pass into the draw and what follows it unlabeled.
     if (auto* profiler = GpuProfiler::Get()) {
@@ -1042,6 +1186,11 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
 
 void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_indexed,
                                     const IndirectDraw& indirect) {
+#ifdef __APPLE__
+    if (CountTessellation(pipeline)) {
+        return; // BB_SKIP_TESS_DRAWS (a test)
+    }
+#endif
     ++work_after_early;
     ++work_total;
     buffer_cache.NewPacket();
@@ -1052,6 +1201,11 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     if (IsNoopDraw(Regs(), pipeline)) {
         return;
     }
+#ifdef __APPLE__
+    if (SkippedPatchDraw(pipeline)) {
+        return;
+    }
+#endif
     const VAddr count_address = indirect.count;
     const u32 stride = indirect.stride;
     const u32 max_count = indirect.max_count;
@@ -1113,18 +1267,21 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     const u64 counts_offset = count_address != 0 ? count_offset : 0;
     const auto* vs_crumb = pipeline->GetStages()[u32(Shader::SwStage::Vertex)];
     const auto* ps_crumb = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
-    const Breadcrumbs::Crumb crumb{
-        .kind = Breadcrumbs::Kind::DrawIndirect,
-        .hash = {vs_crumb ? vs_crumb->pgm_hash : 0, ps_crumb ? ps_crumb->pgm_hash : 0},
-        .program = {vs_crumb ? vs_crumb->ProgramBase() : 0,
-                    ps_crumb ? ps_crumb->ProgramBase() : 0},
-        .address = indirect.args,
-        .count = {max_count, stride, 0},
+    // bbport (macOS): built only with breadcrumbs on (RecordCrumbWith).
+    const auto make_crumb = [&] {
+        return Breadcrumbs::Crumb{
+            .kind = Breadcrumbs::Kind::DrawIndirect,
+            .hash = {vs_crumb ? vs_crumb->pgm_hash : 0, ps_crumb ? ps_crumb->pgm_hash : 0},
+            .program = {vs_crumb ? vs_crumb->ProgramBase() : 0,
+                        ps_crumb ? ps_crumb->ProgramBase() : 0},
+            .address = indirect.args,
+            .count = {max_count, stride, 0},
+        };
     };
     if (auto* profiler = GpuProfiler::Get()) {
         static const bool per_draw = bb_env_on("BB_GPU_PROFILE_DRAWS");
         if (per_draw) {
-            const u64 vs = crumb.hash[0], ps = crumb.hash[1];
+            const u64 vs = vs_crumb ? vs_crumb->pgm_hash : 0, ps = ps_crumb ? ps_crumb->pgm_hash : 0;
             const u64 key = (vs * 0x9E3779B97F4A7C15ull) ^ (ps + 0x7654321ull);
             profiler->MarkInPass(key, [&] {
                 return fmt::format("indirect draw vs {:016x} ps {:016x} max {}{}", vs, ps, max_count,
@@ -1132,7 +1289,7 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
             });
         }
     }
-    scheduler.RecordCrumb(crumb, [=](vk::CommandBuffer cmdbuf) {
+    scheduler.RecordCrumbWith(make_crumb, [=](vk::CommandBuffer cmdbuf) {
         cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, handle);
         if (is_indexed) {
             if (counts) {

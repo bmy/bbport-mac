@@ -3,6 +3,7 @@
 #ifndef BB_RUNTIME_H
 #define BB_RUNTIME_H
 #include <string.h>
+#include "../gpu/shim/bb_env.h" /* bbport: runtime_frame_stats */
 #include <time.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -47,6 +48,17 @@ void runtime_memory_prepare_cpu_write(uintptr_t address, uint64_t size);
 /* bbport (frame stats): a guest thread was blocked `ns` in the runtime (0 cond, 1 mutex, 2 sema, 3 sleep). */
 void runtime_wait_note(int kind, uint64_t ns);
 void runtime_wait_report(double frames);
+/* bbport: BB_FRAME_STATS set (macOS: 1, y or t, the GPU side's rule there, BbStats::enabled and
+ * FrameStatsEnabled; the readers here took any value, even 0, for on). */
+static inline int runtime_frame_stats(void) {
+    static int enabled=-1;
+#ifdef __APPLE__
+    if (enabled<0) { const char *e=bb_env("BB_FRAME_STATS"); enabled=e && (e[0]=='1' || e[0]=='y' || e[0]=='t'); }
+#else
+    if (enabled<0) enabled=bb_env("BB_FRAME_STATS")!=NULL;
+#endif
+    return enabled;
+}
 void runtime_guest_call_sites(uint64_t out[3]);
 /* bbport: times the game's heap asked for more memory (posix_mmap): a sign it leaks. */
 uint64_t runtime_heap_growths(void);

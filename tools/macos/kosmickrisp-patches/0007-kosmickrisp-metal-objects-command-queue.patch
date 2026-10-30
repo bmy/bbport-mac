@@ -1,0 +1,35 @@
+--- a/src/kosmickrisp/vulkan/kk_sync.c
++++ b/src/kosmickrisp/vulkan/kk_sync.c
+@@ -113,14 +113,30 @@ const struct vk_sync_type kk_sync_type = {
+ 
+ #ifdef VK_USE_PLATFORM_METAL_EXT
+ /* bbport: VK_EXT_metal_objects, limited to the MTLSharedEvent of a timeline semaphore (every
+- * KosmicKrisp semaphore is one). Lets Metal work outside the driver (MetalFX) wait for and
+- * signal Vulkan timelines on the GPU. Other export requests are left unfilled (null). */
++ * KosmicKrisp semaphore is one) and a queue's Metal 4 command queue. Lets Metal work outside the
++ * driver (MetalFX) wait for and signal Vulkan timelines on the GPU, or run in the queue's own
++ * order. Other export requests are left unfilled (null). */
+ VKAPI_ATTR void VKAPI_CALL
+ kk_ExportMetalObjectsEXT(UNUSED VkDevice device,
+                          VkExportMetalObjectsInfoEXT *pMetalObjectsInfo)
+ {
+    for (VkBaseOutStructure *ext = (VkBaseOutStructure *)pMetalObjectsInfo->pNext;
+         ext != NULL; ext = ext->pNext) {
++      if (ext->sType == VK_STRUCTURE_TYPE_EXPORT_METAL_COMMAND_QUEUE_INFO_EXT) {
++         /* bbport: the queue's id<MTL4CommandQueue> (not an id<MTLCommandQueue>, whatever the
++          * field's type says), so Metal work outside the driver (MetalFX) can be committed to
++          * it in submission order. The caller serialises its commits with vkQueueSubmit, as
++          * for any use of the VkQueue. */
++         VkExportMetalCommandQueueInfoEXT *info =
++            (VkExportMetalCommandQueueInfoEXT *)ext;
++         info->mtlCommandQueue = NULL;
++         if (info->queue == VK_NULL_HANDLE)
++            continue;
++         VK_FROM_HANDLE(vk_queue, queue, info->queue);
++         info->mtlCommandQueue = (MTLCommandQueue_id)container_of(queue, struct kk_queue, vk)
++                                    ->mtl_handle;
++         continue;
++      }
+       if (ext->sType != VK_STRUCTURE_TYPE_EXPORT_METAL_SHARED_EVENT_INFO_EXT)
+          continue;
+       VkExportMetalSharedEventInfoEXT *info =

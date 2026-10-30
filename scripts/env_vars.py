@@ -27,7 +27,7 @@ KINDS = {
     'BUILD': ('Build', 'Read by the build and packaging scripts only.'),
 }
 
-# The code: C/C++ string literals, and the scripts' own lines (not their comments).
+# The code: C, C++ and Objective-C++ string literals, and the scripts' own lines (not comments).
 CODE_DIRS = ('src', 'gpu')
 CODE_SKIP = ('third_party', 'vendor')
 SCRIPT_FILES = ('run.py', 'run.sh', 'build.sh')
@@ -64,7 +64,7 @@ def used_names():
     """name -> first place the code or a script uses it."""
     used = {}
     literal = re.compile(r'"(BB_[A-Z0-9_]+)"')
-    for path in files(CODE_DIRS, ('.c', '.cpp', '.h', '.inc'), CODE_SKIP):
+    for path in files(CODE_DIRS, ('.c', '.cpp', '.h', '.inc', '.mm'), CODE_SKIP):
         if path == DEF:
             continue
         for number, line in enumerate(path.read_text(encoding='utf-8', errors='replace').splitlines(), 1):

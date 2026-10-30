@@ -19,6 +19,8 @@
 #include <unistd.h>
 #ifdef __APPLE__
 #include <mach/mach.h>
+
+#include "platform/macos/memory_macos.h"
 #endif
 
 #include "bbport_heap_sites.h"
@@ -63,6 +65,9 @@ bool FrameStatsEnabled() {
 /// DRM clients, RSS) and the parts we know of. GTT holds the game's direct memory (fixed).
 static void PrintMemory() {
     u64 vram_kib = 0, gtt_kib = 0;
+    u64 rss = 0;
+#ifndef __APPLE__
+    // bbport (macOS): no /proc there (below).
     std::vector<u64> clients;
     if (DIR* dir = opendir("/proc/self/fdinfo")) {
         while (const dirent* entry = readdir(dir)) {
@@ -98,8 +103,8 @@ static void PrintMemory() {
         }
         std::fclose(statm);
     }
-    u64 rss = u64(rss_pages) * u64(sysconf(_SC_PAGESIZE));
-#ifdef __APPLE__
+    rss = u64(rss_pages) * u64(sysconf(_SC_PAGESIZE));
+#else
     // bbport (macOS): no /proc; resident size from Mach (VRAM/GTT stay 0: unified memory).
     mach_task_basic_info_data_t info{};
     mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
@@ -156,6 +161,29 @@ static void PrintMemory() {
                 (unsigned long long)(BbStats::gc_trigger_bytes.load() >> 20),
                 (unsigned long long)BbStats::gc_freed_images.exchange(0),
                 (unsigned long long)BbStats::gc_kept_images.exchange(0));
+#ifdef __APPLE__
+    // bbport (macOS): RSS leaves out graphics memory (2.8 GB of a 12 GB footprint): the
+    // footprints (what Activity Monitor shows) of this process and of the game process, and the
+    // Mac's memory as a whole.
+    u64 footprint = 0, graphics = 0;
+    BbMacMemory::OwnFootprint(footprint, graphics);
+    const u64 game = BbMacMemory::GameProcessFootprint();
+    const BbMacMemory::System system = BbMacMemory::ReadSystem();
+    std::printf("Memory (macOS): footprint%s %llu MiB (graphics %llu MiB); game process "
+                "footprint %llu MiB; Mac: RAM %llu MiB, free %llu MiB, compressor %llu MiB "
+                "(holding %llu MiB), swap used %llu of %llu MiB, pressure level %d "
+                "(1 normal, 2 warning, 4 critical), memory available %d%%\n",
+                BbRemote::BackActive() ? " (bb-gpu)" : "", (unsigned long long)(footprint >> 20),
+                (unsigned long long)(graphics >> 20),
+                (unsigned long long)(game >> 20),
+                (unsigned long long)(BbMacMemory::PhysicalBytes() >> 20),
+                (unsigned long long)(system.free >> 20),
+                (unsigned long long)(system.compressed >> 20),
+                (unsigned long long)(system.compressed_data >> 20),
+                (unsigned long long)(system.swap_used >> 20),
+                (unsigned long long)(system.swap_total >> 20), system.pressure_level,
+                system.memorystatus_level);
+#endif
 }
 
 namespace {
@@ -174,6 +202,7 @@ struct FlipCounters {
     u64 read_faults = 0, read_fault_ns = 0, write_fault_ns = 0;
     u64 draws = 0, dispatches = 0, submissions = 0;
     u64 sys_us = 0, user_us = 0, preempted = 0, waits = 0;
+    u64 tess_draws = 0, patch_draws = 0; // bbport: BbStats::tess_draws, patch_list_draws
 };
 
 FlipCounters ReadFlipCounters() {
@@ -206,6 +235,8 @@ FlipCounters ReadFlipCounters() {
     c.user_us = BbStats::gpu_user_us.load();
     c.preempted = BbStats::gpu_invol_switches.load();
     c.waits = BbStats::gpu_vol_switches.load();
+    c.tess_draws = BbStats::tess_draws.load();
+    c.patch_draws = BbStats::patch_list_draws.load();
     if (const int clock = BbStats::gpu_thread_clock.load(); clock != -1) {
         timespec ts{};
         clock_gettime(static_cast<clockid_t>(clock), &ts);
@@ -332,6 +363,14 @@ void PrintStall(double frame_ms, const FlipCounters& c, const FlipCounters& last
                     (c.user_us - last.user_us) / 1e3, (c.sys_us - last.sys_us) / 1e3,
                     static_cast<unsigned long long>(c.preempted - last.preempted),
                     static_cast<unsigned long long>(c.waits - last.waits));
+#ifdef __APPLE__
+        if (c.tess_draws != last.tess_draws || c.patch_draws != last.patch_draws) {
+            std::printf("       %llu draws with the game's tessellation, %llu rect/quad-list "
+                        "draws (drawn as patches; counted when recorded)\n",
+                        static_cast<unsigned long long>(c.tess_draws - last.tess_draws),
+                        static_cast<unsigned long long>(c.patch_draws - last.patch_draws));
+        }
+#endif
         std::printf("       ms in: resident %.1f, protect %.1f, image create %.1f, "
                     "image refresh %.1f, staging %.1f, waiting for host copies %.1f\n",
                     (c.t[0] - last.t[0]) / 1e6, (c.t[1] - last.t[1]) / 1e6,
@@ -476,6 +515,17 @@ void PrintFrameLine(double window, u32 frames, double worst_ms) {
                 BbStats::present_call_ns.exchange(0) / (window * 1e7),
                 frames ? double(BbStats::reduced_draws.exchange(0)) / frames : 0.0,
                 frames ? double(BbStats::scene_draws.exchange(0)) / frames : 0.0);
+#ifdef __APPLE__ // bbport (macOS): counted by Rasterizer::DrawRecord there only
+    static u64 window_tess = 0, window_patch = 0;
+    const u64 tess = BbStats::tess_draws.load(), patch = BbStats::patch_list_draws.load();
+    if (frames && (tess != window_tess || patch != window_patch)) {
+        std::printf("Tessellation: %.1f draws/frame with the game's tessellation, %.1f "
+                    "rect/quad-list draws/frame (drawn as patches)\n",
+                    double(tess - window_tess) / frames, double(patch - window_patch) / frames);
+    }
+    window_tess = tess;
+    window_patch = patch;
+#endif
 }
 
 /// The window's memory lines: CPU writes over watched pages, memory use, what the draws bound

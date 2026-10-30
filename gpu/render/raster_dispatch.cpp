@@ -81,7 +81,7 @@ void UpdateCopyFilterRoom(const DrawPipe& pipe) {
     if (tsc - last_tsc < interval) {
         return;
     }
-    const u64 busy = pipe.busy_cycles.load(std::memory_order_relaxed);
+    const u64 busy = pipe.BusyCycles();
     const double share = double(busy - last_busy) / double(tsc - last_tsc);
     last_tsc = tsc;
     last_busy = busy;
@@ -565,13 +565,16 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
     if (FrameCapture::Active()) {
         FrameCapture::Dispatch(cs.pgm_hash, dim_x, dim_y, dim_z);
     }
-    const Breadcrumbs::Crumb crumb{
-        .kind = Breadcrumbs::Kind::Dispatch,
-        .hash = {cs.pgm_hash, 0},
-        .program = {cs.ProgramBase(), 0},
-        .count = {dim_x, dim_y, dim_z},
+    // bbport (macOS): built only with breadcrumbs on (RecordCrumbWith).
+    const auto make_crumb = [&] {
+        return Breadcrumbs::Crumb{
+            .kind = Breadcrumbs::Kind::Dispatch,
+            .hash = {cs.pgm_hash, 0},
+            .program = {cs.ProgramBase(), 0},
+            .count = {dim_x, dim_y, dim_z},
+        };
     };
-    scheduler.RecordCrumb(crumb, [=](vk::CommandBuffer cmdbuf) {
+    scheduler.RecordCrumbWith(make_crumb, [=](vk::CommandBuffer cmdbuf) {
         cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, handle);
         cmdbuf.dispatch(dim_x, dim_y, dim_z);
     });
@@ -642,15 +645,18 @@ void Rasterizer::DispatchIndirectRecord(const ComputePipeline* pipeline, VAddr a
     const u64 raw_offset = base;
     const auto& cs_crumb = pipeline->GetStage(Shader::SwStage::Compute);
     const u32 args_slot = Breadcrumbs::ArgsSlot();
-    const Breadcrumbs::Crumb crumb{
-        .kind = Breadcrumbs::Kind::DispatchIndirect,
-        .hash = {cs_crumb.pgm_hash, 0},
-        .program = {cs_crumb.ProgramBase(), 0},
-        .address = address,
-        .count = {buffer_cache.IsInPlace(address, size) ? 1u : 0u, 0, 0},
-        .args_slot = args_slot,
+    // bbport (macOS): built only with breadcrumbs on (RecordCrumbWith).
+    const auto make_crumb = [&] {
+        return Breadcrumbs::Crumb{
+            .kind = Breadcrumbs::Kind::DispatchIndirect,
+            .hash = {cs_crumb.pgm_hash, 0},
+            .program = {cs_crumb.ProgramBase(), 0},
+            .address = address,
+            .count = {buffer_cache.IsInPlace(address, size) ? 1u : 0u, 0, 0},
+            .args_slot = args_slot,
+        };
     };
-    scheduler.RecordCrumb(crumb, [=](vk::CommandBuffer cmdbuf) {
+    scheduler.RecordCrumbWith(make_crumb, [=](vk::CommandBuffer cmdbuf) {
         Breadcrumbs::CopyArgs(cmdbuf, raw_args, raw_offset, args_slot); // what the game wrote
         cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, handle);
         cmdbuf.dispatchIndirect(args, args_offset);

@@ -51,20 +51,38 @@ struct Frame {
     uint64_t wait_value = 0;
     void* signal_event = nullptr;
     uint64_t signal_value = 0;
+    /// BB_METALFX_TEST_STALL (a test): the command buffer first waits for an event that a timer
+    /// signals 10 s later, as MetalFX's own GPU work did when it stalled (run of 2026-10-24).
+    bool test_stall = false;
 };
 
 class Scaler {
 public:
     ~Scaler();
+    /// With `mtl4_queue` (KosmicKrisp's id<MTL4CommandQueue>, macOS 26), MetalFX runs on that
+    /// queue in its order (EncodeOnQueue); otherwise on a command queue of its own (Encode).
+    /// Errors that only the Metal 4 path has begin with "Metal 4: ".
     static std::unique_ptr<Scaler> Create(const Config& config, const Heaps& heaps,
-                                          std::string& error);
+                                          std::string& error, void* mtl4_queue = nullptr);
     /// Copies the input buffers into textures, upscales and copies the output into its buffer.
     /// Without events in `frame`, waits until the GPU is done.
     bool Encode(const Frame& frame, std::string& error);
+    /// Queue mode (created with `mtl4_queue`): copies the inputs, upscales and copies the output
+    /// back in one Metal 4 command buffer committed to that queue now, then signals
+    /// `frame.signal_event` to `frame.signal_value` there. The queue's earlier work (the input
+    /// copies) comes first and its later work (the copy back) after, through queue barriers: no
+    /// event waits. The caller serialises this with the queue's other commits (submit_mutex).
+    bool EncodeOnQueue(const Frame& frame, std::string& error);
     /// The failure of an earlier asynchronous frame, once.
     bool TakeError(std::string& error);
     /// Until the last frame handed to Metal is done (call from the thread that encodes).
     void WaitIdle();
+    /// Asynchronous frames handed to Metal whose command buffers have not completed (or failed).
+    /// Any thread.
+    [[nodiscard]] bool Busy() const;
+    /// Gives up on the last command buffer (a stalled one): the destructor no longer waits for
+    /// it, and what the command buffers use is left allocated (they still hold it).
+    void Abandon();
 
     struct Impl;
 

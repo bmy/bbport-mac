@@ -162,6 +162,18 @@ bool Rasterizer::TexturesBindableOnHelper(const Shader::Info& stage,
             image->prompt_icon =
                 u8(BbPrompts::IconOf(reinterpret_cast<const void*>(image->info.guest_address), 1024));
         }
+        // A compressible image this binding or a feedback loop needs in full usage: upgraded
+        // on the GPU thread (BindTextures).
+        // (FindView may first switch to another sample count's backing, which may need it.)
+        if (image->compressible && image->backing &&
+            ((image->backing->num_samples > 1) != (image->info.num_samples > 1) ||
+             (image->binding.is_target &&
+              OverlapsTarget(image_id, entry.found_desc.view_info.range) &&
+              (image->backing->compressible || image->LacksFeedbackUsage())) ||
+             (image->backing->compressible &&
+              image->NeedsFullUsage(entry.found_desc.view_info)))) {
+            return false;
+        }
         if (image->binding.needs_rebind || !texture_cache.IsUpToDate(image_id) ||
             scene_targets->Tracks(image->image_uid) || ((image->prompt_icon || image->prompt_atlas) && prompts->Active()) ||
             (upscaler->Enabled() && upscaler->RedirectsSampled(image_id))) {
@@ -346,7 +358,11 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
 
     bool uses_dma = false;
 
+#ifdef __APPLE__
+    const bool stats = BbStats::enabled; // bbport (macOS): was on for any value, even 0
+#else
     static const bool stats = bb_env("BB_FRAME_STATS") != nullptr;
+#endif
     if (stats && ((helper_full + helper_partial + helper_serial) & 1023) == 0) {
         static auto window = std::chrono::steady_clock::now();
         const auto now = std::chrono::steady_clock::now();
@@ -776,6 +792,8 @@ void Rasterizer::ResetBindings(bool is_compute) {
     for (auto& image_id : bound_images) {
         texture_cache.GetImage(image_id).binding = {};
     }
+    runtime.ReleaseRetired(); // the draw recorded: images it replaced can go after it
+
     for (const auto [buffer, offset, size, is_written] : bound_buffers) {
         const auto dst_stage = is_compute ? vk::PipelineStageFlagBits2::eComputeShader
                                           : vk::PipelineStageFlagBits2::eAllGraphics;

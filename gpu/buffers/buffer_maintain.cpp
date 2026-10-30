@@ -383,6 +383,27 @@ void BufferCache::UnmapInPlace(VAddr addr, u64 size) {
 
 void BufferCache::Maintain() {
     maintained_epoch = packet_epoch;
+#ifdef __APPLE__
+    // bbport (macOS): a heap's pieces given back 3 s ago go once the GPU is also past what was
+    // recorded until then (the Metal frame path's queue has stalled for seconds; memory freed
+    // under queued work leaves the residency set: a GPU fault). One batch at a time:
+    // DestroyRetiredChunks frees all RetiredChunks handed out. The tick is taken at the 3 s
+    // point, not at the give-back (FreeChunk runs on the runtime's thread, no scheduler): later,
+    // so it covers the earlier one.
+    static std::vector<std::uint32_t> retired_waiting;
+    static u64 retired_tick = 0;
+    if (retired_waiting.empty()) {
+        retired_waiting = BbGuestMemory::RetiredChunks();
+        retired_tick = scheduler.CurrentTick();
+    }
+    if (!retired_waiting.empty() && scheduler.IsFree(retired_tick)) {
+        for (const std::uint32_t index : retired_waiting) {
+            chunk_buffers[index % chunk_buffers.size()].reset();
+        }
+        BbGuestMemory::DestroyRetiredChunks();
+        retired_waiting.clear();
+    }
+#else
     // A heap's pieces given back 3 s ago: their chunk buffers go, then their memory.
     if (const auto retired = BbGuestMemory::RetiredChunks(); !retired.empty()) {
         for (const std::uint32_t index : retired) {
@@ -390,6 +411,7 @@ void BufferCache::Maintain() {
         }
         BbGuestMemory::DestroyRetiredChunks();
     }
+#endif
     if (VramTrapsEnabled()) {
         ReportVramTraps();
     }

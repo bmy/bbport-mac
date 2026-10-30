@@ -18,6 +18,11 @@
 #include "vulkan/instance.h"
 #include "render/runtime.h"
 #include "render/scheduler.h"
+#ifdef __APPLE__
+#include <dispatch/dispatch.h>
+
+#include "platform/macos/memory_macos.h"
+#endif
 
 namespace VideoCore {
 
@@ -36,6 +41,42 @@ u64 SteadySeconds() {
                    std::chrono::steady_clock::now().time_since_epoch())
                    .count());
 }
+
+#ifdef __APPLE__
+/// bbport (macOS): macOS's memory pressure (BbMacMemory::WatchPressure), polled by the collector:
+/// textures go sooner for 30 s (NoteVramShort), and the marks are lower meanwhile (percent of
+/// the budget: 85 after a warning, 70 after a critical notice).
+u64 pressure_until = 0; ///< steady seconds
+u64 pressure_percent = 100;
+
+void PollMemoryPressure() {
+    BbMacMemory::WatchPressure();
+    const unsigned long events = BbMacMemory::TakePressure();
+    if (events == 0) {
+        // macOS notifies changes only: a warning still in force when the 30 s end keeps them
+        // going (checked once then, not at every tick).
+        if (pressure_until != 0 && SteadySeconds() >= pressure_until) {
+            if (BbMacMemory::ReadSystem().pressure_level >= 2) {
+                pressure_until = SteadySeconds() + 30;
+                TextureCache::NoteVramShort();
+            } else {
+                pressure_until = 0;
+            }
+        }
+        return;
+    }
+    const bool critical = (events & DISPATCH_MEMORYPRESSURE_CRITICAL) != 0;
+    const u64 now = SteadySeconds();
+    // A critical notice is not undone by a warning within the 30 s.
+    pressure_percent = now < pressure_until ? std::min<u64>(pressure_percent, critical ? 70 : 85)
+                                            : (critical ? 70 : 85);
+    pressure_until = now + 30;
+    TextureCache::NoteVramShort();
+    std::printf("Memory: macOS reports %s memory pressure: textures go sooner for 30 s, "
+                "texture collector marks at %llu%% (BB_MEM_PRESSURE=0: off)\n",
+                critical ? "critical" : "warning", (unsigned long long)pressure_percent);
+}
+#endif
 
 } // namespace
 
@@ -173,7 +214,16 @@ void TextureCache::GarbageCollectImages() {
         // BB_GC_BUDGET_MB=N: so on any GPU with a fixed budget (tests).
         static const u64 forced_budget = bb_env_int("BB_GC_BUDGET_MB", 0) << 20;
         if (instance.IsIntegrated() || forced_budget) {
-            const u64 budget = forced_budget ? forced_budget : instance.GetDeviceMemoryBudgetNow();
+            u64 budget = forced_budget ? forced_budget : instance.GetDeviceMemoryBudgetNow();
+#ifdef __APPLE__
+            // bbport (macOS): lower for 30 s after macOS's memory pressure notifications.
+            if (instance.IsIntegrated()) {
+                PollMemoryPressure();
+                if (SteadySeconds() < pressure_until) {
+                    budget = budget / 100 * pressure_percent;
+                }
+            }
+#endif
             if (budget != 0) {
                 trigger_gc_memory = budget / 10 * 7;
                 pressure_gc_memory = budget / 100 * 85;
@@ -318,13 +368,39 @@ void TextureCache::GarbageCollectImages() {
         return false;
     };
 
+    // bbport (macOS): over the critical mark even without any cached image (the rest of the
+    // usage: buffers, the driver's), evicting the images in use (the aggressive
+    // passes below: idle for a second, then a moment) cannot get under it:
+    // they were only uploaded again, every tick. The images are taken at the larger of their
+    // guest size and all Vulkan images' memory (scaled targets are larger than the guest's).
+    // BB_GC_THRASH_GUARD=0: as on Linux.
+    bool hopeless = false;
+#ifdef __APPLE__
+    static const bool thrash_guard = !bb_env_off("BB_GC_THRASH_GUARD");
+    const u64 cached_images = std::max(BbStats::live_image_bytes.load(std::memory_order_relaxed),
+                                       BbStats::vk_image_bytes.load(std::memory_order_relaxed));
+    hopeless = thrash_guard && instance.IsIntegrated() &&
+               total_used_memory - std::min(cached_images, total_used_memory) >= critical_mark;
+    if (hopeless) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            std::printf("Texture cache: %llu MiB in use without its %llu MiB of images, over the "
+                        "critical mark (%llu MiB): images in use are not evicted for it "
+                        "(BB_GC_THRASH_GUARD=0: they are)\n",
+                        (unsigned long long)((total_used_memory - cached_images) >> 20),
+                        (unsigned long long)(cached_images >> 20),
+                        (unsigned long long)(critical_mark >> 20));
+        }
+    }
+#endif
     configure(false);
     lru_cache.ForEachItemBelow(below_tick, evict);
-    if (total_used_memory >= critical_mark) {
+    if (total_used_memory >= critical_mark && !hopeless) {
         configure(true);
         lru_cache.ForEachItemBelow(below_tick, evict);
     }
-    if (total_used_memory >= critical_mark) {
+    if (total_used_memory >= critical_mark && !hopeless) {
         // Still over it: what was used a moment ago goes too (out of memory otherwise).
         configure(true, true);
         lru_cache.ForEachItemBelow(below_tick, evict);

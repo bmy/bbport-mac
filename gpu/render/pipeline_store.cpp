@@ -21,6 +21,7 @@
 #include "shader/info.h"
 #include "shader/specialization.h"
 #include "vulkan/instance.h"
+#include "metal/vk_metal_shadow.h" // bbport (macOS): no-ops elsewhere
 
 namespace Vulkan {
 
@@ -210,6 +211,9 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) 
         if (result != vk::Result::eSuccess) {
             throw Serialization::CorruptData{"cached SPIR-V rejected by the driver"};
         }
+        if (MetalShadow::Enabled()) { // bbport (macOS): docs/MACOS_METAL_RENDERER.md, stage 2
+            MetalShadow::RegisterModule(created, spv);
+        }
         return created;
     };
 
@@ -277,6 +281,9 @@ std::optional<size_t> PipelineCache::AdoptImportedPermutation(std::vector<u8>&& 
         {.codeSize = spv.size() * sizeof(u32), .pCode = spv.data()});
     if (result != vk::Result::eSuccess) {
         return std::nullopt;
+    }
+    if (MetalShadow::Enabled()) { // bbport (macOS): as the cache's own modules
+        MetalShadow::RegisterModule(module, spv);
     }
     // As the game numbers a new permutation (GetProgram): the next index, saved under it.
     const size_t idx = modules.size();

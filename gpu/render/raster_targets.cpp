@@ -451,6 +451,15 @@ void Rasterizer::BindColorAttachments(RenderState& state, const GraphicsPipeline
         }
         texture_cache.UpdateImage(image_id);
         runtime.SetBackingSamples(image, key.color_samples[cb]);
+        // bbport (macOS): with compressible images, sampled elsewhere than drawn is no loop.
+        const bool feedback_loop =
+            image->binding.is_bound && (!instance.IsCompressibleImages() ||
+                                        image->binding.feedback || image->binding.force_general);
+        if (!reduced && feedback_loop &&
+            (image->backing->compressible || image->LacksFeedbackUsage())) {
+            // A feedback loop BindTextures did not see.
+            runtime.UpgradeUsage(image, "feedback loop (target)", true);
+        }
         const auto& view = texture_cache.FindRenderTarget(image_id, desc);
         const u32 slice = view.info.range.base.layer;
         const u32 mip = view.info.range.base.level;
@@ -473,7 +482,7 @@ void Rasterizer::BindColorAttachments(RenderState& state, const GraphicsPipeline
             vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eColorAttachmentRead;
         if (reduced) {
             // The proxy is drawn; the native image is resolved when something reads it.
-        } else if (image->binding.is_bound) {
+        } else if (feedback_loop) {
             // Also sampled by this draw: a feedback loop.
             ASSERT_MSG(!image->binding.force_general,
                        "Having image both as storage and render target is unsupported");

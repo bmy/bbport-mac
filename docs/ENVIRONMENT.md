@@ -101,7 +101,7 @@ What players and the launchers set. The menu, bbport.ini and the launcher write 
 | `BB_UPSCALE_PRESET` | the upscaler quality preset (the menu's) |
 | `BB_USER_NAME` | the PS4 user name (default Hunter) |
 
-## Tuning (239)
+## Tuning (259)
 
 Defaults to change on a machine where they misbehave, workarounds, and switches that turn a fix off for comparison.
 
@@ -136,6 +136,7 @@ Defaults to change on a machine where they misbehave, workarounds, and switches 
 | `BB_COPY_SKIP_SAME` | =0: off (default on): of the game's copy shader calls only the copies that change their destinations run (checked on thread bb:CopyFilter) |
 | `BB_COPY_THREADS` | =N (0-16): threads for large guest memory copies |
 | `BB_CORE_RESERVE` | =0 / 1: keep the game's threads off a reserved core (Linux, SMT CPUs with 6+ cores) |
+| `BB_CP_WAIT_SPIN_US` | =N: microseconds the command thread spins while every queue waits, then it sleeps between checks (default 100 on arm64 macOS; -1, the default elsewhere: it spins until the wait ends) |
 | `BB_DEAD_IMAGES` | =0: images of freed memory left to the collector instead of dropped on the GPU thread |
 | `BB_DEAD_IMAGES_LATE` | set: dead images dropped at the frame's end only, as before |
 | `BB_DETILE_SKIPPED` | =1: texture levels the quality setting leaves out are still detiled and read |
@@ -143,6 +144,7 @@ Defaults to change on a machine where they misbehave, workarounds, and switches 
 | `BB_DIRECT_MEMORY_ACCESS` | =1: shadPS4's direct memory access mode of the shader translator |
 | `BB_DIRECT_SEGMENT` | =0: the presenter waits for the recording threads instead of taking its own command segment |
 | `BB_DISABLE_HTTPS` | =1: the game's HTTPS requests go out as plain HTTP (online) |
+| `BB_DRAIN_SPIN_US` | =N: microseconds the draw pipe's stage A spins in a drain before it sleeps (default 50 on macOS; -1, the default elsewhere: it spins, then yields) |
 | `BB_DRAW_PIPE` | =0 / N: the draw pipeline off, or its depth |
 | `BB_FAST_WRITER_FAULTS` | =1: fast path for guest write faults (off: a device loss on a GTX 1050) |
 | `BB_FAULT_WINDOW` | =KiB: window unprotected around a guest write fault (default 256) |
@@ -168,6 +170,7 @@ Defaults to change on a machine where they misbehave, workarounds, and switches 
 | `BB_GC_LIVE_BUDGET` | =0: texture cache marks from the startup budget instead of the driver's current one |
 | `BB_GC_PRESSURE_IDLE_SECONDS` | =N (default 5): the same under memory pressure |
 | `BB_GC_SMALL_MARKS` | =P,C: pressure and critical marks in percent on small cards |
+| `BB_GC_THRASH_GUARD` | =0 (macOS): the texture collector evicts images in use even when what is over its critical mark is not images (re-uploaded every tick) |
 | `BB_GEOMETRY_SHADERS` | =0: the geometry stage hidden and its draws skipped (macOS A/B: KosmicKrisp emulates it with compute passes that end the render pass) |
 | `BB_GPU_COMMAND_WRITES` | =0: GPU command writes not done in place |
 | `BB_GPU_DATA_CHECK` | =0: GPU-written data not checked before CPU reads (#122) |
@@ -176,6 +179,7 @@ Defaults to change on a machine where they misbehave, workarounds, and switches 
 | `BB_GPU_QOS` | =1 (macOS experiment): the threads every frame waits on run as user-interactive work (performance cores) |
 | `BB_GPU_SPIN_US` | =N: microseconds the GPU thread spins before sleeping (default 200 with 12+ threads) |
 | `BB_GPU_TIMESTAMPS` | =0: timestamps written by the CPU instead of the GPU |
+| `BB_GPU_WATCHDOG_MS` | =N (macOS, Metal command path): milliseconds its committed Metal work may make no progress before the process exits (default 3000; 0: off; a stuck GPU takes WindowServer down) |
 | `BB_GPU_WRITES_IN_PLACE` | =1: GPU-written buffers in place with write tracking, as before |
 | `BB_GPU_WRITE_TWINS` | =1: VRAM twins of GPU-written guest pages |
 | `BB_GPU_WRITE_TWINS_MAX` | =N: pages with at most N GPU-written ranges get twins (default 1024) |
@@ -241,9 +245,20 @@ Defaults to change on a machine where they misbehave, workarounds, and switches 
 | `BB_LIST_RESTART` | =1 (macOS): primitive restart kept on list topologies on KosmicKrisp (off there by default: each such indexed draw cost an extra compute dispatch) |
 | `BB_LIVE_HYBRID` | =1: the startup resolution patch with live presets over it |
 | `BB_LOW_HEAP_TOP` | =0: the low heap at the bottom of the low region again, as before 0.3 (A/B) |
+| `BB_MEM_BUDGET` | =metal (macOS): the GPU memory budget is Metal's limit only, not also at most the Mac's RAM less what macOS keeps and the game process's footprint |
+| `BB_MEM_PRESSURE` | =0 (macOS): macOS's memory pressure notifications ignored (else textures go sooner, at lower marks, for 30 s after one) |
+| `BB_MEM_RESERVE_MB` | =N (macOS): MiB of RAM the GPU memory budget leaves macOS (default 20 %, at least 2.5 GiB) |
 | `BB_MEM_SEMAPHORE_ORDER` | =0: memory semaphores without ordering |
+| `BB_METALFX_AUTO_RETRY` | =0 (macOS): MetalFX not tried again by itself after a run-time failure (FSR 3.1 until it is chosen again; default: after 30 s, 2 min and 10 min) |
 | `BB_METALFX_EVENTS` | =2 (default) / 1 / 0 (macOS): MetalFX from a thread of its own / that and GPU-side waits on Vulkan / on the submission thread with CPU waits |
+| `BB_METALFX_STALL_MS` | =N (macOS): MetalFX work not done N ms after it went to Metal is given up, FSR 3.1 takes over (default 1000; 0: no cutoff) |
 | `BB_METALFX_SYNC` | =1 (macOS): MetalFX synchronous (the CPU waits for each frame) |
+| `BB_METAL_EMULATED_WAIT_MS` | =N (macOS, BB_METAL_FRAME): milliseconds a tessellated or geometry-shader draw waits for its Metal pipeline before KosmicKrisp's emulation draws it (default 1000; 0: no wait) |
+| `BB_METAL_FRAME` | =1 (macOS, arm64 bb-gpu with SPIRV-Cross): the Metal command path, most GPU work encoded in Metal directly, the rest on KosmicKrisp (docs/MACOS_METAL_RENDERER.md; needs the validation layers off) |
+| `BB_METAL_HAZARD_TRACKING` | =1 (macOS, Metal command path): Metal tracks hazards on every buffer instead of the explicit ordering |
+| `BB_METAL_ORDER` | =barriers (macOS, BB_METAL_FRAME): Metal encoders between two of the renderer's barriers may overlap on the GPU (default chain: one after another) |
+| `BB_METAL_PRECISE` | =all (macOS, Metal command path): exact float math kept in every stage (default: the stages that make positions only) |
+| `BB_METAL_SCRATCH_TRIM` | =1 (macOS, BB_METAL_FRAME): the old small scratch pool, its buffers taken out of the residency set when given back |
 | `BB_MIRROR_ALLOC_PERCENT` | =N (0 off): a mirror that would take device memory past N percent is refused |
 | `BB_MIRROR_COMPACT_AGE` | =N (default 30): mirrors younger than N seconds are left alone |
 | `BB_MIRROR_COMPACT_MB` | =N (default 64): mirror memory without valid blocks over this is given back |
@@ -258,6 +273,7 @@ Defaults to change on a machine where they misbehave, workarounds, and switches 
 | `BB_MOTION_LARGE` | =0: large skeletons left to camera motion vectors, as before |
 | `BB_MOTION_MATCH` | =order: repeated draws of one mesh find last frame's by draw order (the default off macOS), not by the nearest object |
 | `BB_MOTION_VERTICES_MI` | =N (1-8): object motion vertex buffer in Mi vertices |
+| `BB_MSL_SAFE_MATH` | =1 (macOS, Metal command path): Metal shaders compiled with safe math everywhere (default fast math, exact where the shader marks it) |
 | `BB_NET_MODULE` | =path: the online module to load (default gpu/libbbnet20.so beside bb-probe) |
 | `BB_NP_COUNTRY` | =code: the online user's country (default us) |
 | `BB_NP_LANGUAGE` | =code: the online user's language (default en) |
@@ -308,6 +324,7 @@ Defaults to change on a machine where they misbehave, workarounds, and switches 
 | `BB_SKIP_NOOP_DRAWS` | =1: draws without effect left out (#352, no gain measured) |
 | `BB_SOUND_HACK` | =0: saves left untouched (no sound settings fix) |
 | `BB_SPEC_MATCH` | =0: shader specializations always built and compared |
+| `BB_SPIRV_PRECISE` | =vertex (macOS): exact float math (NoContraction) only in the vertex, tessellation and geometry stages, not in fragment and compute shaders |
 | `BB_STAGE_PRIORITY` | =0 (default) / 1 / 2: draw stage thread priority off / above normal / highest |
 | `BB_STAGING_KEEP_MB` | =N (default 512): upload staging kept when idle |
 | `BB_STAGING_VRAM_IDLE_MS` | =N (default 3000): VRAM staging given back after this long unused |
@@ -315,6 +332,9 @@ Defaults to change on a machine where they misbehave, workarounds, and switches 
 | `BB_SUBMIT_AHEAD` | =N (default 2): a frame's first submissions go straight to the GPU |
 | `BB_SUBMIT_LOCK` | =frame: a frame's last submission decoded under the lock |
 | `BB_SWAPCHAIN_IMAGES` | =N: swapchain images |
+| `BB_SYNC_PIPELINE_WAIT_MS` | =N: milliseconds a draw redrawn every frame waits for a pipeline it needs at once before it goes without it until compiled (default 250 on macOS; -1, the default elsewhere: as long as it takes) |
+| `BB_TESS_CLAMP` | =1 (macOS): hull shader tessellation factors clamped to the game's maximum tess level (VGT_HOS_MAX_TESS_LEVEL), as the PS4 does |
+| `BB_TEXTURE_COMPRESSION` | =0 (macOS, KosmicKrisp): images made with their full usage (storage, mutable formats), so that Metal does not compress them; also KosmicKrisp patch 0006's part |
 | `BB_TEXTURE_HELPER` | =0 / 1: spinning texture helper thread (default: with cores to spare) |
 | `BB_TEXTURE_UPLOAD_MB_PER_FRAME` | =N (default 32, 0 off): texture bytes uploaded a frame before new textures start small |
 | `BB_THD_AUTH` | The Hunter's Dream account service URL |
@@ -347,7 +367,7 @@ Defaults to change on a machine where they misbehave, workarounds, and switches 
 | `BB_VULKANINFO` | path of vulkaninfo for the launcher |
 | `BB_WORK_RETIRED` | =0: the recording thread and fences do not wait for retired work |
 
-## Diagnostics (281)
+## Diagnostics (305)
 
 Logs, dumps, traces, probes and experiments, for finding bugs. Most cost frame time; none is meant for playing.
 
@@ -457,6 +477,7 @@ Logs, dumps, traces, probes and experiments, for finding bugs. Most cost frame t
 | `BB_GPU_PROFILE_DRAWS` | =1: the GPU profiler times every draw |
 | `BB_GPU_PROFILE_TOP` | =N: the GPU profiler prints the N heaviest labels (default 30) |
 | `BB_GPU_WRITE_WATCH` | =hex address: GPU writes noted over the 64 KiB page holding it |
+| `BB_GS_DEBUG` | =1 (macOS, Metal command path): geometry-shader draws write magenta to their first float attachment, without blending |
 | `BB_GUEST_HOOK_TRAPS` | =1: guest hooks stay int3 traps instead of native detours |
 | `BB_GUEST_WHOLE_CHUNKS` | =1 (tests): as if offset mappings failed (the NVIDIA path) |
 | `BB_GX_QUERY_FAIL` | =N: every Nth GX query creation fails as with a full heap |
@@ -492,6 +513,7 @@ Logs, dumps, traces, probes and experiments, for finding bugs. Most cost frame t
 | `BB_LAYER_WATCH_HOT` | =1 (experiment): often written blocks watched and uploaded after every write |
 | `BB_LAYER_WRITE_LOG` | set: large GPU writes kept in place, and the images near them |
 | `BB_LIST_UNRESOLVED` | =1 (porting another game): every unresolved import, once |
+| `BB_LOG_LONG_CB_MS` | =N (macOS, Metal command path): Metal command buffers whose GPU time, or the GPU's idle time before them, reaches N ms are logged |
 | `BB_LOW_INFO_TEST` | set: test of the memory queries for the game's statics (#282) |
 | `BB_MEMORY_LOCK_REPORT_MS` | =N (default 20, 0 off): memory map lock holds longer than this, with the code |
 | `BB_MENU_KEYS_FILE` | =file (scripted tests): menu key tokens read from it |
@@ -500,6 +522,26 @@ Logs, dumps, traces, probes and experiments, for finding bugs. Most cost frame t
 | `BB_METALFX_DEPTH_REVERSED` | =1 (macOS): MetalFX told the depth is reversed (A/B of the conventions) |
 | `BB_METALFX_INVERT_JITTER` | =1 (macOS): MetalFX gets the jitter with the other sign (A/B) |
 | `BB_METALFX_INVERT_MOTION` | =1 (macOS): MetalFX gets the motion vectors negated (A/B) |
+| `BB_METALFX_TEST_STALL` | =N (macOS test): the 600th frame of each of MetalFX's first N worker runs waits 10 s on the GPU |
+| `BB_METAL_DESCRIPTOR_SETS` | =0 (macOS, BB_METAL_FRAME): draws reading descriptor sets go to KosmicKrisp (bisecting) |
+| `BB_METAL_FENCE_CHECK` | =0 (macOS, Metal command path): fence waits not checked on the CPU (on by default: waits that could stop the GPU are counted and the first logged) |
+| `BB_METAL_FLAT_LAST` | =1 (macOS, BB_METAL_FRAME): draws with flat inputs from the last vertex stay in Metal (which takes them from the first) |
+| `BB_METAL_FORMAT_VARIANTS` | =0 (macOS, BB_METAL_FRAME): no depth/stencil format variants of a pipeline for the pass it draws in (bisecting) |
+| `BB_METAL_FRAME_TEST` | =1 (macOS, with BB_METAL_FRAME=1): ordering self-test of KosmicKrisp's and the Metal path's writes at the renderer's start (PASS or what landed out of order) |
+| `BB_METAL_GENERIC` | =0 (macOS, Metal command path): the renderer's own pipelines stay on KosmicKrisp |
+| `BB_METAL_GEOMETRY` | =0 (macOS, BB_METAL_FRAME): geometry-shader draws stay on KosmicKrisp (bisecting) |
+| `BB_METAL_GEOMETRY_INDIRECT` | =0 (macOS, BB_METAL_FRAME): indirect geometry-shader draws stay on KosmicKrisp |
+| `BB_METAL_GPU_DIAG` | =1 (macOS, BB_METAL_FRAME): encoder status on GPU errors, labelled encoders and a signpost per draw and dispatch |
+| `BB_METAL_INTEROP_TEST` | =1 (macOS): Vulkan/Metal ordering test on KosmicKrisp's queue at the renderer's start (PASS or where it failed); =2: without the render pass's barriers (a negative control) |
+| `BB_METAL_KEEP_AFTER_ERROR` | =1 (macOS, BB_METAL_FRAME): encoding in Metal goes on after a GPU error (else everything goes to KosmicKrisp from then on) |
+| `BB_METAL_SHADOW` | =1 (macOS, bb-gpu with the Metal command path): every game pipeline also built as a Metal pipeline state, the results counted in the log (BB_METAL_FRAME=1 does it too) |
+| `BB_METAL_STRIP_RESTART` | =0 (macOS, BB_METAL_FRAME): strips drawn without primitive restart go to KosmicKrisp (as before) |
+| `BB_METAL_TESS` | =0 (macOS, BB_METAL_FRAME): tessellated draws stay on KosmicKrisp (bisecting) |
+| `BB_METAL_TESS_INSTANCED` | =0 (macOS, BB_METAL_FRAME): instanced tessellated draws stay on KosmicKrisp |
+| `BB_METAL_TESS_PATCH_INPUTS` | =0 (macOS, Metal command path): an evaluation shader keeps its own patch constants struct (one sized unlike the control shader's leaves the pipeline to KosmicKrisp) |
+| `BB_METAL_TRACE` | =1: a layer over the renderer's Vulkan calls counts them; calls per second in the log every 5 s (docs/MACOS_METAL_RENDERER.md) |
+| `BB_METAL_TRANSFERS` | =0 / kinds (macOS, BB_METAL_FRAME): transfers in Metal (default 1: all); 0 none; a comma-separated list of copy, fill, update, b2i, i2b, image, clear: only those; -kind: all but those |
+| `BB_METAL_WATCHDOG` | =0 (macOS, BB_METAL_FRAME): no watchdog logging KosmicKrisp submissions and presents not done after 1 s and 3 s |
 | `BB_META_FIXED_BASE` | set: shader prediction from metadata at a fixed program base |
 | `BB_META_NO_SYNTH` | set: shader prediction without synthesized inputs |
 | `BB_META_RECIPE_FETCH` | set: shader prediction without generated fetch shaders |
@@ -587,12 +629,14 @@ Logs, dumps, traces, probes and experiments, for finding bugs. Most cost frame t
 | `BB_SEQUENCE_DUMP_TRIGGER` | =file: creating it saves the next images shown (frame generation checks) |
 | `BB_SHADER_CAPTURE` | =dir: shader inputs captured there |
 | `BB_SKIP_PS` | =hash,...: draws with these pixel shaders left out |
+| `BB_SKIP_TESS_DRAWS` | =1 (macOS test): draws with the game's tessellation are not drawn (missing from the picture) |
 | `BB_SLOW_BIND_LOG` | =microseconds: image memory binds slower than this |
 | `BB_SPEC_MATCH_CHECK` | set: the built specialization must find the same one |
 | `BB_STALL_REPORT` | =0: no report when the queues stop making progress |
 | `BB_STALL_THREADS` | =0: a stall report covers the command thread only |
 | `BB_STREAM_STATS` | =1: what a frame streams |
 | `BB_TAA_DIAGNOSTICS` | set: TAA diagnostic image dumps |
+| `BB_TESS_MAX` | =N (macOS experiment): tessellation factors capped at N (less detail than the game asks for) |
 | `BB_TEST_VPAD` | =1 (tests): a virtual Xbox-like gamepad |
 | `BB_THD_TRACE` | =1: every The Hunter's Dream datagram and callback |
 | `BB_TICK_LOG` | set: ranges marked written by the GPU most often, per 5 s |

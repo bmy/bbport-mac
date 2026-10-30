@@ -149,6 +149,37 @@ Shader::Profile MakeProfile(const Instance& instance, u32 sparse_page_shift) {
         .needs_unorm_fixup = driver == vk::DriverId::eMesaKosmickrisp,
         .needs_clip_distance_emulation = nvidia,
         .supports_shader_stencil_export = instance.IsShaderStencilExportSupported(),
+#ifdef __APPLE__
+        // BB_SPIRV_PRECISE=vertex: exact float math in the position stages only (macOS);
+        // unset or anything else: everywhere, as upstream. Part of the profile, so switching
+        // rebuilds the shader cache.
+        .precise_vertex_stages_only = [] {
+            const char* env = bb_env("BB_SPIRV_PRECISE");
+            const bool vertex_only = env && std::strcmp(env, "vertex") == 0;
+            if (vertex_only) {
+                LOG_WARNING(Render, "Shaders: exact float math in vertex, tessellation and "
+                                 "geometry stages only (BB_SPIRV_PRECISE=vertex)");
+            }
+            return vertex_only;
+        }(),
+        .tess_level_clamp = [] {
+            const bool clamp = bb_env_on("BB_TESS_CLAMP");
+            if (clamp) {
+                LOG_WARNING(Render, "Shaders: tessellation factors clamped to the game's maximum "
+                                    "tess level, as the PS4 does (BB_TESS_CLAMP=1)");
+            }
+            return clamp;
+        }(),
+        .tess_factor_cap = [] {
+            const char* env = bb_env("BB_TESS_MAX");
+            const u32 cap = env ? u32(std::strtoul(env, nullptr, 10)) : 0;
+            if (cap) {
+                LOG_WARNING(Render, "Shaders: tessellation factors capped at {} (BB_TESS_MAX, an "
+                                    "experiment: less detail than the game asks for)", cap);
+            }
+            return cap;
+        }(),
+#endif
         // BB_LAYER_MEMORY: buffers over nearly all memory go through the page table.
         .paged_buffers = VideoCore::BufferCache::LayerPagedActive(),
         // The game's buffer copy shader, from its profile (games/).

@@ -7,9 +7,16 @@
 // KosmicKrisp patch 0002) a thread of its own waits for the copies on the CPU, then hands
 // MetalFX the work; the copy back waits for MetalFX on the GPU. BB_METALFX_EVENTS=1: GPU-side
 // waits both ways through shared events (Metal's wait can miss Vulkan's signal: 4 s stalls).
+// BB_METALFX_EVENTS=3 (a test; patch 0007, macOS 26): MetalFX runs on KosmicKrisp's own Metal 4
+// queue, committed in submission order between the input copies and the copy back (no second
+// queue, no event waits; but a MetalFX stall then holds up the whole queue, with no cutoff).
 // BB_METALFX_EVENTS=0, or a driver without shared events: MetalFX runs on the submission thread
 // right before the copy back is submitted (it waits for the copies, then for MetalFX).
 // BB_METALFX_SYNC=1: the GPU thread finishes the frame so far and waits for MetalFX itself.
+// Worker mode's stall cutoff (BB_METALFX_STALL_MS, default 1000, 0: off): MetalFX work not done
+// that long after it was handed over is given up, the frames waiting for it go on, and FSR 3.1
+// takes over (the temporal upscaler may try MetalFX again later). BB_METALFX_TEST_STALL=N: a test
+// that makes MetalFX's GPU work stall for 10 s in each of its first N runs.
 // Elsewhere it reports itself unsupported.
 
 #pragma once
@@ -57,9 +64,18 @@ public:
     void Retry() noexcept {
         if (supported) {
             fatal = false;
+            transient = false;
             problem.clear();
+            test_frames = 0;
         }
     }
+    /// The last failure happened at run time (its GPU work failed or stalled) and need not
+    /// repeat, unlike an unsupported size or a scaler that cannot be created.
+    [[nodiscard]] bool Transient() const noexcept {
+        return transient;
+    }
+    /// No stalled or failed frame is still on MetalFX's queue: a retry can start now.
+    [[nodiscard]] bool Ready() const;
 
     struct Input {
         vk::Image image; ///< in General layout, TransferSrc usage
@@ -92,12 +108,17 @@ private:
     bool CreateStaging(Staging& staging, vk::DeviceSize size);
     void DestroyStaging(Staging& staging);
     bool EnsureResources(const Frame& frame);
-    void Fail(std::string reason, bool permanent);
+    void Fail(std::string reason, bool permanent, bool at_run_time = false);
 
     const Instance& instance;
     Scheduler& scheduler;
     bool supported = false;
     bool fatal = false;
+    bool transient = false;
+    /// A failure at run time: the next run gets a new scaler and with it a new command queue
+    /// (macOS ignores a queue's later work after one of its command buffers caused a GPU error:
+    /// "Ignored (for causing prior/excessive GPU errors)", run D, 2026-10-24).
+    bool rebuild_after_failure = false;
     std::string problem;
     void* get_metal_handle = nullptr; ///< PFN_vkGetMemoryMetalHandleEXT
     void SetUpEvents();
@@ -106,12 +127,16 @@ private:
     /// thread. Events (BB_METALFX_EVENTS=1): GPU-side waits through shared events. Worker
     /// (default): a thread of its own waits for the input copies on the CPU and hands MetalFX its
     /// work then; the copy back waits for MetalFX on the GPU.
-    enum class Mode { Sync, SubmitThread, Events, Worker };
+    /// Queue (BB_METALFX_EVENTS=3, needs this port's KosmicKrisp patch 0007, macOS 26): MetalFX
+    /// is committed to KosmicKrisp's own Metal 4 queue right before the copy back is submitted,
+    /// so the queue's order and barriers sequence it; no event waits, no second queue.
+    enum class Mode { Sync, SubmitThread, Events, Worker, Queue };
     struct Job; ///< a frame for the worker (vk_metalfx.cpp)
     struct Pending {
         u64 value;       ///< the done value its copy back waits for
         u64 copies_tick; ///< its input copies (work timeline)
         u64 issued_ns;
+        u64 handed_ns = 0; ///< Worker: when it went to Metal (0: not yet)
     };
     void WorkerLoop(std::stop_token stop);
     /// Until the worker has handed every queued frame to MetalFX.
@@ -128,7 +153,25 @@ private:
     std::mutex pending_mutex;
     std::deque<Pending> pending; ///< frames whose copy back waits, oldest first
     std::atomic<u64> encoded_value{0}; ///< Worker: the last frame handed to Metal
-    Mode mode = Mode::Sync;
+    /// The stall cutoff (BB_METALFX_STALL_MS, worker mode): a frame MetalFX has not finished that
+    /// long after the worker handed it over is given up. Its copy back, and every later frame's,
+    /// is let go from the CPU (`released_value`); the worker hands Metal nothing more, and FSR 3.1
+    /// takes over. Cleared once MetalFX's queue is empty again (Run, after a retry).
+    std::atomic<bool> stalled{false};
+    std::atomic<u64> released_value{0};
+    /// Let go of every frame issued so far (raises `done_event`, never lowers it). With
+    /// `only_if_stalled`, nothing once `stalled` is clear (checked under pending_mutex, where Run
+    /// clears it), so a frame issued after a retry is never let go.
+    void ReleaseIssued(bool only_if_stalled);
+    /// The first frame of a new scaler: its cutoff is longer (MetalFX's first frame has been slow).
+    std::atomic<u64> first_value{0};
+    /// BB_METALFX_TEST_STALL=N: the 600th frame of each of the first N MetalFX runs stalls.
+    u32 test_stalls_left = 0;
+    u32 test_frames = 0;
+    std::atomic<Mode> mode{Mode::Sync}; ///< set on the GPU thread; read by the watch thread too
+    /// Queue mode ends for the session (creation failed, or MetalFX's work failed on the
+    /// driver's queue): the worker hand-over takes over. GPU thread.
+    void LeaveQueueMode(const std::string& why);
     std::mutex deferred_mutex;
     std::string deferred_error; ///< a submission-thread MetalFX failure, reported next frame
     /// Events: the scheduler's timeline and MetalFX's own, as id<MTLSharedEvent>.
@@ -136,6 +179,7 @@ private:
     vk::Semaphore done_semaphore{}; ///< timeline signalled by Metal (via `done_event`)
     void* done_event = nullptr;
     void* work_event = nullptr;
+    void* driver_queue = nullptr; ///< Queue mode: KosmicKrisp's id<MTL4CommandQueue>
     u64 done_value = 0;
     std::array<Staging, 4> staging{}; ///< color, depth, motion, output
     std::unique_ptr<BbMetalFx::Scaler> scaler;

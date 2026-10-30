@@ -1,7 +1,11 @@
 // SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Float arithmetic, transcendentals and compares. Adds, multiplies, divides and FMAs are
-// NoContraction: the host compiler must not fuse what GCN computed separately.
+// NoContraction: the host compiler must not fuse what GCN computed separately. bbport (macOS):
+// with Profile::precise_vertex_stages_only (BB_SPIRV_PRECISE=vertex) only in the stages that
+// make positions, which must match bit for bit across the passes that draw the same geometry;
+// fragment and compute shaders compile without it (Wooloomooloo2/bloodborne_mac_port measured
+// GPU time 19.6 -> 12.1 ms per frame from that on Metal, docs/FINDINGS.md 2026-10-13).
 #include "shader/backend/spirv/emit_spirv_instructions.h"
 #include "shader/backend/spirv/spirv_emit_context.h"
 
@@ -10,6 +14,12 @@ namespace Shader::Backend::SPIRV {
 namespace {
 
 Id Exact(EmitContext& ctx, Id op) {
+#ifdef __APPLE__
+    if (ctx.profile.precise_vertex_stages_only &&
+        (ctx.sw_stage == SwStage::Fragment || ctx.sw_stage == SwStage::Compute)) {
+        return op;
+    }
+#endif
     ctx.Decorate(op, spv::Decoration::NoContraction);
     return op;
 }

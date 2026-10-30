@@ -119,6 +119,10 @@ void Vbao::OnAoPass(VideoCore::ImageId target, VideoCore::ImageId normals_id, bo
     const auto ao_format = ao.info.pixel_format;
     // The half-size path: an RGBA8 target of half the depth's size (rounded up).
     const bool half = ao_format == vk::Format::eR8G8B8A8Unorm;
+    if ((depth_format == vk::Format::eD32Sfloat || depth_format == vk::Format::eD32SfloatS8Uint) &&
+        (ao_format == vk::Format::eR8Unorm || half)) {
+        runtime.UpgradeUsage(&ao, "VBAO output"); // bbport (macOS): written as storage
+    }
     const u32 scale = half ? 2 : 1;
     if ((depth_format != vk::Format::eD32Sfloat && depth_format != vk::Format::eD32SfloatS8Uint) ||
         (ao_format != vk::Format::eR8Unorm && !half) ||
@@ -362,6 +366,9 @@ void Vbao::OnDisplayPass(VideoCore::ImageId frame) {
         return;
     }
     auto& color = texture_cache.GetImage(frame);
+    if (color.info.pixel_format == vk::Format::eR8G8B8A8Unorm) {
+        runtime.UpgradeUsage(&color, "VBAO view"); // bbport (macOS): written as storage
+    }
     if (color.info.pixel_format != vk::Format::eR8G8B8A8Unorm ||
         !(color.usage_flags & vk::ImageUsageFlagBits::eStorage)) {
         return;

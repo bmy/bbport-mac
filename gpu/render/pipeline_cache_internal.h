@@ -98,10 +98,15 @@ public:
             worker.join();
         }
     }
-    void Submit(std::function<void()> job) {
+    /// `urgent`: a pipeline a draw waits for (bbport, macOS: SyncWaitMs), ahead of the queue.
+    void Submit(std::function<void()> job, bool urgent = false) {
         {
             std::scoped_lock lk{mutex};
-            jobs.push_back(std::move(job));
+            if (urgent) {
+                jobs.push_front(std::move(job));
+            } else {
+                jobs.push_back(std::move(job));
+            }
         }
         cv.notify_one();
     }
@@ -138,6 +143,9 @@ struct PipelineCache::PendingPipeline {
     std::mutex mutex;
     std::condition_variable cv;
     bool done = false;
+    /// bbport (macOS): a draw that needed it at once gave up waiting (SyncWaitMs): the draws
+    /// go without it until it is done.
+    bool gave_up = false;
     std::unique_ptr<GraphicsPipeline> pipeline;
     GraphicsPipeline::SerializationSupport sdata{};
     bool saved = false; ///< its key is in the cache on disk already (an imported pipeline)

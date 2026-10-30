@@ -78,7 +78,7 @@ public:
     /// SampleProxy for a view obtained before (valid while Generation() is unchanged): the
     /// layout to sample it in.
     vk::ImageLayout PrepareSample(const VideoCore::Image& image, u32 level = 0);
-    /// Changes when proxies and their views are destroyed (SetSize).
+    /// Changes when proxies and their views are destroyed (SetSize, UpgradeProxy).
     [[nodiscard]] u64 Generation() const noexcept {
         return generation;
     }
@@ -107,12 +107,19 @@ private:
         std::vector<std::pair<VideoCore::ImageViewInfo, vk::UniqueImageView>> views;
         vk::ImageLayout layout = vk::ImageLayout::eUndefined;
         SceneResolution::Coherence state;
+        /// bbport (macOS): made without storage usage and mutable formats (compressible).
+        bool compressible = false;
     };
     static constexpr u64 Key(u64 uid, u32 level) {
         return uid << 4 | level;
     }
     Entry& Get(VideoCore::ImageId, u32 level = 0);
+    /// A view of the proxy; a compressible proxy is upgraded first when it cannot have it
+    /// (UpgradeProxy). `info.is_storage`: a color view for storage (depth: with stencil).
     vk::ImageView View(Entry&, const VideoCore::Image&, const VideoCore::ImageViewInfo&);
+    /// The proxy remade with the original's full usage, the contents copied over; the old one
+    /// and its views go once the GPU is done with them. Changes Generation().
+    void UpgradeProxy(Entry&, const VideoCore::Image& original);
     void Copy(Entry&, VideoCore::Image&, bool to_native);
     /// CopyProxy of a depth proxy into a colour one (R32F): through this buffer, as Vulkan
     /// copies no image between depth and colour aspects.

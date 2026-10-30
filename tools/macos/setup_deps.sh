@@ -192,6 +192,32 @@ if ! have include/vk_mem_alloc.h; then
     cmake_build VulkanMemoryAllocator -DVMA_BUILD_DOCUMENTATION=OFF -DVMA_BUILD_SAMPLES=OFF
 fi
 
+if [[ $ARCH == arm64 ]]; then
+    # SPIR-V -> MSL for the Metal command path (docs/MACOS_METAL_RENDERER.md; the native GPU
+    # process only): static, the MSL back end and what it needs.
+    step "SPIRV-Cross (static, arm64)"
+    SPVC_TAG=vulkan-sdk-1.4.363.0 SPVC_REV=f11ba9f0b21ba8fc15153d50a2a1ae31ab1cf8f7
+    echo "tag: $SPVC_TAG"
+    # The stamp names the pin: the GPU build takes SPIRV-Cross only from a prefix that has it
+    # (gpu/CMakeLists.txt), and a new pin rebuilds it.
+    spvc_stamp=$PREFIX/share/spirv_cross_msl/.bbport-rev
+    if ! have lib/libspirv-cross-msl.a || [[ $(cat "$spvc_stamp" 2>/dev/null) != "$SPVC_TAG $SPVC_REV" ]]; then
+        rm -f "$spvc_stamp"
+        fetch SPIRV-Cross https://github.com/KhronosGroup/SPIRV-Cross.git "$SPVC_TAG" "$SPVC_REV"
+        cmake_build SPIRV-Cross -DSPIRV_CROSS_SHARED=OFF -DSPIRV_CROSS_STATIC=ON \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DSPIRV_CROSS_CLI=OFF \
+            -DSPIRV_CROSS_ENABLE_TESTS=OFF -DSPIRV_CROSS_ENABLE_HLSL=OFF \
+            -DSPIRV_CROSS_ENABLE_CPP=OFF -DSPIRV_CROSS_ENABLE_REFLECT=OFF \
+            -DSPIRV_CROSS_ENABLE_C_API=OFF -DSPIRV_CROSS_ENABLE_UTIL=OFF
+        # Apache-2.0 (headers MIT and Khronos): its licences go with the binaries it is linked
+        # into (package.sh).
+        mkdir -p "$PREFIX/share/licenses/SPIRV-Cross"
+        cp "$SRC/SPIRV-Cross/LICENSE" "$PREFIX/share/licenses/SPIRV-Cross/LICENSE.txt"
+        cp "$SRC/SPIRV-Cross"/LICENSES/* "$PREFIX/share/licenses/SPIRV-Cross/"
+        echo "$SPVC_TAG $SPVC_REV" > "$spvc_stamp"
+    fi
+fi
+
 step "xbyak (header-only; revision upstream shadPS4 pins)"
 XBYAK_REV=44a72f369268f7d552650891b296693e91db86bb
 if ! have include/xbyak/xbyak.h; then

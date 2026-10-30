@@ -1,0 +1,160 @@
+diff --git a/src/kosmickrisp/libkk/kk_geometry.cl b/src/kosmickrisp/libkk/kk_geometry.cl
+index dd102f9..52b7b81 100644
+--- a/src/kosmickrisp/libkk/kk_geometry.cl
++++ b/src/kosmickrisp/libkk/kk_geometry.cl
+@@ -30,12 +30,37 @@ libkk_prefix_sum_tess(global struct poly_tess_params *p)
+    /* Allocate 4-byte indices */
+    uint32_t elsize_B = sizeof(uint32_t);
+    uint32_t size_B = total * elsize_B;
+-   uint alloc_B = poly_heap_alloc_offs(p->heap, size_B, 16);
+-   p->index_buffer = (global uint32_t *)(((uintptr_t)p->heap->base) + alloc_B);
+ 
+    /* ...and now we can generate the API indexed draw */
+    global uint32_t *desc = p->out_draws;
+ 
++   /* bbport: what this draw takes from the heap, the indices now and the
++    * domain points the second tessellation pass allocates per patch (at most
++    * one point per index, each allocation with its alignment), must fit. An
++    * overflow aborts the allocating thread (printf_abort is a return in this
++    * driver): here the draw descriptor would be left as it was, an indexed
++    * draw of whatever count the pool memory held, which can keep the GPU busy
++    * until macOS stops the command buffer. Such a draw draws nothing instead:
++    * no indices, and an instance count of 0, which the second pass's kernels
++    * take as "skip every patch" (the descriptor is written on every run, so a
++    * command buffer submitted again starts over).
++    */
++   uint64_t need_B = (uint64_t)size_B + 16u +
++                     (uint64_t)total * sizeof(struct poly_tess_point) +
++                     (uint64_t)p->nr_patches * 32u;
++   if ((uint64_t)p->heap->bottom + need_B >= (uint64_t)p->heap->size) {
++      p->index_buffer = (global uint32_t *)p->heap->base;
++      desc[0] = 0; /* count */
++      desc[1] = 0; /* instance_count */
++      desc[2] = 0;
++      desc[3] = 0;
++      desc[4] = 0;
++      return;
++   }
++
++   uint alloc_B = poly_heap_alloc_offs(p->heap, size_B, 16);
++   p->index_buffer = (global uint32_t *)(((uintptr_t)p->heap->base) + alloc_B);
++
+    desc[0] = total;              /* count */
+    desc[1] = 1;                  /* instance_count */
+    desc[2] = alloc_B / elsize_B; /* start */
+diff --git a/src/kosmickrisp/libkk/kk_tessellation.cl b/src/kosmickrisp/libkk/kk_tessellation.cl
+index c4a9cae..0fc2562 100644
+--- a/src/kosmickrisp/libkk/kk_tessellation.cl
++++ b/src/kosmickrisp/libkk/kk_tessellation.cl
+@@ -30,6 +30,25 @@ libkk_tess_setup_indirect(
+    size_t draw_stride = 5 * sizeof(uint32_t);
+    unsigned unrolled_patches = in_patches * instance_count;
+ 
++   /* bbport: an overflowing allocation aborts this thread (printf_abort is a
++    * return in this driver), leaving the grids below and the patch buffers as
++    * the pool memory held them for the VS, TCS and counting dispatches. A draw
++    * that does not fit in the heap is set up as an empty one instead.
++    */
++   {
++      uint64_t need_B =
++         (uint64_t)unrolled_patches * p->tcs_stride_el * 4 +
++         (uint64_t)unrolled_patches * 8 +
++         (uint64_t)poly_tcs_in_size(count * instance_count, vertex_outputs) + 16;
++      if ((uint64_t)p->heap->bottom + need_B >= (uint64_t)p->heap->size) {
++         p->patches_per_instance = 0;
++         p->nr_patches = 0;
++         for (uint i = 0; i < 9; ++i)
++            grids[i] = 0;
++         return;
++      }
++   }
++
+    uint32_t alloc = 0;
+    uint32_t tcs_out_offs = alloc;
+    alloc += unrolled_patches * p->tcs_stride_el * 4;
+diff --git a/src/kosmickrisp/libkk/kk_tessellator.cl b/src/kosmickrisp/libkk/kk_tessellator.cl
+index fc6e8da..d8be0c0 100644
+--- a/src/kosmickrisp/libkk/kk_tessellator.cl
++++ b/src/kosmickrisp/libkk/kk_tessellator.cl
+@@ -11,6 +11,10 @@ libkk_tess_isoline(constant struct poly_tess_params *p,
+                    enum poly_tess_mode tess_mode)
+ {
+    uint patch = cl_global_id.x;
++   /* bbport: none when the heap had no room for the draw: libkk_prefix_sum_tess
++    * wrote an instance count of 0 (else 1) */
++   if (tess_mode == POLY_TESS_MODE_WITH_COUNTS && p->out_draws[1] == 0)
++      return;
+    poly_tess_isoline_process(p, patch, tess_mode);
+ }
+ 
+@@ -19,6 +23,10 @@ libkk_tess_tri(constant struct poly_tess_params *p,
+                enum poly_tess_mode tess_mode)
+ {
+    uint patch = cl_global_id.x;
++   /* bbport: none when the heap had no room for the draw: libkk_prefix_sum_tess
++    * wrote an instance count of 0 (else 1) */
++   if (tess_mode == POLY_TESS_MODE_WITH_COUNTS && p->out_draws[1] == 0)
++      return;
+    poly_tess_tri_process(p, patch, tess_mode);
+ }
+ 
+@@ -27,5 +35,9 @@ libkk_tess_quad(constant struct poly_tess_params *p,
+                 enum poly_tess_mode tess_mode)
+ {
+    uint patch = cl_global_id.x;
++   /* bbport: none when the heap had no room for the draw: libkk_prefix_sum_tess
++    * wrote an instance count of 0 (else 1) */
++   if (tess_mode == POLY_TESS_MODE_WITH_COUNTS && p->out_draws[1] == 0)
++      return;
+    poly_tess_quad_process(p, patch, tess_mode);
+ }
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_draw.c b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+index 3ff27fd..a893711 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_draw.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+@@ -27,6 +27,9 @@
+ #include "vulkan/runtime/vk_render_pass.h"
+ #include "vulkan/util/vk_format.h"
+ 
++#include <stdlib.h>
++#include <sys/sysctl.h>
++
+ static void
+ kk_cmd_buffer_dirty_render_pass(struct kk_cmd_buffer *cmd)
+ {
+@@ -1032,8 +1035,33 @@ kk_init_heap(const void *data)
+    struct kk_cmd_buffer *cmd = (struct kk_cmd_buffer *)data;
+    struct kk_device *dev = kk_cmd_buffer_device(cmd);
+ 
+-   size_t size = 128 * 1024 * 1024;
+-   kk_alloc_bo(dev, &dev->vk.base, size, 0, &dev->heap);
++   /* bbport: the heap holds every tessellated, geometry-shader and unrolled
++    * draw's generated vertices and indices of a command buffer; 128 MiB ran out
++    * with the game's tessellation up close (libkk_prefix_sum_tess then draws
++    * nothing). By default 1 GiB, 512 MiB on Macs with less than 16 GiB;
++    * BB_KK_POLY_HEAP_MB sets it (64 to 2048: the heap's offsets are 32-bit
++    * and an allocation past a full heap must not wrap them). The old size if
++    * the larger one cannot be had.
++    */
++   const size_t old_size = 128 * 1024 * 1024;
++   size_t size = 1024ull * 1024 * 1024;
++   {
++      uint64_t mem = 0;
++      size_t len = sizeof(mem);
++      if (sysctlbyname("hw.memsize", &mem, &len, NULL, 0) == 0 && mem &&
++          mem < 16ull * 1024 * 1024 * 1024)
++         size = 512ull * 1024 * 1024;
++      const char *env = getenv("BB_KK_POLY_HEAP_MB");
++      if (env) {
++         unsigned long mb = strtoul(env, NULL, 10);
++         if (mb >= 64 && mb <= 2048)
++            size = (size_t)mb * 1024 * 1024;
++      }
++   }
++   if (kk_alloc_bo(dev, &dev->vk.base, size, 0, &dev->heap) != VK_SUCCESS) {
++      size = old_size;
++      kk_alloc_bo(dev, &dev->vk.base, size, 0, &dev->heap);
++   }
+ 
+    struct poly_heap *map = (struct poly_heap *)dev->heap->cpu;
+ 

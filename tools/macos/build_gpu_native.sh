@@ -43,7 +43,7 @@ echo "=== GPU library (arm64)"
 cmake -S gpu -B out/gpu-arm64 -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
     -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_SYSTEM_NAME=Darwin -DCMAKE_SYSTEM_PROCESSOR=arm64 \
     -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
-    -DCMAKE_PREFIX_PATH="$DEPS;$BREW_PREFIX" -DBB_LTO=OFF -DBB_PGO=off -DBB_NET=OFF \
+    -DCMAKE_PREFIX_PATH="$DEPS;$BREW_PREFIX" -DBB_LTO="${BB_LTO:-ON}" -DBB_PGO=off -DBB_NET=OFF \
     -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON "${LAUNCHER[@]}" \
     > out/gpu-arm64-configure.log 2>&1 ||
     { tail -40 out/gpu-arm64-configure.log >&2; echo "STOP: configure failed (out/gpu-arm64-configure.log)" >&2; exit 1; }

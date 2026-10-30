@@ -1,0 +1,56 @@
+diff --git a/src/kosmickrisp/vulkan/kk_image_layout.c b/src/kosmickrisp/vulkan/kk_image_layout.c
+index d3dc352..d7a020f 100644
+--- a/src/kosmickrisp/vulkan/kk_image_layout.c
++++ b/src/kosmickrisp/vulkan/kk_image_layout.c
+@@ -16,6 +16,8 @@
+ 
+ #include "util/format/u_format.h"
+ 
++#include <stdlib.h>
++
+ static enum mtl_texture_type
+ vk_image_to_mtl_texture_type(const struct vk_image *image)
+ {
+@@ -39,6 +41,17 @@ vk_image_to_mtl_texture_type(const struct vk_image *image)
+    }
+ }
+ 
++/* bbport: copies into an image are Metal blits and clears, blits and resolves render passes
++ * (vk_meta), none of which needs MTL_TEXTURE_USAGE_SHADER_WRITE; with it Metal never compresses
++ * the texture losslessly, and every image is a transfer destination. BB_TEXTURE_COMPRESSION=0
++ * maps transfer destinations to shader writes again, as upstream does. */
++static bool
++kk_transfer_dst_shader_write(void)
++{
++   const char *env = getenv("BB_TEXTURE_COMPRESSION");
++   return env != NULL && env[0] == '0';
++}
++
+ static enum mtl_texture_usage
+ vk_image_usage_flags_to_mtl_texture_usage(VkImageUsageFlags usage_flags,
+                                           VkImageCreateFlags create_flags,
+@@ -47,7 +60,8 @@ vk_image_usage_flags_to_mtl_texture_usage(VkImageUsageFlags usage_flags,
+    enum mtl_texture_usage usage = 0u;
+ 
+    const VkImageUsageFlags shader_write =
+-      VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
++      VK_IMAGE_USAGE_STORAGE_BIT |
++      (kk_transfer_dst_shader_write() ? VK_IMAGE_USAGE_TRANSFER_DST_BIT : 0u);
+    if (usage_flags & shader_write)
+       usage |= MTL_TEXTURE_USAGE_SHADER_WRITE;
+ 
+@@ -116,6 +130,14 @@ kk_image_layout_can_optimize(const struct kk_physical_device *pdev,
+    if (flags & VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT)
+       return false;
+ 
++   /* bbport: a 3D image with 2D views gets a second, 2D array texture over the
++    * same memory (kk_image_plane_bind); compressed contents need not read the
++    * same through both. Such images were never compressed before (transfer
++    * destinations had ShaderWrite). */
++   if (flags & (VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT |
++                VK_IMAGE_CREATE_2D_VIEW_COMPATIBLE_BIT_EXT))
++      return false;
++
+    return true;
+ }
+ 

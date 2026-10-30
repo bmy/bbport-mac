@@ -74,10 +74,10 @@ static SDL_Gamepad *current_gamepad(void) {
  * in use now and at most, and what it took from the system. A heap that keeps growing is a leak. */
 typedef struct { uint16_t size, version; uint32_t reserved; uint64_t max_system, system, max_in_use, in_use; } MallocManagedSize;
 static void report_guest_heap(void) {
-    static int enabled=-1; static uint64_t last;
-    if (enabled<0) enabled=bb_env("BB_FRAME_STATS")!=NULL;
+    static uint64_t last;
+    if (!runtime_frame_stats()) return; /* bbport (macOS): before the clock read */
     const uint64_t now=now_us();
-    if (!enabled || now-last<5000000) return;
+    if (now-last<5000000) return;
     last=now;
     /* Bloodborne's libc.prx (another game's libc has its exports elsewhere). */
     if (!runtime_libc_base) return;

@@ -199,10 +199,16 @@ void TemporalUpscaler::ExtraSharpen(vk::Image target, bool ldr, u32 w, u32 h, fl
             view.reset();
             image.Destroy();
         });
+#ifdef __APPLE__
+        // bbport (macOS): half float (taa_sharpen.comp's HALF_INPUT), half the memory traffic.
+        constexpr vk::Format CopyFormat = vk::Format::eR16G16B16A16Sfloat;
+#else
+        constexpr vk::Format CopyFormat = vk::Format::eR32G32B32A32Sfloat;
+#endif
         extra_sharpen_image = VideoCore::HostImage(device, instance.GetAllocator());
         extra_sharpen_image.Create(vk::ImageCreateInfo{
             .imageType = vk::ImageType::e2D,
-            .format = vk::Format::eR32G32B32A32Sfloat,
+            .format = CopyFormat,
             .extent = {w, h, 1},
             .mipLevels = 1, .arrayLayers = 1, .samples = vk::SampleCountFlagBits::e1,
             .tiling = vk::ImageTiling::eOptimal,
@@ -211,7 +217,7 @@ void TemporalUpscaler::ExtraSharpen(vk::Image target, bool ldr, u32 w, u32 h, fl
         });
         extra_sharpen_view = Check(device.createImageViewUnique({
             .image = vk::Image(extra_sharpen_image), .viewType = vk::ImageViewType::e2D,
-            .format = vk::Format::eR32G32B32A32Sfloat,
+            .format = CopyFormat,
             .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
         }));
         extra_sharpen_width = w;
@@ -232,7 +238,11 @@ void TemporalUpscaler::ExtraSharpen(vk::Image target, bool ldr, u32 w, u32 h, fl
     // bbport: the commands are recorded through the scheduler (a recording thread for FSR 3).
     scheduler.RecordCrumb({.name = "TAA extra sharpen"}, [target, copy = vk::Image(extra_sharpen_image),
                       copy_view = *extra_sharpen_view, target_view, extra, w, h,
+#ifdef __APPLE__
+                      pipeline = ldr ? *taa_sharpen_ldr_pipeline : *taa_sharpen_half_pipeline,
+#else
                       pipeline = ldr ? *taa_sharpen_ldr_pipeline : *taa_sharpen_pipeline,
+#endif
                       layout = *taa_sharpen_pipeline_layout](vk::CommandBuffer cmdbuf) {
         const auto image_barrier = [&](vk::Image image, vk::ImageLayout old_layout,
                                        vk::PipelineStageFlags2 src, vk::AccessFlags2 src_access,
@@ -379,13 +389,19 @@ void TemporalUpscaler::OnSceneComposite() {
                                 : std::array<u32, 2>{color.info.size.width, color.info.size.height};
     const u32 w = reduced ? scene_targets.Size().width : scene[0];
     const u32 h = reduced ? scene_targets.Size().height : scene[1];
-    if (w != width || h != height || !(color.usage_flags & vk::ImageUsageFlagBits::eStorage)) {
+    if (w != width || h != height) {
+        return;
+    }
+    // bbport (macOS): the mask reads the scene color as a storage image.
+    runtime.UpgradeUsage(&color, "upscaler reactive mask");
+    if (!(color.usage_flags & vk::ImageUsageFlagBits::eStorage)) {
         return;
     }
     scheduler.EndRendering();
     if (reduced) {
         VideoCore::ImageViewInfo ci;
         ci.format = color.info.pixel_format;
+        ci.is_storage = true;
         const auto proxy = scene_targets.Read(scene_color, ci);
         mask_ready = RecordReactive(proxy.view);
         return;

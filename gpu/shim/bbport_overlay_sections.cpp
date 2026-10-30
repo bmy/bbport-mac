@@ -130,6 +130,8 @@ bool UpscalerSection(BbSettings::Values& s) {
 #endif
             ImGui::BeginDisabled(!supported);
             if (ImGui::Selectable(upscalers[i], i == upscaler)) {
+                s.upscaler_fallback_from = -1; // a choice (FSR 3.1 too): no stand-in to keep
+                ++s.upscaler_chosen;
                 Store(s.upscaler, i, true);
             }
             ImGui::EndDisabled();

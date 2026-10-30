@@ -5,6 +5,8 @@
 // but different runtime info need different host shaders; it is part of the shader key.
 #pragma once
 
+#include <cstddef>
+
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -137,8 +139,20 @@ struct SwTessControlRuntimeInfo {
     u32 num_threads;
     ::Gcn::TessellationType tess_type;
     bool offchip_lds_enable;
+    /// bbport (macOS), BB_TESS_CLAMP=1: the game's VGT_HOS_MAX_TESS_LEVEL, which the hardware
+    /// applies to the hull shader's factors, in 1/256ths (0: not applied, as upstream). In the
+    /// padding after offchip_lds_enable: RuntimeInfo keeps 0.7's layout (it is stored raw, and
+    /// the memset constructor zeroed this padding in every record: the shipped recipe pack too).
+    u16 max_tess_level_256;
     u32 ls_stride;
     u32 hs_output_base;
+
+    f32 MaxTessLevel() const {
+        return f32(max_tess_level_256) / 256.0f;
+    }
+    void SetMaxTessLevel(f32 level) { // 0 <= level < 64
+        max_tess_level_256 = u16(level * 256.0f + 0.5f);
+    }
 
     bool operator==(const SwTessControlRuntimeInfo&) const = default;
 
@@ -154,6 +168,10 @@ struct SwTessControlRuntimeInfo {
         return IsPassthrough() ? num_input_control_points : num_threads;
     }
 };
+// bbport: 0.7's layout (the max tess level sits in padding; see above).
+static_assert(offsetof(SwTessControlRuntimeInfo, max_tess_level_256) == 18 &&
+              offsetof(SwTessControlRuntimeInfo, ls_stride) == 20 &&
+              sizeof(SwTessControlRuntimeInfo) == 28);
 
 struct SwTessEvalRuntimeInfo {
     u32 hs_output_cp_stride;

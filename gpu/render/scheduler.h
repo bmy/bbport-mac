@@ -276,6 +276,16 @@ public:
             Breadcrumbs::Mark(cmdbuf, stream, id, true);
         });
     }
+    /// bbport (macOS): RecordCrumb with the crumb built by `make` (returning a Crumb) only when
+    /// breadcrumbs are on (off by default on macOS); every draw and dispatch built its crumb.
+    template <typename Make, typename Func>
+    void RecordCrumbWith(Make&& make, Func&& func) {
+        if (!Breadcrumbs::Enabled()) {
+            Record(std::forward<Func>(func));
+            return;
+        }
+        RecordCrumb(make(), std::forward<Func>(func));
+    }
 
     /// Waits until the submission signalling `tick` is in the queue. Another thread's
     /// submission waiting for the tick on the same queue must not go first (BB_ASYNC_SUBMIT

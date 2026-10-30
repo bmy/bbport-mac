@@ -384,9 +384,7 @@ static void guest_call_sites(uint64_t out[3]) {
     for (int i=0;i<400 && found<3 && (uintptr_t)(sp+i+1)<=stack_hi;++i) if (sp[i]>=text_lo && sp[i]<text_hi) out[found++]=sp[i]-text_lo;
 }
 void runtime_wait_note(int kind, uint64_t ns) {
-    static int enabled=-1;
-    if (enabled<0) enabled=bb_env("BB_FRAME_STATS")!=NULL;
-    if (!enabled) return;
+    if (!runtime_frame_stats()) return;
     if (!wait_tid) {
 #ifdef __APPLE__
         uint64_t id=0; pthread_threadid_np(NULL,&id); wait_tid=(int)id;

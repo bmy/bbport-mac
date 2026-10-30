@@ -341,6 +341,17 @@ private:
                               u32 oh, float frame_ms, bool frame_reset);
     bool fsr4_failed = false;
     std::unique_ptr<MetalFxUpscaler> metalfx;
+    /// bbport (macOS): after MetalFX fails at run time (a stall, a failed command buffer) FSR 3.1
+    /// stands in and MetalFX is tried again after 30 s, 2 min and 10 min; a fourth failure keeps
+    /// FSR 3.1 for the session. 30 min of MetalFX after a retry starts the count over. Choosing an
+    /// upscaler in a menu ends it. BB_METALFX_AUTO_RETRY=0: off (FSR 3.1 until chosen again).
+    void MetalFxAutoRetry();
+    void NoteMetalFxFailure();
+    bool metalfx_standing_in = false; ///< the upscaler setting holds FSR 3.1 on MetalFX's behalf
+    u32 metalfx_failures = 0;
+    std::chrono::steady_clock::time_point metalfx_retry_at{}; ///< epoch: none due
+    std::chrono::steady_clock::time_point metalfx_retried{};  ///< MetalFX on since (a retry)
+    std::uint32_t metalfx_chosen_seen = 0; ///< BbSettings upscaler_chosen when the stand-in began
     bool resources_metalfx = false; ///< made for MetalFX (no FSR 3 context)
     /// The FSR 4 model for this preset and output is still being built (#213): FSR 3.1 meanwhile.
     bool fsr4_waiting = false;
@@ -370,6 +381,7 @@ private:
     vk::UniquePipelineLayout taa_sharpen_pipeline_layout;
     vk::UniquePipeline taa_sharpen_pipeline;
     vk::UniquePipeline taa_sharpen_ldr_pipeline;
+    vk::UniquePipeline taa_sharpen_half_pipeline; // bbport (macOS): extra sharpening, RGBA16F copy
     // FSR 1 (upscaler fsr1): EASU, then the RCAS pass above (ExtraSharpen).
     vk::UniqueSampler easu_sampler;
     vk::UniqueDescriptorSetLayout easu_desc_layout;

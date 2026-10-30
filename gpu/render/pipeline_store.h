@@ -26,7 +26,8 @@ constexpr u32 ShaderBinaryVersion = 27u; // bbport: the motion output in slot 5 
 #else
 constexpr u32 ShaderBinaryVersion = 24u; // paged records read once, a lookup per page (PagedDwords)
 #endif
-constexpr u32 ShaderMetaVersion = 8u;    // the object motion buffer addresses
+constexpr u32 ShaderMetaVersion = 8u;    // the object motion buffer addresses (bbport: the Metal
+                                         // work's max tess level is in RuntimeInfo's padding)
 // bbport: not bumped for the macOS motion slot (the shipped recipe pack is stamped 5): the slot is
 // in the shaders (ShaderBinaryVersion); an old key with motion in slot 7 is never selected.
 constexpr u32 PipelineKeyVersion = 5u;   // Info layout (ImageResource::needs_native)

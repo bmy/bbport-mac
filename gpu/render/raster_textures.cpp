@@ -56,6 +56,23 @@ Rasterizer::ImageDescCacheEntry& Rasterizer::CachedImageDescEntry(const Gcn::Ima
     return entry;
 }
 
+bool Rasterizer::OverlapsTarget(VideoCore::ImageId image_id,
+                                const VideoCore::SubresourceRange& range) const {
+    const auto overlaps = [&](const VideoCore::SubresourceRange& target) {
+        return range.base.level < target.base.level + target.extent.levels &&
+               target.base.level < range.base.level + range.extent.levels &&
+               range.base.layer < target.base.layer + target.extent.layers &&
+               target.base.layer < range.base.layer + range.extent.layers;
+    };
+    // (Slots past this draw's targets may be stale: at worst a loop is assumed.)
+    for (const auto& [id, desc] : cb_descs) {
+        if (id == image_id && overlaps(desc.view_info.range)) {
+            return true;
+        }
+    }
+    return db_desc.first == image_id && overlaps(db_desc.second.view_info.range);
+}
+
 bool Rasterizer::TransitSampled(VideoCore::Image& image,
                                 const VideoCore::TextureCache::ImageDesc& desc,
                                 const VideoCore::Image::Binding& binding, bool is_storage) {
@@ -63,7 +80,7 @@ bool Rasterizer::TransitSampled(VideoCore::Image& image,
     // loop): the whole image in the general or feedback loop layout. Depth images are never
     // storage, and a feedback loop makes no sense for them.
     if ((binding.force_general || binding.is_target) && !image.info.props.is_depth) {
-        if (instance.IsAttachmentFeedbackLoopLayoutSupported() && image.binding.is_target) {
+        if (instance.IsAttachmentFeedbackLoopLayoutSupported() && binding.is_target) {
             return runtime.Transit(&image, vk::ImageLayout::eAttachmentFeedbackLoopOptimalEXT,
                                    vk::PipelineStageFlagBits2::eAllGraphics,
                                    vk::AccessFlagBits2::eShaderRead);
@@ -162,6 +179,9 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
     // TextureSetMemo: what this call resolves, to remember when the set qualifies.
     std::array<TextureSetEntry, TextureSet::MaxImages> resolved{};
     bool set_ok = set_slot != nullptr;
+    // A proxy upgraded while binding (SceneTargets::UpgradeProxy) leaves earlier bindings with
+    // views of the replaced proxy: such a set is not remembered.
+    const u64 scene_generation = scene_targets->Generation();
     // SampleSceneProxies: bindings that may read a reduced scene proxy instead of the native
     // image (normalized sampling only; see Shader::ImageResource::needs_native).
     boost::container::small_vector<bool, 16> binding_proxy_ok;
@@ -284,6 +304,42 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
         }
 
         image_descriptor_array_sizes.push_back(num_bindings);
+    }
+
+    // bbport (macOS): compressible images this stage needs in full usage (a storage or another
+    // format's view, or a feedback loop with a target of this draw) are upgraded before any
+    // binding takes a view, so that no binding of the stage holds a view of a replaced backing.
+    // (The helper never gets such stages: TexturesBindableOnHelper.)
+    if (instance.IsCompressibleImages() && !pipeline_is_compute) {
+        // First which targets are in a feedback loop, over every binding: each binding of
+        // such an image takes the loop's layout (one sampled elsewhere would otherwise have
+        // its range in another layout than its descriptor says).
+        for (const auto& [image_id, desc_ptr] : image_bindings) {
+            if (image_id) {
+                auto& image = texture_cache.GetImage(image_id);
+                if (image.binding.is_target && OverlapsTarget(image_id, desc_ptr->view_info.range)) {
+                    image.binding.feedback = 1u;
+                }
+            }
+        }
+    }
+    if (!on_helper && instance.IsCompressibleImages()) {
+        for (const auto& [image_id, desc_ptr] : image_bindings) {
+            if (!image_id) {
+                continue;
+            }
+            auto& image = texture_cache.GetImage(image_id);
+            if (!image.backing) {
+                continue;
+            }
+            if (image.binding.feedback &&
+                (image.backing->compressible || image.LacksFeedbackUsage())) {
+                runtime.UpgradeUsage(&image, "feedback loop", true);
+            } else if (image.NeedsFullUsage(desc_ptr->view_info)) {
+                runtime.UpgradeUsage(&image, desc_ptr->view_info.is_storage ? "storage view"
+                                                                           : "view format");
+            }
+        }
     }
 
     // Second pass to re-bind images that were updated after binding
@@ -472,7 +528,17 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
                     continue;
                 }
             }
-            barrier |= TransitSampled(image, desc, binding, is_storage);
+            // bbport (macOS): with compressible images a target of this draw sampled at another
+            // mip or layer is no feedback loop (each range in its own layout).
+            auto transit_binding = binding;
+            if (binding.is_target && instance.IsCompressibleImages() && !pipeline_is_compute) {
+                // (An image found again above, after a rebind, is checked here.)
+                if (OverlapsTarget(image_id, desc.view_info.range)) {
+                    image.binding.feedback = 1u;
+                }
+                transit_binding.is_target = image.binding.feedback;
+            }
+            barrier |= TransitSampled(image, desc, transit_binding, is_storage);
             image.usage.storage |= is_storage;
             image.usage.texture |= !is_storage;
             if (FrameCapture::Active()) {
@@ -502,7 +568,8 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
             }
         }
     }
-    if (set_ok && image_bindings.size() == stage.images.size()) {
+    if (set_ok && image_bindings.size() == stage.images.size() &&
+        scene_targets->Generation() == scene_generation) {
         // Remember the set: the same T#s resolve the same way while no image is (un)registered.
         set_slot->generation = texture_cache.RegistryGeneration();
         set_slot->scene_generation = scene_targets->Generation();
@@ -549,7 +616,10 @@ void Rasterizer::ForceAnisotropy(Gcn::Sampler& sharp, bool is_depth) const {
         static std::atomic<u64> seen{0};
         const u32 kind = u32(sharp.xy_min_filter) * 3 * 5 + u32(sharp.mip_filter) * 5 +
                          u32(sharp.max_aniso);
-        if (kind < 64 && !(seen.fetch_or(1ull << kind) & (1ull << kind))) {
+        // bbport (macOS): a relaxed load first; the read-modify-write (for every sampler of
+        // every draw) only for a kind not printed yet.
+        if (kind < 64 && !(seen.load(std::memory_order_relaxed) & (1ull << kind)) &&
+            !(seen.fetch_or(1ull << kind, std::memory_order_relaxed) & (1ull << kind))) {
             std::printf("Sampler: game uses min filter %u, mip filter %u, anisotropy %.0fx\n",
                         u32(sharp.xy_min_filter), u32(sharp.mip_filter),
                         sharp.MaxAniso());

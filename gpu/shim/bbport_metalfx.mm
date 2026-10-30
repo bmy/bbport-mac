@@ -11,6 +11,9 @@
 
 #include <cstdio>
 #include <dlfcn.h>
+#include <atomic>
+#include <chrono>
+#include <thread>
 #include <mutex>
 
 namespace BbMetalFx {
@@ -74,22 +77,68 @@ struct Scaler::Impl {
     struct Errors {
         std::mutex mutex;
         std::string text;
+        // Asynchronous command buffers committed and not yet completed (their handlers count down).
+        std::atomic<int> in_flight{0};
     };
     std::shared_ptr<Errors> errors = std::make_shared<Errors>();
     // The last command buffer: waited for before the scaler goes (its handler uses this state).
     id<MTLCommandBuffer> last;
+    // Queue mode (macOS 26): KosmicKrisp's id<MTL4CommandQueue>, a Metal 4 scaler
+    // (id<MTL4FXTemporalScaler>) and the compiler it was built with, what its command buffers
+    // make resident (MetalFX's textures; the heaps are KosmicKrisp's, resident on its queue), and
+    // the fence between the copies and MetalFX's own passes. Typed as `id`: macOS 26 types.
+    id queue4;
+    id scaler4;
+    id compiler4;
+    id residency; // id<MTLResidencySet> (macOS 15)
+    id<MTLFence> fence;
 };
 
 Scaler::Scaler(std::unique_ptr<Impl> impl_) : impl{std::move(impl_)} {}
+
+namespace {
+
+/// Queue mode: Metal 4 command buffers do not keep what they use, so the textures and the
+/// residency set stay until every committed one has completed (their feedback handlers count
+/// down). False after `seconds` (a stuck GPU): the caller then leaves them allocated.
+bool WaitInFlight(const std::shared_ptr<Scaler::Impl::Errors>& errors, double seconds) {
+    const auto until = std::chrono::steady_clock::now() + std::chrono::duration<double>(seconds);
+    while (errors->in_flight.load(std::memory_order_acquire) > 0) {
+        if (std::chrono::steady_clock::now() >= until) {
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return true;
+}
+
+} // namespace
 
 Scaler::~Scaler() {
     if (impl && impl->last) {
         [impl->last waitUntilCompleted];
     }
+    if (impl && impl->queue4 && !WaitInFlight(impl->errors, 10.0)) {
+        std::printf("Upscaler: MetalFX's work on the driver's queue did not finish; its textures "
+                    "are left allocated\n");
+        (void)impl.release();
+    }
+}
+
+bool Scaler::Busy() const {
+    return impl->errors->in_flight.load(std::memory_order_acquire) > 0;
+}
+
+void Scaler::Abandon() {
+    // Legacy command buffers keep their buffers and textures (Metal retains what they use), so
+    // only the wait goes; the Impl itself stays allocated for the handlers' sake. (Worker mode
+    // only: Metal 4 command buffers retain nothing.)
+    impl->last = nil;
+    (void)impl.release();
 }
 
 std::unique_ptr<Scaler> Scaler::Create(const Config& config, const Heaps& heaps,
-                                       std::string& error) {
+                                       std::string& error, void* mtl4_queue) {
     @autoreleasepool {
         Class cls = DescriptorClass();
         if (!cls) {
@@ -129,10 +178,54 @@ std::unique_ptr<Scaler> Scaler::Create(const Config& config, const Heaps& heaps,
         descriptor.motionTextureFormat = MTLPixelFormatRG16Float;
         descriptor.outputTextureFormat = MTLPixelFormatRGBA16Float;
         descriptor.autoExposureEnabled = config.hdr;
-        impl->scaler = [descriptor newTemporalScalerWithDevice:device];
-        if (!impl->scaler) {
-            error = "newTemporalScalerWithDevice failed";
-            return nullptr;
+        MTLTextureUsage usages[4]{};
+        if (mtl4_queue) {
+            if (@available(macOS 26.0, *)) {
+                id queue = (__bridge id)mtl4_queue;
+                if (![queue respondsToSelector:@selector(commit:count:options:)]) {
+                    error = "Metal 4: the driver's queue is not a Metal 4 queue";
+                    return nullptr;
+                }
+                if (![cls respondsToSelector:@selector(supportsMetal4FX:)] ||
+                    ![cls supportsMetal4FX:device]) {
+                    error = "Metal 4: no Metal 4 MetalFX for this GPU";
+                    return nullptr;
+                }
+                NSError* failure = nil;
+                id<MTL4Compiler> compiler =
+                    [device newCompilerWithDescriptor:[[MTL4CompilerDescriptor alloc] init]
+                                                error:&failure];
+                if (!compiler) {
+                    error = "Metal 4: newCompilerWithDescriptor failed: " + Describe(failure);
+                    return nullptr;
+                }
+                id<MTL4FXTemporalScaler> scaler4 =
+                    [descriptor newTemporalScalerWithDevice:device compiler:compiler];
+                if (!scaler4) {
+                    error = "Metal 4: newTemporalScalerWithDevice:compiler: failed";
+                    return nullptr;
+                }
+                impl->compiler4 = compiler;
+                impl->scaler4 = scaler4;
+                impl->queue4 = (__bridge id<MTL4CommandQueue>)mtl4_queue;
+                usages[0] = scaler4.colorTextureUsage;
+                usages[1] = scaler4.depthTextureUsage;
+                usages[2] = scaler4.motionTextureUsage;
+                usages[3] = scaler4.outputTextureUsage;
+            } else {
+                error = "Metal 4: MetalFX on the driver's queue needs macOS 26";
+                return nullptr;
+            }
+        } else {
+            impl->scaler = [descriptor newTemporalScalerWithDevice:device];
+            if (!impl->scaler) {
+                error = "newTemporalScalerWithDevice failed";
+                return nullptr;
+            }
+            usages[0] = impl->scaler.colorTextureUsage;
+            usages[1] = impl->scaler.depthTextureUsage;
+            usages[2] = impl->scaler.motionTextureUsage;
+            usages[3] = impl->scaler.outputTextureUsage;
         }
         const auto texture = [&](MTLPixelFormat format, uint32_t w, uint32_t h,
                                  MTLTextureUsage usage) -> id<MTLTexture> {
@@ -146,11 +239,11 @@ std::unique_ptr<Scaler> Scaler::Create(const Config& config, const Heaps& heaps,
             return [device newTextureWithDescriptor:td];
         };
         const uint32_t w = config.in_width, h = config.in_height;
-        impl->color = texture(color_format, w, h, impl->scaler.colorTextureUsage);
-        impl->depth = texture(MTLPixelFormatDepth32Float, w, h, impl->scaler.depthTextureUsage);
-        impl->motion = texture(MTLPixelFormatRG16Float, w, h, impl->scaler.motionTextureUsage);
+        impl->color = texture(color_format, w, h, usages[0]);
+        impl->depth = texture(MTLPixelFormatDepth32Float, w, h, usages[1]);
+        impl->motion = texture(MTLPixelFormatRG16Float, w, h, usages[2]);
         impl->output = texture(MTLPixelFormatRGBA16Float, config.out_width, config.out_height,
-                               impl->scaler.outputTextureUsage);
+                               usages[3]);
         if (!impl->color || !impl->depth || !impl->motion || !impl->output) {
             error = "MetalFX texture creation failed";
             return nullptr;
@@ -172,6 +265,35 @@ std::unique_ptr<Scaler> Scaler::Create(const Config& config, const Heaps& heaps,
             !impl->output_buffer) {
             error = "cannot alias the exported MTLHeaps with MTLBuffers";
             return nullptr;
+        }
+        if (impl->queue4) {
+            if (@available(macOS 26.0, *)) {
+                // Metal 4 makes nothing resident by itself: MetalFX's four textures are in a set
+                // every command buffer uses. The fence orders the input copies, MetalFX's passes
+                // and the output copy within the command buffer (Metal 4 tracks no hazards).
+                MTLResidencySetDescriptor* rd = [[MTLResidencySetDescriptor alloc] init];
+                rd.label = @"bbport MetalFX";
+                rd.initialCapacity = 4;
+                NSError* failure = nil;
+                impl->residency = [device newResidencySetWithDescriptor:rd error:&failure];
+                impl->fence = [device newFence];
+                if (!impl->residency || !impl->fence) {
+                    error = "Metal 4: MetalFX's residency set or fence: " + Describe(failure);
+                    return nullptr;
+                }
+                for (id<MTLTexture> t : {impl->color, impl->depth, impl->motion, impl->output}) {
+                    [impl->residency addAllocation:t];
+                }
+                [impl->residency commit];
+                [impl->residency requestResidency];
+                id<MTL4FXTemporalScaler> scaler4 = impl->scaler4;
+                scaler4.colorTexture = impl->color;
+                scaler4.depthTexture = impl->depth;
+                scaler4.motionTexture = impl->motion;
+                scaler4.outputTexture = impl->output;
+                scaler4.fence = impl->fence;
+            }
+            return std::unique_ptr<Scaler>(new Scaler(std::move(impl)));
         }
         impl->queue = [device newCommandQueue];
         if (!impl->queue) {
@@ -203,6 +325,18 @@ bool Scaler::Encode(const Frame& frame, std::string& error) {
         if (async && wait_event) {
             // The Vulkan copies of this frame's inputs (their submission's timeline value).
             [cmd encodeWaitForEvent:wait_event value:frame.wait_value];
+        }
+        if (frame.test_stall) {
+            // A test of the stall cutoff (BB_METALFX_TEST_STALL): this command buffer waits for an
+            // event a timer sets 10 s later, so MetalFX's GPU work does not finish in that time.
+            id<MTLSharedEvent> stall = [m.device newSharedEvent];
+            if (stall) {
+                [cmd encodeWaitForEvent:stall value:1];
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC),
+                               dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                                 stall.signaledValue = 1;
+                               });
+            }
         }
         const MTLOrigin zero = MTLOriginMake(0, 0, 0);
         id<MTLBlitCommandEncoder> uploads = [cmd blitCommandEncoder];
@@ -259,8 +393,10 @@ bool Scaler::Encode(const Frame& frame, std::string& error) {
                   std::scoped_lock lock{errors->mutex};
                   errors->text = "command buffer failed: " + Describe(done.error);
               }
+              errors->in_flight.fetch_sub(1, std::memory_order_acq_rel);
             }];
             m.last = cmd;
+            errors->in_flight.fetch_add(1, std::memory_order_acq_rel);
             [cmd commit];
             return true;
         }
@@ -272,6 +408,125 @@ bool Scaler::Encode(const Frame& frame, std::string& error) {
         }
         return true;
     }
+}
+
+bool Scaler::EncodeOnQueue(const Frame& frame, std::string& error) {
+    if (@available(macOS 26.0, *)) {
+        @autoreleasepool {
+            Impl& m = *impl;
+            id<MTL4CommandQueue> queue = m.queue4;
+            id<MTL4FXTemporalScaler> scaler = m.scaler4;
+            if (!queue || !scaler) {
+                error = "not a queue-mode scaler";
+                return false;
+            }
+            // A new allocator and command buffer per frame: the feedback handler keeps both until
+            // the GPU is done with them (an allocator must not be reset or freed before).
+            id<MTLSharedEvent> signal_event = (__bridge id<MTLSharedEvent>)frame.signal_event;
+            const uint64_t value = frame.signal_value;
+            id<MTL4CommandAllocator> allocator = [m.device newCommandAllocator];
+            id<MTL4CommandBuffer> cmd = [m.device newCommandBuffer];
+            if (!allocator || !cmd) {
+                error = "newCommandAllocator / newCommandBuffer failed";
+                if (signal_event) {
+                    // In queue order, so the timeline never steps back past a later frame.
+                    [queue signalEvent:signal_event value:value];
+                }
+                return false;
+            }
+            [cmd beginCommandBufferWithAllocator:allocator];
+            cmd.label = @"bbport MetalFX";
+            [cmd useResidencySet:m.residency];
+            const NSUInteger w = m.config.in_width, h = m.config.in_height;
+            const NSUInteger ow = m.config.out_width, oh = m.config.out_height;
+            const MTLOrigin zero = MTLOriginMake(0, 0, 0);
+            // The staging buffers alias Vulkan's (one heap each): resource-alias visibility.
+            const MTL4VisibilityOptions visible =
+                MTL4VisibilityOptionDevice | MTL4VisibilityOptionResourceAlias;
+
+            id<MTL4ComputeCommandEncoder> uploads = [cmd computeCommandEncoder];
+            // After the queue's earlier work: the Vulkan copies of the inputs.
+            [uploads barrierAfterQueueStages:MTLStageAll
+                                beforeStages:MTLStageBlit
+                           visibilityOptions:visible];
+            const auto upload = [&](id<MTLBuffer> source, id<MTLTexture> target, NSUInteger bytes) {
+                [uploads copyFromBuffer:source
+                           sourceOffset:0
+                      sourceBytesPerRow:w * bytes
+                    sourceBytesPerImage:w * h * bytes
+                             sourceSize:MTLSizeMake(w, h, 1)
+                              toTexture:target
+                       destinationSlice:0
+                       destinationLevel:0
+                      destinationOrigin:zero];
+            };
+            upload(m.color_buffer, m.color, m.color_bytes);
+            upload(m.depth_buffer, m.depth, 4);
+            upload(m.motion_buffer, m.motion, 4);
+            [uploads updateFence:m.fence afterEncoderStages:MTLStageBlit];
+            [uploads barrierAfterStages:MTLStageBlit
+                      beforeQueueStages:MTLStageAll
+                      visibilityOptions:visible];
+            [uploads endEncoding];
+
+            scaler.inputContentWidth = w;
+            scaler.inputContentHeight = h;
+            scaler.jitterOffsetX = frame.jitter_x;
+            scaler.jitterOffsetY = frame.jitter_y;
+            scaler.motionVectorScaleX = frame.motion_scale_x;
+            scaler.motionVectorScaleY = frame.motion_scale_y;
+            scaler.preExposure = 1.0f;
+            scaler.reset = frame.reset;
+            scaler.depthReversed = frame.depth_reversed;
+            [scaler encodeToCommandBuffer:cmd];
+
+            id<MTL4ComputeCommandEncoder> downloads = [cmd computeCommandEncoder];
+            // After MetalFX's passes (its fence, and the queue's earlier work for good measure).
+            [downloads barrierAfterQueueStages:MTLStageAll
+                                  beforeStages:MTLStageBlit
+                             visibilityOptions:visible];
+            [downloads waitForFence:m.fence beforeEncoderStages:MTLStageBlit];
+            [downloads copyFromTexture:m.output
+                           sourceSlice:0
+                           sourceLevel:0
+                          sourceOrigin:zero
+                            sourceSize:MTLSizeMake(ow, oh, 1)
+                              toBuffer:m.output_buffer
+                     destinationOffset:0
+                destinationBytesPerRow:ow * 8
+              destinationBytesPerImage:ow * oh * 8];
+            // Before the queue's later work: the Vulkan copy back.
+            [downloads barrierAfterStages:MTLStageBlit
+                        beforeQueueStages:MTLStageAll
+                        visibilityOptions:visible];
+            [downloads endEncoding];
+            [cmd endCommandBuffer];
+
+            MTL4CommitOptions* options = [[MTL4CommitOptions alloc] init];
+            std::shared_ptr<Impl::Errors> errors = m.errors;
+            [options addFeedbackHandler:^(id<MTL4CommitFeedback> feedback) {
+              (void)allocator; // kept until the GPU is done with the command buffer
+              (void)cmd;
+              if (feedback.error) {
+                  if (signal_event && signal_event.signaledValue < value) {
+                      signal_event.signaledValue = value;
+                  }
+                  std::scoped_lock lock{errors->mutex};
+                  errors->text = "command buffer failed: " + Describe(feedback.error);
+              }
+              errors->in_flight.fetch_sub(1, std::memory_order_acq_rel);
+            }];
+            errors->in_flight.fetch_add(1, std::memory_order_acq_rel);
+            const id<MTL4CommandBuffer> list[1] = {cmd};
+            [queue commit:list count:1 options:options];
+            if (signal_event) {
+                [queue signalEvent:signal_event value:value];
+            }
+            return true;
+        }
+    }
+    error = "Metal 4: MetalFX on the driver's queue needs macOS 26";
+    return false;
 }
 
 uint64_t EventValue(void* event) {
@@ -294,6 +549,9 @@ void SignalEvent(void* event, uint64_t value) {
 void Scaler::WaitIdle() {
     if (impl->last) {
         [impl->last waitUntilCompleted];
+    }
+    if (impl->queue4) {
+        (void)WaitInFlight(impl->errors, 10.0);
     }
 }
 

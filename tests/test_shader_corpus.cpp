@@ -281,13 +281,20 @@ struct Out {
 
 enum class Outcome { Same, SpirvDiffers, InfoDiffers, BindingsDiffer, Unreadable, Nondeterministic };
 
+/// The capture format (shader_capture.cpp): bbport, macOS 5 (Profile's tess flags).
+#ifdef __APPLE__
+constexpr u32 CaptureVersion = 5;
+#else
+constexpr u32 CaptureVersion = 2;
+#endif
+
 Outcome Replay(const std::string& path, bool verbose, u32 repeat) {
     std::ifstream file{path, std::ios::binary};
     const std::vector<u8> bytes{std::istreambuf_iterator<char>(file), {}};
     Reader in{bytes};
     char magic[4];
     in.Raw(magic, 4);
-    if (std::memcmp(magic, "BBSC", 4) != 0 || in.Value<u32>() != 2) {
+    if (std::memcmp(magic, "BBSC", 4) != 0 || in.Value<u32>() != CaptureVersion) {
         return Outcome::Unreadable;
     }
     Shader::MotionVectors::params_address = in.Value<u64>();
@@ -384,7 +391,7 @@ Outcome Replay(const std::string& path, bool verbose, u32 repeat) {
                 const auto vinfo_bytes = archive.TakeOff();
                 Out out;
                 out.Raw("BBSC", 4);
-                out.Value(u32{2});
+                out.Value(CaptureVersion);
                 out.Value(Shader::MotionVectors::params_address);
                 out.Value(Shader::MotionVectors::positions_address);
                 out.Value(u32(hw_stage));

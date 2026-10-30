@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "vulkan/instance.h"
 #include "shim/bb_env.h"
+#include "metal/mtl_layer.h"
 
 #include <algorithm>
 #include <array>
@@ -19,6 +20,9 @@
 #include <atomic>
 #include <chrono>
 #include <mach/mach.h>
+
+#include "platform/macos/memory_macos.h"
+#include "remote/bb_remote.h"
 #endif
 
 #include "bbport_toggles.h"
@@ -228,6 +232,11 @@ void Instance::ReadProperties() {
         chain.get<vk::PhysicalDevicePushDescriptorPropertiesKHR>().maxPushDescriptors;
     const auto& driver = chain.get<vk::PhysicalDeviceDriverProperties>();
     driver_id = driver.driverID;
+    if (driver_id == vk::DriverId::eMesaKosmickrisp) {
+        compressible_images = !bb_env_off("BB_TEXTURE_COMPRESSION");
+        std::printf("Vulkan: compressible images %s (BB_TEXTURE_COMPRESSION)\n",
+                    compressible_images ? "on" : "off");
+    }
     memory_properties = physical_device.getMemoryProperties();
 
     const auto [result, extensions] = physical_device.enumerateDeviceExtensionProperties();
@@ -686,6 +695,7 @@ void Instance::CreateDevice() {
             VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
     ASSERT_MSG(dispatch.vkCmdPushDescriptorSetKHR,
                "the driver does not resolve vkCmdPushDescriptorSetKHR (VK_KHR_push_descriptor)");
+    MetalLayer::InstallIfAsked(*device); // bbport: BB_METAL_TRACE/FRAME (MACOS_METAL_RENDERER.md)
     if (dlss) {
         dlss->Initialize(*instance, physical_device, *device);
     }
@@ -815,6 +825,10 @@ void VmaDeviceBudget(u64& usage_bytes, u64& budget_bytes) {
     }
 }
 
+#ifdef __APPLE__
+static u64 UnifiedMemoryBudget(u64 limit, u64 gpu_usage, u64 game_floor);
+#endif
+
 void Instance::ComputeMemoryBudget() {
     vk::PhysicalDeviceMemoryBudgetPropertiesEXT budget{};
     vk::PhysicalDeviceMemoryProperties2 props{.pNext = ext.memory_budget ? &budget : nullptr};
@@ -844,6 +858,35 @@ void Instance::ComputeMemoryBudget() {
         total_memory_budget -= std::min<u64>(total_memory_budget / 8, 1_GB);
         return;
     }
+#ifdef __APPLE__
+    // bbport (macOS): the reserve below was no reserve on a Mac: KosmicKrisp's heapBudget is the
+    // usage plus 90 % of the few free pages, and the max() with the heap size (Metal's limit)
+    // always won up to ~24 GB of RAM. The startup budget is the one the collector follows
+    // (UnifiedMemoryBudget), with the game process taken at least as large as it gets (its
+    // direct memory and Rosetta's share: ~5 GB; it is still loading now). BB_MEM_BUDGET=metal:
+    // as before.
+    u64 heap_bytes = 0;
+    for (const u32 heap : counted_heaps) {
+        heap_bytes += heaps.memoryHeaps[heap].size;
+    }
+    std::printf("GPU (macOS): %llu MiB of RAM, Metal's limit %llu MiB\n",
+                (unsigned long long)(BbMacMemory::PhysicalBytes() >> 20),
+                (unsigned long long)(heap_bytes >> 20));
+    if (!BbMacMemory::MachineBudget()) {
+        std::printf("GPU (macOS): memory budget within Metal's limit only (BB_MEM_BUDGET=metal)\n");
+    } else if (heap_bytes != 0) {
+        std::printf("GPU (macOS): memory budget of the whole Mac: macOS keeps %llu MiB, the game "
+                    "process its footprint (BB_MEM_BUDGET=metal: Metal's limit only)\n",
+                    (unsigned long long)(BbMacMemory::OSReserveBytes() >> 20));
+        // The game process (still loading) as at least 5 GB; in one process it is in ours.
+        total_memory_budget = UnifiedMemoryBudget(heap_bytes, initial_usage,
+                                                  BbRemote::BackActive() ? 5_GB : 0);
+        if (VramLimit() != 0) {
+            total_memory_budget = std::min(total_memory_budget, VramLimit());
+        }
+        return;
+    }
+#endif
     // At least 8 GiB left for the system on integrated GPUs.
     const s64 available = s64(total_memory_budget - initial_usage);
     total_memory_budget = u64(std::max<s64>(available - s64(8_GB), s64(local_memory)));
@@ -870,35 +913,43 @@ u64 Instance::GetDeviceMemoryUsage() const {
 /// graphics memory of its own the renderer cannot see (15 GB and growing in a 5-minute run,
 /// issue #6), and counting it shrank the texture cache until it evicted images in use without
 /// freeing any of that.
-static u64 UnifiedMemoryBudget(u64 limit, u64 gpu_usage) {
+/// bbport (macOS): nor does the limit know of the game process (bb-probe) or of macOS: 16 GB Macs
+/// swapped with the limit as the budget. So (unless BB_MEM_BUDGET=metal) the limit is taken as at
+/// most the Mac's RAM less what macOS keeps (BbMacMemory::OSReserveBytes) and the game process's
+/// footprint, sampled with the rest (that process grows as the game loads); `game_floor`: the
+/// game process taken as at least that (at startup).
+static u64 UnifiedMemoryBudget(u64 limit, u64 gpu_usage, u64 game_floor) {
     // Sampled at most every 250 ms (this runs at every texture collector tick).
-    static std::atomic<u64> other_cached{0}, graphics_cached{0};
+    static std::atomic<u64> other_cached{0}, graphics_cached{0}, game_cached{0};
     static std::atomic<s64> sampled_ns{-1};
     const s64 now = std::chrono::duration_cast<std::chrono::nanoseconds>(
                         std::chrono::steady_clock::now().time_since_epoch())
                         .count();
     const s64 sampled = sampled_ns.load(std::memory_order_relaxed);
     if (sampled < 0 || now - sampled >= 250'000'000) {
-        task_vm_info_data_t info{};
-        mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
-        if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&info),
-                      &count) != KERN_SUCCESS ||
-            count < TASK_VM_INFO_REV3_COUNT) {
+        u64 footprint = 0, graphics = 0;
+        if (!BbMacMemory::OwnFootprint(footprint, graphics)) {
             return limit;
         }
-        const u64 footprint = info.phys_footprint;
-        const s64 graphics_signed =
-            info.ledger_tag_graphics_footprint + info.ledger_tag_graphics_footprint_compressed;
-        const u64 graphics = graphics_signed > 0 ? u64(graphics_signed) : 0;
         other_cached.store(footprint > graphics ? footprint - graphics : 0,
                            std::memory_order_relaxed);
         graphics_cached.store(graphics, std::memory_order_relaxed);
+        if (BbMacMemory::MachineBudget()) {
+            game_cached.store(BbMacMemory::GameProcessFootprint(), std::memory_order_relaxed);
+        }
         sampled_ns.store(now, std::memory_order_relaxed);
     }
     const u64 other = other_cached.load(std::memory_order_relaxed);
     const u64 graphics = graphics_cached.load(std::memory_order_relaxed);
+    const u64 game = std::max(game_cached.load(std::memory_order_relaxed), game_floor);
+    // bbport (macOS): at most the Mac's RAM less macOS's reserve and the game process.
+    u64 cap = limit;
+    if (const u64 ram = BbMacMemory::PhysicalBytes(); BbMacMemory::MachineBudget() && ram != 0) {
+        const u64 taken = BbMacMemory::OSReserveBytes() + game;
+        cap = std::min(limit, ram > taken ? ram - taken : 0);
+    }
     constexpr u64 Floor = u64{2} << 30;
-    const u64 budget = limit > other + Floor ? limit - other : Floor;
+    const u64 budget = cap > other + Floor ? cap - other : Floor;
     // Printed when the budget or the graphics memory moves by 1 GiB or more: the second line
     // tracks the driver's own graphics memory (graphics less the renderer's allocations).
     static std::atomic<u64> printed_budget{0}, printed_graphics{0};
@@ -919,6 +970,17 @@ static u64 UnifiedMemoryBudget(u64 limit, u64 gpu_usage) {
                     (unsigned long long)(other >> 20), (unsigned long long)(graphics >> 20),
                     (unsigned long long)(gpu_usage >> 20),
                     (unsigned long long)((graphics > gpu_usage ? graphics - gpu_usage : 0) >> 20));
+        // bbport (macOS): what the whole Mac left of the limit.
+        if (BbMacMemory::MachineBudget()) {
+            std::printf("GPU: memory budget of the whole Mac: %llu MiB of RAM less %llu MiB for "
+                        "macOS and %llu MiB for the game process (footprint%s): at most %llu MiB "
+                        "of Metal's %llu MiB\n",
+                        (unsigned long long)(BbMacMemory::PhysicalBytes() >> 20),
+                        (unsigned long long)(BbMacMemory::OSReserveBytes() >> 20),
+                        (unsigned long long)(game >> 20),
+                        game == game_floor && game_floor != 0 ? ", estimated at startup" : "",
+                        (unsigned long long)(cap >> 20), (unsigned long long)(limit >> 20));
+        }
     }
     return budget;
 }
@@ -941,7 +1003,7 @@ u64 Instance::GetDeviceMemoryBudgetNow() const {
         total += props.memoryProperties.memoryHeaps[heap].size;
         gpu_usage += budget.heapUsage[heap];
     }
-    total = UnifiedMemoryBudget(total, gpu_usage);
+    total = UnifiedMemoryBudget(total, gpu_usage, 0);
 #else
     for (const u32 heap : counted_heaps) {
         total += budget.heapBudget[heap];

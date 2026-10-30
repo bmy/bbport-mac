@@ -26,6 +26,12 @@ if (BB_LTO)
     check_ipo_supported(RESULT bb_ipo_ok OUTPUT bb_ipo_error)
     if (bb_ipo_ok)
         set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+        if (APPLE)
+            # bbport (macOS): ThinLTO, with a cache so that the app's Update relinks quickly.
+            set(CMAKE_C_COMPILE_OPTIONS_IPO -flto=thin)
+            set(CMAKE_CXX_COMPILE_OPTIONS_IPO -flto=thin)
+            add_link_options(-flto=thin "-Wl,-cache_path_lto,${CMAKE_BINARY_DIR}/lto-cache")
+        endif()
     else()
         message(WARNING "LTO unavailable: ${bb_ipo_error}")
     endif()
@@ -161,7 +167,13 @@ add_own_shader(upscale/shaders/upscale_reactive.comp upscale_reactive_comp)
 add_own_shader(upscale/shaders/taa.comp taa_comp)
 add_own_shader(upscale/shaders/taa_sharpen.comp taa_sharpen_comp)
 add_own_shader(upscale/shaders/fsr1_easu.comp fsr1_easu_comp)
-add_own_shader(upscale/shaders/taa_sharpen.comp taa_sharpen_ldr_comp LDR_OUTPUT=1)
+if (APPLE)
+    # bbport (macOS): the extra sharpening reads a half-float copy (upscaler_passes.cpp).
+    add_own_shader(upscale/shaders/taa_sharpen.comp taa_sharpen_ldr_comp LDR_OUTPUT=1 HALF_INPUT=1)
+    add_own_shader(upscale/shaders/taa_sharpen.comp taa_sharpen_half_comp HALF_INPUT=1)
+else()
+    add_own_shader(upscale/shaders/taa_sharpen.comp taa_sharpen_ldr_comp LDR_OUTPUT=1)
+endif()
 add_own_shader(upscale/shaders/fsr4_color.comp fsr4_decode_comp)
 add_own_shader(upscale/shaders/fsr4_color.comp fsr4_encode_comp ENCODE=1)
 add_own_shader(upscale/shaders/fsr4_reactive.comp fsr4_reactive_comp)
@@ -252,11 +264,63 @@ add_library(bbgpu ${BBGPU_LIBRARY_TYPE} ${RECOMPILER} ${COMMON} ${PLATFORM_SOURC
 add_dependencies(bbgpu host_shaders)
 # bbport: MetalFX temporal upscaler, Metal side (Objective-C++ with ARC). MetalFX.framework is
 # opened at run time (dlopen), so a missing x86-64 slice cannot break the link or the start.
+# bbport: the Metal command path (metal/, docs/MACOS_METAL_RENDERER.md); its interop test is a no-op
+# elsewhere.
+target_sources(bbgpu PRIVATE metal/metal_interop_test.cpp metal/mtl_layer.cpp)
 if (APPLE)
-    target_sources(bbgpu PRIVATE shim/bbport_metalfx.mm)
-    set_source_files_properties(shim/bbport_metalfx.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    target_sources(bbgpu PRIVATE shim/bbport_metalfx.mm metal/metal_interop.mm)
+    set_source_files_properties(shim/bbport_metalfx.mm metal/metal_interop.mm PROPERTIES
+                                COMPILE_OPTIONS "-fobjc-arc")
     target_link_libraries(bbgpu PRIVATE "-framework Metal" "-framework Foundation"
                                         "-framework CoreFoundation")
+endif()
+# bbport: the Metal command path's shader translation and pipeline states (metal/mtl_*, stage 2:
+# the shadow build, BB_METAL_SHADOW=1), in the native GPU process only, with SPIRV-Cross from
+# setup_deps.sh (BB_ARCH=arm64). Without SPIRV-Cross, or in any other build, BB_METAL_BACKEND
+# stays undefined and the hooks are no-ops (metal/vk_metal_shadow.h).
+if (APPLE AND (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64" OR
+               CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$"))
+    # Only the pinned build (its stamp, setup_deps.sh), never another copy (Homebrew's).
+    unset(bb_spvc_prefix)
+    foreach(prefix IN LISTS CMAKE_PREFIX_PATH)
+        if (EXISTS "${prefix}/share/spirv_cross_msl/.bbport-rev")
+            set(bb_spvc_prefix "${prefix}")
+            break()
+        endif()
+    endforeach()
+    # Searched again at every configure: a path an older configure cached may be another copy.
+    unset(spirv_cross_core_DIR CACHE)
+    unset(spirv_cross_glsl_DIR CACHE)
+    unset(spirv_cross_msl_DIR CACHE)
+    unset(BB_SPIRV_CROSS_INCLUDE_DIR CACHE)
+    if (bb_spvc_prefix)
+        file(STRINGS "${bb_spvc_prefix}/share/spirv_cross_msl/.bbport-rev" bb_spvc_rev LIMIT_COUNT 1)
+        find_package(spirv_cross_core CONFIG QUIET PATHS "${bb_spvc_prefix}" NO_DEFAULT_PATH)
+        find_package(spirv_cross_glsl CONFIG QUIET PATHS "${bb_spvc_prefix}" NO_DEFAULT_PATH)
+        find_package(spirv_cross_msl CONFIG QUIET PATHS "${bb_spvc_prefix}" NO_DEFAULT_PATH)
+        find_path(BB_SPIRV_CROSS_INCLUDE_DIR spirv_cross/spirv_msl.hpp
+                  PATHS "${bb_spvc_prefix}/include" NO_DEFAULT_PATH)
+    endif()
+    if (bb_spvc_prefix AND spirv_cross_core_FOUND AND spirv_cross_glsl_FOUND AND
+        spirv_cross_msl_FOUND AND BB_SPIRV_CROSS_INCLUDE_DIR)
+        set(BB_METAL_OBJCXX_SOURCES metal/mtl_device.mm metal/mtl_encoder.mm
+            metal/mtl_geometry.mm metal/mtl_frame.mm metal/mtl_pso_cache.mm metal/mtl_shader.mm
+            metal/mtl_shadow.mm metal/mtl_tessellation.mm metal/vk_to_mtl.mm)
+        target_sources(bbgpu PRIVATE ${BB_METAL_OBJCXX_SOURCES} metal/mtl_spirv_geometry.cpp
+            metal/mtl_spirv_pervertex.cpp metal/mtl_spirv_rectlist.cpp metal/mtl_spirv_robust.cpp
+            metal/mtl_buffer_barriers.cpp metal/mtl_object.cpp metal/mtl_order.cpp)
+        set_source_files_properties(${BB_METAL_OBJCXX_SOURCES} PROPERTIES
+                                    COMPILE_OPTIONS "-fobjc-arc")
+        target_include_directories(bbgpu PRIVATE ${BB_SPIRV_CROSS_INCLUDE_DIR})
+        target_link_libraries(bbgpu PRIVATE spirv-cross-msl spirv-cross-glsl spirv-cross-core)
+        # The MSL cache's header names it: a new pin does not reuse shaders of the old one.
+        target_compile_definitions(bbgpu PRIVATE BB_METAL_BACKEND=1
+                                   BB_SPIRV_CROSS_VERSION="${bb_spvc_rev}")
+        message(STATUS "Metal command path: SPIRV-Cross ${bb_spvc_rev}, the shadow build is "
+                       "available")
+    else()
+        message(STATUS "Metal command path: no SPIRV-Cross (BB_ARCH=arm64 setup_deps.sh), off")
+    endif()
 endif()
 # In-game settings menu: Dear ImGui (third_party/imgui, MIT) with its Vulkan backend, and an
 # embedded Cyrillic font (third_party/fonts).

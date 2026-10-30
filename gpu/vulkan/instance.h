@@ -261,6 +261,12 @@ public:
     bool IsBufferMarkerSupported() const {
         return ext.buffer_marker;
     }
+    /// bbport (macOS): images are made so that Metal can compress them losslessly (KosmicKrisp;
+    /// BB_TEXTURE_COMPRESSION=0 turns it off). Depth images are made without mutable formats
+    /// (their views always use the image's own format).
+    bool IsCompressibleImages() const {
+        return compressible_images;
+    }
     bool IsAttachmentFeedbackLoopLayoutSupported() const {
         return ext.feedback_loop;
     }
@@ -460,6 +466,7 @@ private:
     Extensions ext{};
     // Features of extensions the renderer checks one by one.
     bool dynamic_color_write_mask = false;
+    bool compressible_images = false;
     bool list_restart = false;
     bool patch_list_restart = false;
     bool atomic_float_buffer_minmax = false;

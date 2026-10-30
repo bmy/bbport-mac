@@ -579,7 +579,11 @@ void DrawPreparation::Count(bool was_used, Miss why) {
     if (!was_used) {
         ++misses[why];
     }
+#ifdef __APPLE__
+    const bool stats = BbStats::enabled; // bbport (macOS): was on for any value, even 0
+#else
     static const bool stats = bb_env("BB_FRAME_STATS") != nullptr;
+#endif
     // The clock is read every 1024 draws: per draw it was 8% of the GPU thread.
     if (!stats || ((used + unused) & 1023) != 0) {
         return;

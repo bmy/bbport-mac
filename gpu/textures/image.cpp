@@ -12,6 +12,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <fmt/format.h>
 
@@ -106,7 +107,35 @@ bool NeedsBarrier(const Image::State& state, vk::ImageLayout layout, vk::AccessF
            bool(state.access_mask & WriteAccess);
 }
 
+/// bbport (macOS): the images (by address, format and shape) whose compressible backing had to be
+/// upgraded (Runtime::UpgradeUsage): one made there again starts with its full usage, without
+/// the copy (the game re-creates many of its compute-written post-processing images).
+std::mutex full_usage_mutex;
+std::unordered_set<u64> full_usage_images;
+
+u64 FullUsageKey(const ImageInfo& info) {
+    u64 key = info.guest_address;
+    for (const u64 v : {u64(info.pixel_format), u64(info.size.width), u64(info.size.height),
+                        u64(info.resources.levels), u64(info.resources.layers),
+                        u64(info.num_samples)}) {
+        key = (key ^ v) * 0x100000001b3ull;
+    }
+    return key;
+}
+
+bool StartsWithFullUsage(const ImageInfo& info) {
+    std::scoped_lock lock{full_usage_mutex};
+    return full_usage_images.contains(FullUsageKey(info));
+}
+
 } // namespace
+
+void Image::RememberFullUsage() const {
+    std::scoped_lock lock{full_usage_mutex};
+    if (full_usage_images.size() < 65536) {
+        full_usage_images.insert(FullUsageKey(info));
+    }
+}
 
 Common::IncrementalIdProvider<u64> Image::next_uid{};
 
@@ -327,6 +356,11 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
 
     vk::ImageCreateFlags create_flags =
         vk::ImageCreateFlagBits::eMutableFormat | vk::ImageCreateFlagBits::eExtendedUsage;
+    if (info.props.is_depth && instance.IsCompressibleImages()) {
+        // bbport (macOS): a depth image is only ever viewed in its own format (ImageView), and
+        // a mutable format would keep Metal from compressing it.
+        create_flags = {};
+    }
     if (info.props.is_volume) {
         create_flags |= vk::ImageCreateFlagBits::e2DArrayCompatible;
         if (instance.Is2dViewOf3dSupported()) {
@@ -381,8 +415,34 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
                             ? properties.value.imageFormatProperties.sampleCounts
                             : vk::SampleCountFlagBits::e1;
 
+    // bbport (macOS): color images start without storage usage, mutable formats and the feedback
+    // loop usage, so that Metal can compress them; a binding that needs one upgrades the image
+    // (Runtime::UpgradeUsage). Not block-compressed images (never compressed by Metal), 3D ones
+    // (2D views), multisampled ones (upgrades copy single-sample images only) or those in a
+    // stand-in format (the blitter views them in the guest's format).
+    full_usage = usage_flags;
+    full_create_flags = create_flags;
+    compressible = instance.IsCompressibleImages() && !info.props.is_depth &&
+                   !info.props.is_block && !info.props.is_volume && info.num_samples <= 1 &&
+                   format == info.pixel_format;
+    // (One upgraded at this address before starts with its full usage; its proxies may still
+    // start compressible: `compressible` is the kind of image.)
+    const bool start_compressible = compressible && !StartsWithFullUsage(info);
+    if (compressible && !start_compressible) {
+        // Like an upgraded backing: without the feedback loop usage until a loop needs it
+        // (with it KosmicKrisp never optimizes the texture).
+        usage_flags &= ~vk::ImageUsageFlagBits::eAttachmentFeedbackLoopEXT;
+    }
+    if (start_compressible) {
+        create_flags &= ~(vk::ImageCreateFlagBits::eMutableFormat |
+                          vk::ImageCreateFlagBits::eExtendedUsage);
+        usage_flags &= ~(vk::ImageUsageFlagBits::eStorage |
+                         vk::ImageUsageFlagBits::eAttachmentFeedbackLoopEXT);
+    }
+
     backing = &backing_images.emplace_back();
     backing->num_samples = info.num_samples;
+    backing->compressible = start_compressible;
     backing->image = HostImage{instance.GetDevice(), instance.GetAllocator()};
     backing->image.recyclable = true;
     backing->image.Create(vk::ImageCreateInfo{
@@ -410,6 +470,9 @@ ImageView& Image::FindView(const ImageViewInfo& view_info, bool ensure_guest_sam
     if (ensure_guest_samples && (backing->num_samples > 1) != (info.num_samples > 1)) {
         runtime->SetBackingSamples(this, info.num_samples);
     }
+    if (NeedsFullUsage(view_info)) {
+        runtime->UpgradeUsage(this, view_info.is_storage ? "storage view" : "view format");
+    }
     auto& infos = backing->image_view_infos;
     auto& ids = backing->image_view_ids;
     if (backing->last_view < infos.size() && infos[backing->last_view] == view_info) {
@@ -423,6 +486,21 @@ ImageView& Image::FindView(const ImageViewInfo& view_info, bool ensure_guest_sam
     infos.push_back(view_info);
     ids.push_back(id);
     return (*slot_image_views)[id];
+}
+
+bool Image::NeedsFullUsage(const ImageViewInfo& view_info) const {
+    if (!backing || !backing->compressible) {
+        return false;
+    }
+    if (view_info.is_storage) {
+        return true;
+    }
+    if (view_info.format == backing->image.image_ci.format) {
+        return false; // the common case, without the format lookup
+    }
+    const vk::Format format =
+        runtime->GetInstance().GetSupportedFormat(view_info.format, format_features);
+    return !ViewableWithoutMutableFormat(format, backing->image.image_ci.format);
 }
 
 void Image::GetBarriers(Barriers& out, vk::ImageLayout dst_layout, vk::AccessFlags2 dst_mask,

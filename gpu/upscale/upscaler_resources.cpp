@@ -36,6 +36,9 @@
 #include "bbgpu/shaders/taa_comp.h"
 #include "bbgpu/shaders/taa_sharpen_comp.h"
 #include "bbgpu/shaders/taa_sharpen_ldr_comp.h"
+#ifdef __APPLE__
+#include "bbgpu/shaders/taa_sharpen_half_comp.h"
+#endif
 #include "bbgpu/shaders/fsr1_easu_comp.h"
 #include "bbgpu/shaders/fsr4_decode_comp.h"
 #include "bbgpu/shaders/fsr4_encode_comp.h"
@@ -335,6 +338,9 @@ void TemporalUpscaler::CreatePipelines() {
     storage_layout(2, taa_sharpen_desc_layout, taa_sharpen_pipeline_layout, sizeof(float));
     taa_sharpen_pipeline = compute(TAA_SHARPEN_COMP, *taa_sharpen_pipeline_layout);
     taa_sharpen_ldr_pipeline = compute(TAA_SHARPEN_LDR_COMP, *taa_sharpen_pipeline_layout);
+#ifdef __APPLE__
+    taa_sharpen_half_pipeline = compute(TAA_SHARPEN_HALF_COMP, *taa_sharpen_pipeline_layout);
+#endif
     storage_layout(1, fsr4_encode_desc_layout, fsr4_encode_pipeline_layout, sizeof(u32));
     fsr4_encode_pipeline = compute(FSR4_ENCODE_COMP, *fsr4_encode_pipeline_layout);
     {

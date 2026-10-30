@@ -17,6 +17,7 @@
 #include "bbgpu/shaders/depth_stencil_bits_frag.h"
 #include "bbgpu/shaders/fullscreen_vert.h"
 #include "bbport_toggles.h"
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 
@@ -568,6 +569,14 @@ bool SceneTargets::CopyProxy(VideoCore::ImageId src_id, VideoCore::ImageId dst_i
         const auto proxy = ProxySize(dst, 0);
         ci.extent = vk::Extent3D{proxy.width, proxy.height, 1};
         ci.mipLevels = 1;
+        if (dst.compressible) {
+            // bbport (macOS): compressible like its original, as Get() makes proxies.
+            ci.flags &= ~(vk::ImageCreateFlagBits::eMutableFormat |
+                          vk::ImageCreateFlagBits::eExtendedUsage);
+            ci.usage &= ~(vk::ImageUsageFlagBits::eStorage |
+                          vk::ImageUsageFlagBits::eAttachmentFeedbackLoopEXT);
+            slot->compressible = true;
+        }
         slot->image.Create(ci);
         tracked.insert(dst.image_uid);
     }
@@ -693,6 +702,14 @@ SceneTargets::Entry& SceneTargets::Get(VideoCore::ImageId id, u32 level) {
         const auto proxy = ProxySize(original, level);
         ci.extent = vk::Extent3D{proxy.width, proxy.height, 1};
         ci.mipLevels = 1;
+        if (original.compressible) {
+            // bbport (macOS): compressible like its original was made, whatever that has now.
+            ci.flags &= ~(vk::ImageCreateFlagBits::eMutableFormat |
+                          vk::ImageCreateFlagBits::eExtendedUsage);
+            ci.usage &= ~(vk::ImageUsageFlagBits::eStorage |
+                          vk::ImageUsageFlagBits::eAttachmentFeedbackLoopEXT);
+            entry->compressible = true;
+        }
         entry->image.Create(ci);
         tracked.insert(original.image_uid);
     }
@@ -700,8 +717,58 @@ SceneTargets::Entry& SceneTargets::Get(VideoCore::ImageId id, u32 level) {
     if (!entry->state.valid) Copy(*entry, original, false);
     return *entry;
 }
+void SceneTargets::UpgradeProxy(Entry& e, const VideoCore::Image& original) {
+    auto ci = e.image.image_ci;
+    ci.flags |= original.full_create_flags;
+    // Never in a feedback loop (reduced passes sample the native image): kept GPU-optimized.
+    ci.usage = original.full_usage & ~vk::ImageUsageFlagBits::eAttachmentFeedbackLoopEXT;
+    VideoCore::HostImage next{instance.GetDevice(), instance.GetAllocator()};
+    next.Create(ci);
+    auto layout = vk::ImageLayout::eUndefined;
+    if (e.layout != vk::ImageLayout::eUndefined) {
+        Transition(e, original.aspect_mask, vk::ImageLayout::eTransferSrcOptimal,
+                   vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
+        const vk::ImageMemoryBarrier2 to_dst{
+            .srcStageMask = vk::PipelineStageFlagBits2::eNone,
+            .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+            .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+            .oldLayout = vk::ImageLayout::eUndefined,
+            .newLayout = vk::ImageLayout::eTransferDstOptimal,
+            .image = next.image, .subresourceRange = {original.aspect_mask, 0, 1, 0, 1},
+        };
+        const vk::ImageCopy region{
+            .srcSubresource = {original.aspect_mask, 0, 0, 1},
+            .dstSubresource = {original.aspect_mask, 0, 0, 1},
+            .extent = ci.extent,
+        };
+        scheduler.Record([to_dst, region, src = vk::Image(e.image),
+                          dst = next.image](vk::CommandBuffer cmd) {
+            cmd.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &to_dst});
+            cmd.copyImage(src, vk::ImageLayout::eTransferSrcOptimal, dst,
+                          vk::ImageLayout::eTransferDstOptimal, region);
+        });
+        layout = vk::ImageLayout::eTransferDstOptimal;
+    }
+    // Earlier bindings of this draw may hold views of the old one (Runtime::Retire).
+    runtime.Retire([old = std::move(e.image), views = std::move(e.views)]() mutable {});
+    e.image = std::move(next);
+    e.views.clear();
+    e.layout = layout;
+    e.compressible = false;
+    ++generation;
+    static std::atomic<u32> upgrades{0};
+    if (const u32 n = upgrades.fetch_add(1, std::memory_order_relaxed) + 1; n <= 16) {
+        std::printf("Scene proxy usage upgrade %u: %ux%u %s\n", n, ci.extent.width,
+                    ci.extent.height, vk::to_string(ci.format).c_str());
+    }
+}
 vk::ImageView SceneTargets::View(Entry& e, const VideoCore::Image& original,
                                  const VideoCore::ImageViewInfo& info) {
+    if (e.compressible && !original.info.props.is_depth &&
+        (info.is_storage ||
+         !VideoCore::ViewableWithoutMutableFormat(info.format, e.image.image_ci.format))) {
+        UpgradeProxy(e, original);
+    }
     for (const auto& [key,view] : e.views) if (key == info) return *view;
     const auto aspect = original.info.props.is_depth
         ? (info.is_storage ? original.aspect_mask : vk::ImageAspectFlags(vk::ImageAspectFlagBits::eDepth))
@@ -720,6 +787,9 @@ SceneTargets::Target SceneTargets::Attachment(VideoCore::ImageId id,
     auto& original = *lookup(id, 0);
     auto& e = Get(id, info.range.base.level);
     const bool depth = original.info.props.is_depth;
+    auto attachment_info = info;
+    attachment_info.is_storage = depth; // include stencil in depth attachment views
+    const vk::ImageView view = View(e, original, attachment_info); // first: it may upgrade
     const auto layout = depth ? vk::ImageLayout::eDepthStencilAttachmentOptimal
                               : vk::ImageLayout::eColorAttachmentOptimal;
     // Consecutive draws can stay in the same render pass.
@@ -731,9 +801,7 @@ SceneTargets::Target SceneTargets::Attachment(VideoCore::ImageId id,
                   : vk::AccessFlagBits2::eColorAttachmentRead | vk::AccessFlagBits2::eColorAttachmentWrite);
     }
     e.state.ProxyWrite();
-    auto attachment_info = info;
-    attachment_info.is_storage = true; // include stencil in attachment views
-    return {e.image, View(e, original, attachment_info), e.layout, e.image.image_ci.usage};
+    return {e.image, view, e.layout, e.image.image_ci.usage};
 }
 bool SceneTargets::ProxyCurrent(const VideoCore::Image& image, u32 level, u32 levels) const {
     // Depth proxies are sampled too (the game's depth downsample and the effects reading its
@@ -766,15 +834,17 @@ std::optional<SceneTargets::Target> SceneTargets::SampleProxy(
         return std::nullopt;
     }
     auto& e = *entries.find(Key(image.image_uid, level))->second;
+    const vk::ImageView view = View(e, image, info); // first: it may upgrade the proxy
     const auto layout = PrepareSample(image, level);
-    return Target{e.image, View(e, image, info), layout, e.image.image_ci.usage};
+    return Target{e.image, view, layout, e.image.image_ci.usage};
 }
 SceneTargets::Target SceneTargets::Read(VideoCore::ImageId id,
                                        const VideoCore::ImageViewInfo& info,
                                        vk::PipelineStageFlags2 stages, vk::AccessFlags2 access) {
     auto& original = *lookup(id, 0);
     auto& e = Get(id);
+    const vk::ImageView view = View(e, original, info); // first: it may upgrade the proxy
     Transition(e, original.aspect_mask, vk::ImageLayout::eGeneral, stages, access);
-    return {e.image, View(e, original, info), e.layout, e.image.image_ci.usage};
+    return {e.image, view, e.layout, e.image.image_ci.usage};
 }
 } // namespace Vulkan

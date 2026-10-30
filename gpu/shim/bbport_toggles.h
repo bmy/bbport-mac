@@ -108,6 +108,10 @@ inline bool Experiment(std::uint64_t bit) {
 } // namespace BbToggle
 
 namespace BbStats {
+/// Draws recorded with the game's own tessellation (hull and domain programs), and rect and quad
+/// lists, which are drawn as patches through generated tessellation shaders (KosmicKrisp emulates
+/// tessellation on Metal). Frame stats and stall reports.
+inline std::atomic<std::uint64_t> tess_draws{0}, patch_list_draws{0};
 /// Guest writes caught by page protection, and pages currently left unprotected as hot.
 inline std::atomic<std::uint64_t> tracker_faults{0};
 /// Writes the GPU side heard of from the writers (libc copies over watched pages, no write tracking).
@@ -171,9 +175,16 @@ inline std::array<std::atomic<std::uint64_t>, 12> t_layer{};
 /// copy command.
 inline std::atomic<std::uint64_t> layer_entries_written{0};
 inline std::atomic<std::uint64_t> layer_mprotects{0};
-/// Diagnostics are collected only with BB_FRAME_STATS=1.
+/// Diagnostics are collected only with BB_FRAME_STATS=1. bbport (macOS): or y, t, the rule of the
+/// report itself (BbVideoOut::FrameStatsEnabled) and of every other reader of the variable there,
+/// some of which took any value (even 0) for on.
 inline const bool enabled = [] {
+#ifdef __APPLE__
+    const char* env = bb_env("BB_FRAME_STATS");
+    return env && (env[0] == '1' || env[0] == 'y' || env[0] == 't');
+#else
     return bb_env_on("BB_FRAME_STATS");
+#endif
 }();
 struct Timer {
     std::atomic<std::uint64_t>& total;

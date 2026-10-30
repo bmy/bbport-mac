@@ -255,7 +255,12 @@ void Write(const Shader::Info& in_info, const Shader::RuntimeInfo& runtime_info,
     Shader::guest_read_hook = nullptr;
     Out out;
     out.Raw("BBSC", 4);
+#ifdef __APPLE__
+    out.Value(u32{5}); // format version (bbport, macOS: 5, RuntimeInfo tcs max_tess_level, Profile
+                       // tess flags)
+#else
     out.Value(u32{2}); // format version
+#endif
     // Globals the backend reads (object motion vectors).
     out.Value(Shader::MotionVectors::params_address);
     out.Value(Shader::MotionVectors::positions_address);

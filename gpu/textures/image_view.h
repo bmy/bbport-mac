@@ -39,6 +39,11 @@ struct ImageViewInfo {
 
 struct Image;
 
+/// Whether an image made in `image` format without mutable formats can have a view in `view`
+/// format: the same format, or its sRGB or linear twin (KosmicKrisp: Metal needs no pixel
+/// format view usage for those; Instance::IsCompressibleImages is only on there).
+[[nodiscard]] bool ViewableWithoutMutableFormat(vk::Format view, vk::Format image);
+
 struct ImageView {
     ImageView(const Vulkan::Instance& instance, const ImageViewInfo& info, const Image& image);
     ~ImageView();

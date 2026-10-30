@@ -83,7 +83,11 @@ void Rasterizer::DrainDrawPipe(u32 reason, u32 line, const char* function) {
     if (!draw_pipe || !OnStageA()) {
         return;
     }
+#ifdef __APPLE__
+    const bool stats = BbStats::enabled; // bbport (macOS): was on for any value, even 0
+#else
     static const bool stats = bb_env("BB_FRAME_STATS") != nullptr;
+#endif
     if (!stats) {
         draw_pipe->Drain(reason);
         return;
@@ -1207,7 +1211,11 @@ void Rasterizer::ResolvePacket(void* context, u8* data, u32, u64 number, u32 wor
 }
 
 void Rasterizer::PrintPipeStats() {
+#ifdef __APPLE__
+    const bool stats = BbStats::enabled; // bbport (macOS): was on for any value, even 0
+#else
     static const bool stats = bb_env("BB_FRAME_STATS") != nullptr;
+#endif
     if (!stats || (draw_pipe->packets & 1023) != 0) {
         return;
     }
@@ -1221,7 +1229,7 @@ void Rasterizer::PrintPipeStats() {
     }
     const u64 tsc = BbCpu::Ticks();
     const double cycles = double(tsc - last_tsc);
-    const u64 busy = draw_pipe->busy_cycles.load(std::memory_order_relaxed);
+    const u64 busy = draw_pipe->BusyCycles();
     std::printf("Draw pipe: %.0f draws/s pipelined, %.0f drains/s that waited, stage A waited "
                 "%.1f%%, stage B busy %.1f%%\n",
                 (draw_pipe->packets - last_packets) / seconds,

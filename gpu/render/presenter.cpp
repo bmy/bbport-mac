@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "render/presenter.h"
+#include "metal/metal_interop_test.h"
 #include "shim/bb_env.h"
 
 #include <algorithm>
@@ -112,6 +113,8 @@ Presenter::Presenter(Frontend::WindowSDL& window_, BbCp::CommandProcessor* cp_)
     // Low latency (NVIDIA Reflex): the draw scheduler's submissions are the game's frames.
     LowLatency::Get().Initialize(instance);
     draw_scheduler.SetRendersFrames(true);
+    BbMetal::RunInteropTestIfAsked(instance); // BB_METAL_INTEROP_TEST=1 (macOS)
+    BbMetal::RunFrameTestIfAsked(instance);   // BB_METAL_FRAME_TEST=1 (macOS)
 }
 
 Presenter::~Presenter() {

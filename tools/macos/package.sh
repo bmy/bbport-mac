@@ -85,6 +85,14 @@ if [[ -n $native ]]; then
     cp -L "$DEPS_ARM64/lib/libvulkan.1.dylib" "$engine_arm64/"
     cp "$kk_arm64/libvulkan_kosmickrisp.dylib" "$engine_arm64/kosmickrisp/"
     manifest "$kk_arm64/kosmickrisp_mesa_icd.json" "$engine_arm64/kosmickrisp/kosmickrisp_mesa_icd.json"
+    # Licences of what is linked statically into the native GPU core: SPIRV-Cross (Apache-2.0)
+    # when its pinned build is there (setup_deps.sh's stamp; the Metal command path's branches).
+    if [[ -f $DEPS_ARM64/share/spirv_cross_msl/.bbport-rev ]]; then
+        [[ -f $DEPS_ARM64/share/licenses/SPIRV-Cross/LICENSE.txt ]] ||
+            die "SPIRV-Cross's licence missing: run BB_ARCH=arm64 tools/macos/setup_deps.sh again"
+        mkdir -p "$engine/licenses"
+        cp -R "$DEPS_ARM64/share/licenses/SPIRV-Cross" "$engine/licenses/"
+    fi
 fi
 touch "$engine/.packaged"
 echo "$version" > "$engine/.version"

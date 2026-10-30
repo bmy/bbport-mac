@@ -492,7 +492,9 @@ void ReloadLive() {
     v.output_res = fresh.output_res.load();
     v.output_auto = fresh.output_auto.load();
     if (fresh.upscaler != file_upscaler.exchange(fresh.upscaler)) {
+        v.upscaler_fallback_from = -1; // chosen in the game's menu: no stand-in to keep
         v.upscaler = fresh.upscaler.load();
+        ++v.upscaler_chosen;
     }
     v.preset = fresh.preset.load();
     v.sharpen = fresh.sharpen.load();
@@ -523,8 +525,12 @@ void Save() {
     if (all && v.menu_language_chosen) {
         put("menu_language", v.menu_language == MenuLanguage::Russian ? "ru" : "en");
     }
-    put("upscaler", UpscalerName(v.upscaler));
-    file_upscaler = v.upscaler.load();
+    // A stand-in (FSR 3.1 while MetalFX waits for its retry) is not saved: the chosen one is.
+    const int fallback_from = v.upscaler_fallback_from.load();
+    const int saved_upscaler =
+        fallback_from >= 0 && v.upscaler == UpscalerFsr3 ? fallback_from : v.upscaler.load();
+    put("upscaler", UpscalerName(saved_upscaler));
+    file_upscaler = saved_upscaler;
     put("preset", std::to_string(v.preset.load()));
     put("sharpen", flag(v.sharpen));
     put("sharpness", fixed(v.sharpness, 2));

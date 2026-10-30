@@ -112,8 +112,24 @@ struct Image {
     }
 
     /// The view with `view_info` (created on first use). `ensure_guest_samples`: switches to the
-    /// backing of the guest's sample count first.
+    /// backing of the guest's sample count first. A compressible backing that cannot have the
+    /// view is upgraded first (Runtime::UpgradeUsage).
     ImageView& FindView(const ImageViewInfo& view_info, bool ensure_guest_samples = true);
+
+    /// bbport (macOS, Instance::IsCompressibleImages): the current backing was made without
+    /// storage usage, mutable formats and the feedback loop usage, so that Metal can compress
+    /// it, and `view_info` needs one of them (a storage view, a view in another layout).
+    [[nodiscard]] bool NeedsFullUsage(const ImageViewInfo& view_info) const;
+    /// bbport (macOS): an image made again with this one's address, format and shape starts
+    /// with its full usage (Runtime::UpgradeUsage calls it).
+    void RememberFullUsage() const;
+    /// bbport (macOS): a feedback loop needs the feedback loop usage, which the current backing
+    /// lacks (upgraded backings get it only for a feedback loop: with it KosmicKrisp never
+    /// optimizes, let alone compresses, the texture).
+    [[nodiscard]] bool LacksFeedbackUsage() const {
+        return backing && (full_usage & vk::ImageUsageFlagBits::eAttachmentFeedbackLoopEXT) &&
+               !(backing->image.image_ci.usage & vk::ImageUsageFlagBits::eAttachmentFeedbackLoopEXT);
+    }
 
     using Barriers = boost::container::small_vector<vk::ImageMemoryBarrier2, 32>;
     /// The barriers that bring `range` (else the whole image) to `dst_layout`, `dst_mask` at
@@ -129,6 +145,9 @@ struct Image {
         u32 is_target : 1;
         u32 needs_rebind : 1;
         u32 force_general : 1;
+        /// bbport (macOS): sampled in a range a target of the same draw draws to (with
+        /// compressible images a target sampled at another mip is no feedback loop).
+        u32 feedback : 1;
     } binding{};
     struct {
         u32 texture : 1;
@@ -168,8 +187,14 @@ struct Image {
     Common::SlotVector<ImageView>* slot_image_views;
     vk::ImageAspectFlags aspect_mask = vk::ImageAspectFlagBits::eColor;
     vk::SampleCountFlags supported_samples = vk::SampleCountFlagBits::e1;
-    vk::ImageUsageFlags usage_flags;
+    vk::ImageUsageFlags usage_flags; ///< the current backing's
     vk::FormatFeatureFlags2 format_features;
+    /// What every backing had before compressible images, and gets when upgraded.
+    vk::ImageUsageFlags full_usage;
+    vk::ImageCreateFlags full_create_flags;
+    /// A kind of image made compressible (bbport, macOS; its first backing unless one at its
+    /// address needed full usage before): its proxies may start compressible too.
+    bool compressible = false;
 
     struct State {
         vk::PipelineStageFlags2 pl_stage = vk::PipelineStageFlagBits2::eAllCommands;
@@ -196,7 +221,9 @@ struct Image {
         boost::container::small_vector<ImageViewInfo, 4> image_view_infos;
         boost::container::small_vector<ImageViewId, 4> image_view_ids;
         u32 last_view = 0; ///< index of the view FindView returned last
-        u32 num_samples;
+        u32 num_samples;  ///< 0 once retired (replaced by an upgraded backing)
+        /// Made without storage usage, mutable formats and the feedback loop usage.
+        bool compressible = false;
     };
     std::deque<BackingImage> backing_images;
     boost::container::static_vector<u64, 16> mip_hashes{};

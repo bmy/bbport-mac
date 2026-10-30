@@ -245,7 +245,7 @@ private:
     };
     void NoteDrawTarget(const Gcn::Regs& regs);
     bool AsyncSkippable(const PipelineSelection& sel, bool indirect);
-    const GraphicsPipeline* CompileInBackground(const PipelineSelection& sel);
+    const GraphicsPipeline* CompileInBackground(const PipelineSelection& sel, bool urgent = false);
     const GraphicsPipeline* FinishPipeline(const GraphicsPipelineKey& key, PendingPipeline& job);
     tsl::robin_map<GraphicsPipelineKey, std::shared_ptr<PendingPipeline>> pending_graphics;
     std::unordered_map<u64, TargetStreak> target_streaks;
@@ -255,6 +255,10 @@ private:
     u64 frame_start_draws = 0, last_frame_draws = 0;
     u32 stats_printed = 0;
     u64 async_started = 0, async_skipped = 0, async_waited = 0; ///< statistics
+    u64 async_gave_up = 0; ///< bbport (macOS): draws that stopped waiting (SyncWaitMs)
+    /// bbport (macOS): AsyncSkippable's draw goes to a target drawn every frame (so a frame
+    /// without it is redrawn next frame): only those stop waiting for a slow pipeline.
+    bool redrawn_every_frame = false;
     PipelineCompiler& Compiler();
     /// The preloaded graphics pipelines, created in the background while the game starts (a cold
     /// driver cache: about a minute on a 4-thread laptop with NVIDIA); a draw that needs one first

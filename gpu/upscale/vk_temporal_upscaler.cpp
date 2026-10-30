@@ -44,6 +44,7 @@
 #include "vulkan/instance.h"
 #include "render/runtime.h"
 #include "render/scheduler.h"
+#include "metal/mtl_layer.h"
 #include "textures/texture_cache.h"
 #include "upscale/upscaler_internal.h"
 
@@ -72,8 +73,10 @@ TemporalUpscaler::TemporalUpscaler(const Instance& instance_, Scheduler& schedul
       runtime{runtime_}, camera_motion{camera_motion_}, scene_targets{scene_targets_} {
     // Reject unsupported shaders before allocating resources or recording a frame.
     metalfx = std::make_unique<MetalFxUpscaler>(instance, scheduler);
-    BbSettings::ConfigureUpscalerSupport(instance.IsFsr4Int8Supported(),
-                                         instance.IsFsr411Supported(), metalfx->Supported());
+    // bbport (macOS): no FSR 4 in the Metal command path's frame mode (MetalLayer).
+    const bool fsr4_ok = instance.IsFsr4Int8Supported() && !MetalLayer::FrameActive();
+    BbSettings::ConfigureUpscalerSupport(fsr4_ok, instance.IsFsr411Supported(),
+                                         metalfx->Supported());
 #ifdef __APPLE__
     PublishMetalFxProblem(metalfx->Problem());
 #endif
@@ -245,6 +248,7 @@ bool TemporalUpscaler::OnFrameStart() {
     if (dispatch_failed.exchange(false, std::memory_order_relaxed)) {
         failed = true;
     }
+    MetalFxAutoRetry(); // may put MetalFX back in the setting
     const bool active = Active();
     // FSR 1 is spatial: a jittered scene would only shimmer.
     const bool jitter_on = active && settings.jitter && !BbToggle::Disabled(1u << 25) &&
@@ -357,6 +361,16 @@ bool TemporalUpscaler::OnFrameStart() {
     if (changed) jitter_index = 0;
     applied_preset = preset;
     applied_output = output;
+#ifdef __APPLE__
+    if (applied_upscaler != upscaler) {
+        // bbport (macOS): the overlay's upscaler name is this setting: the log says when it
+        // changed (MetalFX's fallback and retries).
+        static const auto start = std::chrono::steady_clock::now();
+        std::printf("Upscaler: now %s (%.0f s after the first frame)\n",
+                    BbSettings::UpscalerName(upscaler),
+                    std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+    }
+#endif
     applied_upscaler = upscaler;
     last_active = active;
     last_jitter = jitter_on;
@@ -444,8 +458,12 @@ void TemporalUpscaler::Run() {
     const u32 w = reduced ? scene_targets.Size().width : ow;
     const u32 h = reduced ? scene_targets.Size().height : oh;
     if (color.info.pixel_format != vk::Format::eR16G16B16A16Sfloat ||
-        depth.info.size.width != ow || depth.info.size.height != oh ||
-        !(color.usage_flags & vk::ImageUsageFlagBits::eStorage)) {
+        depth.info.size.width != ow || depth.info.size.height != oh) {
+        return;
+    }
+    // bbport (macOS): the result is merged back into the scene color as a storage image.
+    runtime.UpgradeUsage(&color, "upscaler output merge");
+    if (!(color.usage_flags & vk::ImageUsageFlagBits::eStorage)) {
         return;
     }
     if (!EnsureResources(w, h, ow, oh, true)) {
@@ -466,11 +484,16 @@ void TemporalUpscaler::Run() {
     runtime.FlushBarriers();
     vk::Image input_color = color.GetImage(), input_depth = depth.GetImage();
     vk::ImageView input_color_view = color_view, input_depth_view = depth_view;
+    vk::ImageUsageFlags input_color_usage = color.usage_flags;
     if (reduced) {
         VideoCore::ImageViewInfo ci;
         ci.format = color.info.pixel_format;
+        // Only the reactive mask reads it as a storage image (TAA and FSR sample it).
+        ci.is_storage = !mask_ready && ReactiveOn();
         const auto c = scene_targets.Read(scene_color, ci);
+        input_color_usage = c.usage;
         ci.format = depth.info.pixel_format;
+        ci.is_storage = false;
         const auto d = scene_targets.Read(camera_motion.Depth(), ci);
         input_color = c.image;
         input_depth = d.image;
@@ -548,7 +571,7 @@ void TemporalUpscaler::Run() {
         info.structSize = sizeof(info);
         info.commandBuffer = cmdbuf;
         info.color = Describe(input_color, color.info.pixel_format, w, h,
-                              color.usage_flags, vk::ImageAspectFlagBits::eColor,
+                              input_color_usage, vk::ImageAspectFlagBits::eColor,
                               FFX_VK_PORTABLE_RESOURCE_STATE_GENERIC_READ);
         info.depth = Describe(input_depth, depth_format, w, h, depth.usage_flags,
                               vk::ImageAspectFlagBits::eDepth,
@@ -761,12 +784,14 @@ void TemporalUpscaler::RunScaled() {
     // Views kept across frames: FSR 4 registers images by view in a registry of eight.
     vk::Image depth_image = depth.GetImage(), color_image = color.GetImage();
     vk::ImageView depth_view{}, color_view{};
+    vk::ImageUsageFlags color_usage = color.usage_flags;
     u32 source_width = iw, source_height = ih;
     if (ProxiesOn()) {
         VideoCore::ImageViewInfo ci, di;
         ci.format = color.info.pixel_format;
         di.format = depth_format;
         const auto cp = scene_targets.Read(ldr_target, ci);
+        color_usage = cp.usage;
         const auto dp = scene_targets.Read(camera_motion.Depth(), di);
         color_image = cp.image;
         color_view = cp.view;
@@ -1030,7 +1055,7 @@ void TemporalUpscaler::RunScaled() {
     FfxVkPortableUpscaleDispatchInfo info{};
     info.structSize = sizeof(info);
     info.color = Describe(color_image, color.info.pixel_format, source_width, source_height,
-                          color.usage_flags, vk::ImageAspectFlagBits::eColor,
+                          color_usage, vk::ImageAspectFlagBits::eColor,
                           FFX_VK_PORTABLE_RESOURCE_STATE_GENERIC_READ);
     info.depth = Describe(depth_image, depth_format, source_width, source_height, depth.usage_flags,
                           vk::ImageAspectFlagBits::eDepth,
@@ -1157,10 +1182,85 @@ bool TemporalUpscaler::RecordMetalFx(const MetalFxUpscaler::Input& color,
         // turns the upscaler off. The menu shows MetalFX's reason.
         std::printf("Upscaler: MetalFX failed; falling back to FSR 3.1 (select MetalFX again to "
                     "retry)\n");
+        if (metalfx->Transient()) {
+            NoteMetalFxFailure(); // first: a save in between keeps MetalFX in bbport.ini
+        }
         BbSettings::Get().upscaler = BbSettings::UpscalerFsr3;
         reset = true;
     }
     return ok;
+}
+
+namespace {
+
+constexpr u32 MetalFxRetries = 3;
+
+bool MetalFxAutoRetryOn() {
+    static const bool on = !bb_env_off("BB_METALFX_AUTO_RETRY");
+    return on;
+}
+
+} // namespace
+
+void TemporalUpscaler::NoteMetalFxFailure() {
+    if (!MetalFxAutoRetryOn()) {
+        return;
+    }
+    using namespace std::chrono_literals;
+    auto& s = BbSettings::Get();
+    ++metalfx_failures;
+    metalfx_standing_in = true;
+    metalfx_chosen_seen = s.upscaler_chosen.load();
+    s.upscaler_fallback_from = BbSettings::UpscalerMetalFx;
+    if (metalfx_failures > MetalFxRetries) {
+        metalfx_retry_at = {};
+        std::printf("Upscaler: MetalFX failed after %u automatic retries: FSR 3.1 for the rest of "
+                    "this session (select MetalFX to try it again)\n",
+                    MetalFxRetries);
+        return;
+    }
+    static constexpr std::array<std::chrono::seconds, MetalFxRetries> delays{30s, 120s, 600s};
+    const auto delay = delays[metalfx_failures - 1];
+    metalfx_retry_at = std::chrono::steady_clock::now() + delay;
+    std::printf("Upscaler: MetalFX will be tried again in %lld s (automatic retry %u of %u; "
+                "BB_METALFX_AUTO_RETRY=0: off)\n",
+                (long long)delay.count(), metalfx_failures, MetalFxRetries);
+}
+
+void TemporalUpscaler::MetalFxAutoRetry() {
+    using namespace std::chrono_literals;
+    auto& s = BbSettings::Get();
+    const auto now = std::chrono::steady_clock::now();
+    if (!metalfx_standing_in) {
+        // MetalFX ran 30 min without a break since its last automatic retry: later failures
+        // count from one.
+        if (metalfx_failures && s.upscaler != BbSettings::UpscalerMetalFx) {
+            metalfx_retried = now; // another upscaler for now: the 30 min start again
+        } else if (metalfx_failures && now - metalfx_retried >= 30min) {
+            metalfx_failures = 0;
+        }
+        return;
+    }
+    if (s.upscaler != BbSettings::UpscalerFsr3 || s.upscaler_chosen != metalfx_chosen_seen) {
+        // An upscaler was chosen in a menu (MetalFX again, or FSR 3.1 itself): the retries end,
+        // and the count starts over.
+        metalfx_standing_in = false;
+        metalfx_retry_at = {};
+        metalfx_failures = 0;
+        s.upscaler_fallback_from = -1;
+        return;
+    }
+    if (metalfx_retry_at == std::chrono::steady_clock::time_point{} || now < metalfx_retry_at ||
+        !metalfx->Ready()) {
+        return; // not due, or the stalled frame is still on MetalFX's queue
+    }
+    metalfx_retry_at = {};
+    metalfx_standing_in = false;
+    metalfx_retried = now;
+    s.upscaler = BbSettings::UpscalerMetalFx; // a change of upscaler: MetalFX gets a fresh try
+    s.upscaler_fallback_from = -1;            // after: a save in between keeps MetalFX
+    std::printf("Upscaler: MetalFX again (automatic retry %u of %u)\n", metalfx_failures,
+                MetalFxRetries);
 }
 
 } // namespace Vulkan
